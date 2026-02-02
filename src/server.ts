@@ -1,5 +1,16 @@
-// src/server.ts
-// HTTP 服务器（使用 Node.js HTTP 模块 + express）
+/**
+ * server.ts
+ *
+ * Description: HTTP 服务器（使用 Node.js HTTP 模块 + express）
+ *              支持 SSE 流式对话和多轮会话管理
+ * Author: leizheng
+ * Time: 2026-02-02
+ * Version: 1.2.0
+ *
+ * Changelog:
+ *   - 2026-02-02 leizheng: v1.2.0 简化为直接使用 agentId 复用会话
+ *   - 2026-02-02 leizheng: v1.1.0 添加多轮对话支持
+ */
 
 import express, { Request, Response, NextFunction } from 'express'
 import { randomUUID } from 'crypto'
@@ -11,6 +22,7 @@ import {
   type AgentConfig,
   type SSEEvent,
 } from './agent-manager'
+import { conversationManager } from './conversation-manager'
 
 // ========================================
 // 初始化
@@ -84,24 +96,28 @@ function requireAuth(req: Request, res: Response, next: NextFunction): void {
 
 // ========================================
 // 路由：健康检查
+// @modified 2026-02-02 leizheng: 添加会话统计信息
 // ========================================
 
 app.get('/health', (req: Request, res: Response) => {
+  const stats = conversationManager.getStats()
   res.json({
     status: 'ok',
     service: 'kode-agent-service',
     sdk: 'kode-sdk',
     timestamp: Date.now(),
+    conversations: stats,
   })
 })
 
 // ========================================
 // 路由：对话接口（SSE 流式）
+// @modified 2026-02-02 leizheng: 使用 agentId 复用会话
 // ========================================
 
 app.post('/api/chat/stream', requireAuth, async (req: Request, res: Response) => {
   const reqId = res.locals.reqId
-  const { message, mode = 'edit', outputsPath, context = {} } = req.body
+  const { message, mode = 'edit', outputsPath, context = {}, agentId: inputAgentId } = req.body
 
   // 参数验证
   if (!message || typeof message !== 'string') {
@@ -124,7 +140,7 @@ app.post('/api/chat/stream', requireAuth, async (req: Request, res: Response) =>
   const files = Array.isArray(context.files) ? context.files : []
 
   console.log(
-    `[server] [req ${reqId}] message="${message.slice(0, 80)}" mode=${mode} userId=${userId}`,
+    `[server] [req ${reqId}] message="${message.slice(0, 80)}" mode=${mode} userId=${userId} agentId=${inputAgentId || 'new'}`,
   )
 
   // 设置 SSE 响应头
@@ -133,13 +149,32 @@ app.post('/api/chat/stream', requireAuth, async (req: Request, res: Response) =>
   res.setHeader('Connection', 'keep-alive')
   res.flushHeaders()
 
-  // 创建 Agent
+  // ========================================
+  // 多轮对话支持 - 直接使用 agentId
+  // @author leizheng
+  // @date 2026-02-02
+  // ========================================
   let agent
+  let isNewSession = false
+
   try {
-    const agentConfig: AgentConfig = { mode, workingDir, outputsPath, userId, files }
-    agent = await createAgent(agentConfig)
-    setupAgentHandlers(agent, reqId)
-    console.log(`[server] [req ${reqId}] Agent 已创建: ${agent.agentId}`)
+    // 尝试复用已有会话
+    if (inputAgentId && conversationManager.hasSession(inputAgentId)) {
+      agent = conversationManager.getAgent(inputAgentId)
+      console.log(`[server] [req ${reqId}] 复用已有会话: ${inputAgentId}`)
+    }
+
+    // 如果没有可用会话，创建新的
+    if (!agent) {
+      const agentConfig: AgentConfig = { mode, workingDir, outputsPath, userId, files }
+      agent = await createAgent(agentConfig)
+      setupAgentHandlers(agent, reqId)
+
+      // 注册到会话管理器
+      conversationManager.registerSession(agent, userId, workingDir)
+      isNewSession = true
+      console.log(`[server] [req ${reqId}] 创建新会话: ${agent.agentId}`)
+    }
   } catch (err: any) {
     console.error(`[server] [req ${reqId}] Agent 创建失败:`, err)
     sendSSE(res, {
@@ -191,12 +226,8 @@ app.post('/api/chat/stream', requireAuth, async (req: Request, res: Response) =>
       clearTimeout(timeoutTimer)
       console.log(`[server] [req ${reqId}] 客户端断开连接，清理资源`)
 
-      // 中断 agent 处理
-      if (agent && typeof agent.interrupt === 'function') {
-        agent.interrupt({ note: 'Client disconnected' }).catch((err: any) => {
-          console.error(`[server] [req ${reqId}] 中断 Agent 失败:`, err)
-        })
-      }
+      // 注意：不再中断 agent，因为会话可能还要继续使用
+      // 会话管理器会在过期后自动清理
     }
   }
 
@@ -205,7 +236,7 @@ app.post('/api/chat/stream', requireAuth, async (req: Request, res: Response) =>
   req.on('error', cleanup)
   res.on('close', cleanup)
   res.on('finish', cleanup)
-  
+
   // 处理消息并流式返回
   try {
     for await (const event of processMessage(agent, message, reqId)) {
@@ -213,7 +244,16 @@ app.post('/api/chat/stream', requireAuth, async (req: Request, res: Response) =>
         console.log(`[server] [req ${reqId}] 检测到连接已断开，停止处理`)
         break
       }
-      sendSSE(res, event)
+
+      // 在 start 事件中标记是否新会话
+      if (event.type === 'start') {
+        sendSSE(res, {
+          ...event,
+          isNewSession,
+        })
+      } else {
+        sendSSE(res, event)
+      }
     }
   } catch (err: any) {
     console.error(`[server] [req ${reqId}] 处理消息失败:`, err)
@@ -224,14 +264,14 @@ app.post('/api/chat/stream', requireAuth, async (req: Request, res: Response) =>
         error: 'INTERNAL_ERROR',
         message: process.env.NODE_ENV === 'development'
           ? String(err?.message ?? err)
-          : 'Internal server error',  // 生产环境隐藏详细错误
+          : 'Internal server error',
         timestamp: Date.now(),
       })
     }
   } finally {
     cleanup()
     console.log(
-      `[server] [req ${reqId}] 流已完成，发送了 ${heartbeatCount} 次心跳`,
+      `[server] [req ${reqId}] 流已完成，agentId: ${agent.agentId}, 心跳: ${heartbeatCount}`,
     )
     if (!res.writableEnded) {
       res.end()
@@ -271,6 +311,7 @@ const server = app.listen(config.port, () => {
 // 关闭
 process.on('SIGTERM', () => {
   console.log('[server] 收到 SIGTERM 信号，开始关闭...')
+  conversationManager.shutdown()
   server.close(() => {
     console.log('[server] 服务器已关闭')
     process.exit(0)
@@ -279,6 +320,7 @@ process.on('SIGTERM', () => {
 
 process.on('SIGINT', () => {
   console.log('[server] 收到 SIGINT 信号，开始关闭...')
+  conversationManager.shutdown()
   server.close(() => {
     console.log('[server] 服务器已关闭')
     process.exit(0)

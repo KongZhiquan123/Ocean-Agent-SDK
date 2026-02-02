@@ -1,5 +1,15 @@
-// test-client.ts
-// 测试 kode-agent-service 的交互式客户端
+/**
+ * test-client.ts
+ *
+ * Description: 测试 kode-agent-service 的交互式客户端
+ *              支持多轮对话、海洋数据预处理交互测试
+ * Author: leizheng
+ * Time: 2026-02-02
+ * Version: 1.1.0
+ *
+ * Changelog:
+ *   - 2026-02-02 leizheng: v1.1.0 使用 agentId 支持多轮对话
+ */
 
 import 'dotenv/config'
 import * as readline from 'readline'
@@ -26,8 +36,8 @@ function prompt(question: string): Promise<string> {
   })
 }
 
-// 会话 ID，用于多轮对话
-let conversationId: string | null = null
+// 会话 ID，用于多轮对话（直接使用 agentId）
+let agentId: string | null = null
 
 // 是否显示完整工具结果（可通过参数控制）
 let showFullToolResult = true
@@ -47,9 +57,9 @@ async function chat(message: string, mode: 'ask' | 'edit' = 'edit'): Promise<str
       },
     }
 
-    // 如果有会话 ID，传递给服务端保持上下文
-    if (conversationId) {
-      body.conversationId = conversationId
+    // 如果有 agentId，传递给服务端保持上下文
+    if (agentId) {
+      body.agentId = agentId
     }
 
     const response = await fetch(`${API_URL}/api/chat/stream`, {
@@ -95,9 +105,9 @@ async function chat(message: string, mode: 'ask' | 'edit' = 'edit'): Promise<str
             switch (event.type) {
               case 'start':
                 console.log(`[开始] Agent ID: ${event.agentId}`)
-                // 保存会话 ID
-                if (event.conversationId) {
-                  conversationId = event.conversationId
+                // 保存 agentId 用于多轮对话
+                if (event.agentId) {
+                  agentId = event.agentId
                 }
                 break
 
@@ -185,7 +195,7 @@ async function interactiveMode() {
     }
 
     if (userInput.toLowerCase() === 'reset') {
-      conversationId = null
+      agentId = null
       console.log('会话已重置')
       continue
     }
@@ -207,7 +217,7 @@ async function testOceanPreprocess() {
   console.log('='.repeat(60))
 
   // 重置会话
-  conversationId = null
+  agentId = null
   showFullToolResult = true
 
   // ========== 收集必要的路径信息 ==========
