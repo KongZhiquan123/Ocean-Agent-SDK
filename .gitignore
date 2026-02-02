@@ -209,6 +209,7 @@ outputs/
 *.parquet
 *.sqlite
 *.db
+*.nc
 *.db-shm
 *.db-wal
 *.npy

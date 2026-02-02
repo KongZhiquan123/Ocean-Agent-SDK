@@ -1,4 +1,5 @@
 import { defineTool } from '@shareai-lab/kode-sdk'
+import { findFirstPythonPath } from '@/utils/python-manager'
 
 export interface ConvertResult {
   status: 'pass' | 'error' | 'pending'
@@ -262,6 +263,18 @@ export const oceanConvertNpyTool = defineTool({
 
     ctx.emit('step_started', { step: 'C', description: '转换为NPY格式存储' })
 
+    const pythonPath = findFirstPythonPath()
+    if (!pythonPath) {
+      const errorMsg = '未找到可用的Python解释器，请安装Python或配置PYTHON/PYENV'
+      ctx.emit('step_failed', { step: 'C', error: errorMsg })
+      return {
+        status: 'error',
+        errors: [errorMsg],
+        message: '转换失败'
+      }
+    }
+    const pythonCmd = `"${pythonPath}"`
+
     const outputJson = `${TEMP_DIR}/convert_result.json`
 
     const script = generateConvertScript(
@@ -280,7 +293,7 @@ export const oceanConvertNpyTool = defineTool({
       await ctx.sandbox.exec(`mkdir -p ${TEMP_DIR}`)
       await ctx.sandbox.fs.write(scriptPath, script)
 
-      const result = await ctx.sandbox.exec(`python3 ${scriptPath}`, {
+      const result = await ctx.sandbox.exec(`${pythonCmd} ${scriptPath}`, {
         timeoutMs: 600000,
       })
 

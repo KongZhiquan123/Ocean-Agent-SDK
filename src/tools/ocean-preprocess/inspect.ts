@@ -1,4 +1,5 @@
 import { defineTool } from '@shareai-lab/kode-sdk'
+import { findFirstPythonPath } from '@/utils/python-manager'
 
 interface VariableInfo {
   name: string
@@ -203,6 +204,18 @@ export const oceanInspectDataTool = defineTool({
 
     ctx.emit('step_started', { step: 'A', description: '查看数据并定义变量' })
 
+    const pythonPath = findFirstPythonPath()
+    if (!pythonPath) {
+      const errorMsg = '未找到可用的Python解释器，请安装Python或配置PYTHON/PYENV'
+      ctx.emit('step_failed', { step: 'A', error: errorMsg })
+      return {
+        status: 'error',
+        errors: [errorMsg],
+        message: '数据检查失败'
+      }
+    }
+    const pythonCmd = `"${pythonPath}"`
+
     const outputJson = `${TEMP_DIR}/inspect_result.json`
 
     const script = generateInspectScript(nc_folder, static_file || null, file_filter, outputJson)
@@ -212,7 +225,7 @@ export const oceanInspectDataTool = defineTool({
       await ctx.sandbox.exec(`mkdir -p ${TEMP_DIR}`)
       await ctx.sandbox.fs.write(scriptPath, script)
 
-      const result = await ctx.sandbox.exec(`python3 ${scriptPath}`, {
+      const result = await ctx.sandbox.exec(`${pythonCmd} ${scriptPath}`, {
         timeoutMs: 300000,
       })
 

@@ -2,28 +2,18 @@
 
 基于 KODE SDK 实现的 AI Agent HTTP 服务，提供 RESTful API 接口供后端调用。
 
-## 特性
-
-- 🤖 基于 **KODE SDK** 实现，支持文件操作、命令执行等完整工具链
-- 🔄 **SSE 流式响应**，实时返回 AI 生成的内容
-- 🔐 **API Key 认证**，保护服务安全
-- 📁 **工作目录隔离**，支持指定输出路径
-- 🛠️ **双模式支持**：编程模式（edit）和问答模式（ask）
-- 📦 **模块化架构**：配置、Agent 管理、服务器分离
-
 ## 项目结构
 
 ```
 agent-trying/
-├── src/
+├── src/                  # 源代码
 │   ├── config.ts          # 环境配置和依赖初始化
 │   ├── agent-manager.ts   # Agent 创建和事件处理
 │   └── server.ts          # HTTP 服务器（Express）
 ├── docs/                  # KODE SDK 文档
-├── .env.example          # 环境变量示例
+├── .env                   # 环境变量
 ├── package.json          # 项目配置
 ├── README.md            # 本文件
-├── COMPARISON.md        # 新旧版本对比
 └── QUICKSTART.md        # 快速上手指南
 ```
 
@@ -37,25 +27,28 @@ npm install
 
 ### 2. 配置环境变量
 
-复制 `.env.example` 为 `.env` 并填写：
+创建 `.env` 并填写：
 
 ```bash
-cp .env.example .env
+echo "ANTHROPIC_API_KEY=sk-ant-..." > .env
 ```
 
 编辑 `.env` 文件：
 
 ```env
 ANTHROPIC_API_KEY=sk-ant-...
+ANTHROPIC_BASE_URL=your-anthropic-endpoint
 KODE_API_SECRET=your-secret-key
+ANTHROPIC_MODEL_ID=your-model-id
 KODE_API_PORT=8787
+SKILLS_DIR=your-skills-directory
 ```
-
+`.env` 文件中的变量会被自动加载到 `process.env`。
 ### 3. 启动服务
 
 ```bash
 # 启动服务
-npm start
+npm run start
 
 # 或开发模式（自动重启）
 npm run dev
@@ -152,6 +145,8 @@ data: {"type":"done","metadata":{"agentId":"agt-abc123","timestamp":170688960000
 - `fs_glob`, `fs_grep`
 - `bash_run`
 - `todo_read`, `todo_write`
+- `skills`
+- `ocean_inspect_data`, `ocean_validate_tensor`, `ocean_convert_npy`, `ocean_preprocess_full`
 
 ### Ask 模式（问答助手）
 
@@ -336,6 +331,7 @@ function createToolRegistry() {
   return registry
 }
 ```
+**工具中的任何文件操作和命令执行，请使用 `ctx.sandbox`提供的沙箱环境。**
 
 ### 修改系统提示词
 
@@ -366,7 +362,45 @@ export function setupAgentHandlers(agent: Agent, reqId: string): void {
 }
 ```
 
+### 自定义skill
+在 `skills/` 目录下创建新的 skill 文件夹，添加 `metadata.json` 和`SKILL.md` 文件：
+
+```
+skills/
+  my_skill/
+    metadata.json
+    SKILL.md
+```
+详情可见 [技能开发指南](./docs/zh-CN/guides/skills.md)
+
+**注意，SKILL.md必须使用LF换行符，否则会导致YAML FORMATTER解析失败！**
+
 ## 环境要求
 
 - **Node.js**: >= 20.18.1
 - **KODE SDK**: ^2.7.2
+
+## 🔧 常见问题
+
+### Q1: 服务启动失败
+
+**检查清单：**
+- ✅ 是否安装了依赖？运行 `npm install`
+- ✅ 是否配置了 `.env` 文件？
+- ✅ `ANTHROPIC_API_KEY` 是否有效？
+- ✅ 端口 8787 是否被占用？
+
+### Q2: API 请求返回 401
+
+确保在请求头中添加了正确的 `X-API-Key`：
+
+```bash
+-H "X-API-Key: your-secret-key"
+```
+
+密钥应该与 `.env` 文件中的 `KODE_API_SECRET` 一致。
+
+### Q3: 文件没有生成
+
+- ✅ 确保使用了 `edit` 模式（不是 `ask`）
+- ✅ 查看服务器日志，确认工具是否执行成功

@@ -1,4 +1,5 @@
 import { defineTool } from '@shareai-lab/kode-sdk'
+import { findFirstPythonPath } from '@/utils/python-manager'
 
 export interface ValidateResult {
   status: 'pass' | 'error' | 'pending'
@@ -163,6 +164,18 @@ export const oceanValidateTensorTool = defineTool({
 
     ctx.emit('step_started', { step: 'B', description: '进行张量约定验证' })
 
+    const pythonPath = findFirstPythonPath()
+    if (!pythonPath) {
+      const errorMsg = '未找到可用的Python解释器，请安装Python或配置PYTHON/PYENV'
+      ctx.emit('step_failed', { step: 'B', error: errorMsg })
+      return {
+        status: 'error',
+        errors: [errorMsg],
+        message: '张量验证失败'
+      }
+    }
+    const pythonCmd = `"${pythonPath}"`
+
     const outputJson = `${TEMP_DIR}/validate_result.json`
     const script = generateValidateScript(inspect_result_path, research_vars, mask_vars, outputJson)
     const scriptPath = `${TEMP_DIR}/validate_tensor.py`
@@ -170,7 +183,7 @@ export const oceanValidateTensorTool = defineTool({
     try {
       await ctx.sandbox.fs.write(scriptPath, script)
 
-      const result = await ctx.sandbox.exec(`python3 ${scriptPath}`, {
+      const result = await ctx.sandbox.exec(`${pythonCmd} ${scriptPath}`, {
         timeoutMs: 60000,
       })
 
