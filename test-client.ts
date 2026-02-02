@@ -147,25 +147,30 @@ async function main() {
   }
 
   console.log('\n服务正常，开始测试对话...\n')
-  // //测试 0： agent有什么skills
-  // await testChat('你有什么skills，加载它', 'edit')
+  //测试 0： agent有什么skills
+  await testChat('你有什么skills，加载它', 'edit')
 
-  // // 测试 1: 问答模式
-  // await testChat('请介绍一下 KODE SDK 是什么？', 'ask')
+  // 测试 1: 问答模式
+  await testChat('请介绍一下 KODE SDK 是什么？', 'ask')
 
-  // //等待一下
-  // await new Promise((resolve) => setTimeout(resolve, 2000))
+  //等待一下
+  await new Promise((resolve) => setTimeout(resolve, 2000))
 
-  // //测试 2: 编程模式 - 创建文件
-  // await testChat('请创建一个 hello.py 文件，打印 "Hello, KODE SDK!"', 'edit')
+  //测试 2: 编程模式 - 创建文件
+  await testChat('请创建一个 hello.py 文件，打印 "Hello, KODE SDK!"', 'edit')
 
-  // // 等待一下
-  // await new Promise((resolve) => setTimeout(resolve, 2000))
+  // 等待一下
+  await new Promise((resolve) => setTimeout(resolve, 2000))
 
-  // // 测试 3: 编程模式 - 执行命令
-  // await testChat('请列出当前目录下的所有文件', 'edit')
+  // 测试 3: 编程模式 - 执行命令
+  await testChat('请列出当前目录下的所有文件', 'edit')
 
-  await testChat('请帮我对海洋超分数据的nc文件做预处理，研究变量为流场的u分量，静态文件在xxx_static.nc中', 'edit')
+  // 等待一下
+  await new Promise((resolve) => setTimeout(resolve, 2000))
+  
+  // 测试 4: 复杂任务 - 海洋数据预处理
+  await testChat('请帮我对海洋超分数据的nc文件做预处理，研究变量为流场的u分量，静态文件在xxx_static.nc中，直接输出到当前文件夹就行', 'edit')
+  
   console.log('\n所有测试完成！')
 }
 

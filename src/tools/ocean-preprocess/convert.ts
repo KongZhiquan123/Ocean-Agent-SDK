@@ -1,5 +1,6 @@
 import { defineTool } from '@shareai-lab/kode-sdk'
 import { findFirstPythonPath } from '@/utils/python-manager'
+import path from 'node:path'
 
 export interface ConvertResult {
   status: 'pass' | 'error' | 'pending'
@@ -10,8 +11,6 @@ export interface ConvertResult {
   errors: string[]
   message: string
 }
-
-const TEMP_DIR = '/tmp/ocean_preprocess'
 
 function generateConvertScript(
   ncFolder: string,
@@ -274,8 +273,8 @@ export const oceanConvertNpyTool = defineTool({
       }
     }
     const pythonCmd = `"${pythonPath}"`
-
-    const outputJson = `${TEMP_DIR}/convert_result.json`
+    const tempDir = path.join(ctx.sandbox.workDir, 'ocean_preprocess_temp')
+    const outputJson = `${tempDir}/convert_result.json`
 
     const script = generateConvertScript(
       nc_folder,
@@ -287,10 +286,10 @@ export const oceanConvertNpyTool = defineTool({
       file_filter,
       outputJson
     )
-    const scriptPath = `${TEMP_DIR}/convert_npy.py`
+    const scriptPath = `${tempDir}/convert_npy.py`
 
     try {
-      await ctx.sandbox.exec(`mkdir -p ${TEMP_DIR}`)
+      await ctx.sandbox.exec(`mkdir -p ${tempDir}`)
       await ctx.sandbox.fs.write(scriptPath, script)
 
       const result = await ctx.sandbox.exec(`${pythonCmd} ${scriptPath}`, {

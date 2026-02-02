@@ -1,5 +1,6 @@
 import { defineTool } from '@shareai-lab/kode-sdk'
 import { findFirstPythonPath } from '@/utils/python-manager'
+import path from 'node:path'
 
 export interface ValidateResult {
   status: 'pass' | 'error' | 'pending'
@@ -15,8 +16,6 @@ export interface ValidateResult {
   errors: string[]
   message: string
 }
-
-const TEMP_DIR = '/tmp/ocean_preprocess'
 
 function generateValidateScript(
   variablesJson: string,
@@ -175,10 +174,10 @@ export const oceanValidateTensorTool = defineTool({
       }
     }
     const pythonCmd = `"${pythonPath}"`
-
-    const outputJson = `${TEMP_DIR}/validate_result.json`
+    const tempDir = path.join(ctx.sandbox.workDir, 'ocean_preprocess_temp')
+    const outputJson = `${tempDir}/validate_result.json`
     const script = generateValidateScript(inspect_result_path, research_vars, mask_vars, outputJson)
-    const scriptPath = `${TEMP_DIR}/validate_tensor.py`
+    const scriptPath = `${tempDir}/validate_tensor.py`
 
     try {
       await ctx.sandbox.fs.write(scriptPath, script)

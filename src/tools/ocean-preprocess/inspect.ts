@@ -1,5 +1,6 @@
 import { defineTool } from '@shareai-lab/kode-sdk'
 import { findFirstPythonPath } from '@/utils/python-manager'
+import path from 'node:path'
 
 interface VariableInfo {
   name: string
@@ -24,8 +25,6 @@ export interface InspectResult {
   errors: string[]
   message: string
 }
-
-const TEMP_DIR = '/tmp/ocean_preprocess'
 
 function generateInspectScript(
   ncFolder: string,
@@ -215,14 +214,14 @@ export const oceanInspectDataTool = defineTool({
       }
     }
     const pythonCmd = `"${pythonPath}"`
-
-    const outputJson = `${TEMP_DIR}/inspect_result.json`
+    const tempDir = path.resolve(ctx.sandbox.workDir, 'ocean_preprocess_temp')
+    const outputJson = `${tempDir}/inspect_result.json`
 
     const script = generateInspectScript(nc_folder, static_file || null, file_filter, outputJson)
-    const scriptPath = `${TEMP_DIR}/inspect_data.py`
+    const scriptPath = `${tempDir}/inspect_data.py`
 
     try {
-      await ctx.sandbox.exec(`mkdir -p ${TEMP_DIR}`)
+      await ctx.sandbox.exec(`mkdir -p ${tempDir}`)
       await ctx.sandbox.fs.write(scriptPath, script)
 
       const result = await ctx.sandbox.exec(`${pythonCmd} ${scriptPath}`, {

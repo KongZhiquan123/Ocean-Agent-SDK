@@ -154,8 +154,9 @@ app.post('/api/chat/stream', requireAuth, async (req: Request, res: Response) =>
 
   // 心跳定时器
   let heartbeatCount = 0
+  let clientDisconnected = false
   const heartbeatInterval = setInterval(() => {
-    if (!res.writableEnded) {
+    if (!res.writableEnded && !clientDisconnected) {
       heartbeatCount++
       sendSSE(res, {
         type: 'heartbeat',
@@ -166,16 +167,41 @@ app.post('/api/chat/stream', requireAuth, async (req: Request, res: Response) =>
     }
   }, 2000)
 
+  // 监听客户端断开连接
+  const cleanup = () => {
+    if (!clientDisconnected) {
+      clientDisconnected = true
+      clearInterval(heartbeatInterval)
+      console.log(`[server] [req ${reqId}] 客户端断开连接，清理资源`)
+
+      // 中断 agent 处理
+      if (agent && typeof agent.interrupt === 'function') {
+        agent.interrupt({ note: 'Client disconnected' }).catch((err: any) => {
+          console.error(`[server] [req ${reqId}] 中断 Agent 失败:`, err)
+        })
+      }
+    }
+  }
+
+
+  req.on('aborted', cleanup)
+  req.on('error', cleanup)
+  res.on('close', cleanup)
+  res.on('finish', cleanup)
+  
   // 处理消息并流式返回
   try {
     for await (const event of processMessage(agent, message, reqId)) {
-      if (res.writableEnded) break
+      if (res.writableEnded || clientDisconnected) {
+        console.log(`[server] [req ${reqId}] 检测到连接已断开，停止处理`)
+        break
+      }
       sendSSE(res, event)
     }
   } catch (err: any) {
     console.error(`[server] [req ${reqId}] 处理消息失败:`, err)
 
-    if (!res.writableEnded) {
+    if (!res.writableEnded && !clientDisconnected) {
       sendSSE(res, {
         type: 'error',
         error: 'INTERNAL_ERROR',
@@ -184,11 +210,13 @@ app.post('/api/chat/stream', requireAuth, async (req: Request, res: Response) =>
       })
     }
   } finally {
-    clearInterval(heartbeatInterval)
+    cleanup()
     console.log(
       `[server] [req ${reqId}] 流已完成，发送了 ${heartbeatCount} 次心跳`,
     )
-    res.end()
+    if (!res.writableEnded) {
+      res.end()
+    }
   }
 })
 
