@@ -1,0 +1,186 @@
+// src/agent-manager.ts
+// Agent 创建和管理逻辑
+
+import { Agent, type ProgressEvent } from '@shareai-lab/kode-sdk'
+import { getDependencies } from './config'
+
+// ========================================
+// 类型定义
+// ========================================
+
+export interface AgentConfig {
+  mode: 'ask' | 'edit'
+  workingDir?: string
+  outputsPath?: string
+  userId?: string
+  files?: string[]
+}
+
+export interface SSEEvent {
+  type: string
+  [key: string]: any
+}
+
+// ========================================
+// Agent 创建
+// ========================================
+
+export async function createAgent(config: AgentConfig): Promise<Agent> {
+  // 根据模式选择模板
+  let templateId: string
+  switch (config.mode) {
+    case 'ask':
+      templateId = 'qa-assistant'
+      break
+    case 'edit':
+      templateId = 'coding-assistant'
+      break
+    default:
+      templateId = 'qa-assistant'
+      break
+  }
+
+  const deps = getDependencies()
+
+  const sandboxConfig = {
+    kind: 'local' as const,
+    workDir: config.workingDir,
+  }
+
+  const agent = await Agent.create(
+    {
+      templateId,
+      sandbox: sandboxConfig,
+      metadata: {
+        userId: config.userId || 'anonymous',
+        mode: config.mode,
+        files: config.files,
+      },
+    },
+    deps,
+  )
+
+  return agent
+}
+
+// ========================================
+// Agent 事件处理
+// ========================================
+
+export function setupAgentHandlers(agent: Agent, reqId: string): void {
+  // 权限请求处理：自动批准
+  agent.on('permission_required', async (event: any) => {
+    console.log(`[agent-manager] [req ${reqId}] 工具 ${event.call.name} 需要权限批准`)
+    await event.respond('allow')
+  })
+
+  // 错误处理
+  agent.on('error', (event: any) => {
+    console.error(`[agent-manager] [req ${reqId}] Agent 错误:`, {
+      phase: event.phase,
+      message: event.message,
+      severity: event.severity,
+    })
+  })
+}
+
+// ========================================
+// Progress 事件转换为 SSE 事件
+// ========================================
+
+export function convertProgressToSSE(event: ProgressEvent, reqId: string): SSEEvent | null {
+  console.log(`[agent-manager] [req ${reqId}] Progress 事件: ${event.type}`)
+
+  switch (event.type) {
+    case 'text_chunk':
+      return {
+        type: 'text',
+        content: event.delta,
+        timestamp: Date.now(),
+      }
+
+    case 'tool:start':
+      return {
+        type: 'tool_use',
+        tool: event.call.name,
+        id: event.call.id,
+        input: event.call.inputPreview,
+        timestamp: Date.now(),
+      }
+
+    case 'tool:end':
+      return {
+        type: 'tool_result',
+        tool_use_id: event.call.id,
+        result: event.call.result,
+        is_error: event.call.state === 'FAILED',
+        timestamp: Date.now(),
+      }
+
+    case 'done':
+      console.log(`[agent-manager] [req ${reqId}] Agent 处理完成`)
+      return null
+
+    default:
+      return null
+  }
+}
+
+// ========================================
+// Agent 消息处理流程
+// ========================================
+
+export async function* processMessage(
+  agent: Agent,
+  message: string,
+  reqId: string,
+): AsyncGenerator<SSEEvent> {
+  // 发送开始事件
+  yield {
+    type: 'start',
+    agentId: agent.agentId,
+    timestamp: Date.now(),
+  }
+
+  // 订阅 Progress 事件
+  const progressIterator = agent.subscribe(['progress'])[Symbol.asyncIterator]()
+
+  // 异步发送消息（不等待完成）
+  const sendTask = agent.send(message).catch((err) => {
+    console.error(`[agent-manager] [req ${reqId}] 发送消息失败:`, err)
+    throw err
+  })
+
+  // 处理 Progress 事件流
+  try {
+    while (true) {
+      const { done, value } = await progressIterator.next()
+      if (done) break
+
+      const event = value.event as ProgressEvent
+
+      // 检查是否完成
+      if (event.type === 'done') {
+        break
+      }
+
+      // 转换并发送 SSE 事件
+      const sseEvent = convertProgressToSSE(event, reqId)
+      if (sseEvent) {
+        yield sseEvent
+      }
+    }
+  } finally {
+    // 确保消息发送任务完成
+    await sendTask
+  }
+
+  // 发送完成事件
+  yield {
+    type: 'done',
+    metadata: {
+      agentId: agent.agentId,
+      timestamp: Date.now(),
+    },
+  }
+}
