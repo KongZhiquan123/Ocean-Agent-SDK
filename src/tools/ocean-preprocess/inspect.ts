@@ -1,16 +1,34 @@
+/**
+ * @file inspect.ts
+ * @description Step A: 数据检查与变量分类工具
+ *              调用 Python 脚本分析 NC 文件
+ *
+ * @author leizheng
+ * @date 2026-02-02
+ * @version 2.0.0
+ *
+ * @changelog
+ *   - 2026-02-02 leizheng: v2.0.0 重构为调用独立 Python 脚本
+ */
+
 import { defineTool } from '@shareai-lab/kode-sdk'
 import { findFirstPythonPath } from '@/utils/python-manager'
 import path from 'node:path'
 
+// ========================================
+// 类型定义
+// ========================================
+
 interface VariableInfo {
   name: string
-  category: 'dynamic' | 'static' | 'ignored'
+  category: 'dynamic' | 'static' | 'mask' | 'ignored'
   dims: string[]
   shape: number[]
   dtype: string
   units: string
   long_name: string
   is_mask: boolean
+  has_time: boolean
   suspected_type: 'suspected_mask' | 'suspected_coordinate' | 'dynamic' | 'static' | 'unknown'
 }
 
@@ -21,6 +39,8 @@ export interface InspectResult {
   file_list: string[]
   variables: Record<string, VariableInfo>
   dynamic_vars_candidates: string[]
+  static_vars_found: string[]
+  mask_vars_found: string[]
   statistics: Record<string, any>
   warnings: string[]
   errors: string[]
@@ -29,181 +49,9 @@ export interface InspectResult {
   suspected_coordinates: string[]
 }
 
-function generateInspectScript(
-  ncFolder: string,
-  staticFile: string | null,
-  fileFilter: string,
-  outputJson: string
-): string {
-  return `
-import os
-import json
-import numpy as np
-
-try:
-    import xarray as xr
-except ImportError:
-    print(json.dumps({"status": "error", "errors": ["需要安装 xarray: pip install xarray netCDF4"]}))
-    exit(1)
-
-# 配置
-NC_FOLDER = ${JSON.stringify(ncFolder)}
-STATIC_FILE = ${staticFile ? JSON.stringify(staticFile) : 'None'}
-FILE_FILTER = ${JSON.stringify(fileFilter)}
-OUTPUT_JSON = ${JSON.stringify(outputJson)}
-
-# 掩码变量列表（不可修改）
-MASK_VARS = ['mask_u', 'mask_rho', 'mask_v']
-STATIC_VARS = ['angle', 'h', 'mask_u', 'mask_rho', 'mask_v', 'pn', 'pm', 'f',
-               'x_rho', 'x_u', 'x_v', 'y_rho', 'y_u', 'y_v', 'lat_psi', 'lon_psi']
-
-# 时间维度检测模式
-TIME_DIM_PATTERNS = ['time', 'ocean_time', 't', 'Time', 'TIME', 'nt', 'ntime', 'MT', 'time_counter']
-
-def guess_variable_type(var_name, category, dims):
-    """
-    猜测变量类型（仅供参考，不做决策）
-    返回: "suspected_mask" / "suspected_coordinate" / "dynamic" / "static" / "unknown"
-    """
-    name_lower = var_name.lower()
-
-    # 1. 检测掩码
-    mask_keywords = ['mask', 'land', 'lsm', 'landmask']
-    if any(kw in name_lower for kw in mask_keywords):
-        return "suspected_mask"
-
-    # 2. 检测坐标/地形
-    coord_keywords = ['lat', 'lon', 'x_', 'y_', 'angle', 'depth', 'h', 'bathymetry', 'f', 'pn', 'pm']
-    if any(kw in name_lower for kw in coord_keywords):
-        return "suspected_coordinate"
-
-    # 3. 已分类的动态/静态
-    if category == "dynamic":
-        return "dynamic"
-    elif category == "static":
-        return "static"
-
-    return "unknown"
-
-result = {
-    "status": "success",
-    "nc_folder": NC_FOLDER,
-    "file_count": 0,
-    "file_list": [],
-    "variables": {},
-    "dynamic_vars_candidates": [],
-    "statistics": {},
-    "warnings": [],
-    "errors": [],
-    "message": "",
-    "suspected_masks": [],
-    "suspected_coordinates": []
-}
-
-try:
-    # 防错规则 A3: NC文件必须排序
-    if not os.path.exists(NC_FOLDER):
-        result["errors"].append(f"目录不存在: {NC_FOLDER}")
-        result["status"] = "error"
-    else:
-        nc_files = sorted([f for f in os.listdir(NC_FOLDER)
-                          if f.endswith('.nc') and FILE_FILTER in f])
-        result["file_list"] = nc_files
-        result["file_count"] = len(nc_files)
-
-        if nc_files:
-            first_file = os.path.join(NC_FOLDER, nc_files[0])
-            with xr.open_dataset(first_file) as ds:
-                for var_name in ds.data_vars:
-                    var = ds[var_name]
-                    dims = list(var.dims)
-                    # 改进的时间维度检测
-                    has_time = any(any(pattern in d for pattern in TIME_DIM_PATTERNS) for d in dims)
-
-                    # 防错规则 A1: 变量分类
-                    if var_name in MASK_VARS:
-                        category = "static"
-                        is_mask = True
-                    elif var_name in STATIC_VARS:
-                        category = "static"
-                        is_mask = False
-                    elif has_time:
-                        category = "dynamic"
-                        is_mask = False
-                    else:
-                        category = "ignored"
-                        is_mask = False
-
-                    var_info = {
-                        "name": var_name,
-                        "category": category,
-                        "dims": dims,
-                        "shape": list(var.shape),
-                        "dtype": str(var.dtype),
-                        "units": var.attrs.get("units", "unknown"),
-                        "long_name": var.attrs.get("long_name", var_name),
-                        "is_mask": is_mask,
-                        "suspected_type": guess_variable_type(var_name, category, dims)
-                    }
-                    result["variables"][var_name] = var_info
-
-                    if category == "dynamic":
-                        result["dynamic_vars_candidates"].append(var_name)
-
-                    # 计算统计信息
-                    try:
-                        values = var.values
-                        result["statistics"][var_name] = {
-                            "min": float(np.nanmin(values)),
-                            "max": float(np.nanmax(values)),
-                            "mean": float(np.nanmean(values)),
-                            "nan_count": int(np.isnan(values).sum()),
-                            "zero_count": int((values == 0).sum())
-                        }
-                    except:
-                        pass
-
-        # 读取静态文件
-        if STATIC_FILE and os.path.exists(STATIC_FILE):
-            with xr.open_dataset(STATIC_FILE) as ds:
-                for var_name in ds.data_vars:
-                    if var_name not in result["variables"]:
-                        var = ds[var_name]
-                        dims = list(var.dims)
-                        is_mask = var_name in MASK_VARS
-                        result["variables"][var_name] = {
-                            "name": var_name,
-                            "category": "static",
-                            "dims": dims,
-                            "shape": list(var.shape),
-                            "dtype": str(var.dtype),
-                            "units": var.attrs.get("units", "unknown"),
-                            "long_name": var.attrs.get("long_name", var_name),
-                            "is_mask": is_mask,
-                            "suspected_type": guess_variable_type(var_name, "static", dims)
-                        }
-
-        # 收集疑似掩码和坐标（仅供用户参考）
-        for var_name, var_info in result["variables"].items():
-            suspected_type = var_info.get("suspected_type")
-            if suspected_type == "suspected_mask":
-                result["suspected_masks"].append(var_name)
-            elif suspected_type == "suspected_coordinate":
-                result["suspected_coordinates"].append(var_name)
-
-        result["status"] = "awaiting_confirmation"
-        result["message"] = f"找到 {len(nc_files)} 个NC文件，{len(result['dynamic_vars_candidates'])} 个动态变量候选"
-
-except Exception as e:
-    result["status"] = "error"
-    result["errors"].append(str(e))
-
-with open(OUTPUT_JSON, 'w', encoding='utf-8') as f:
-    json.dump(result, f, ensure_ascii=False, indent=2)
-
-print(json.dumps(result, ensure_ascii=False))
-`
-}
+// ========================================
+// 工具定义
+// ========================================
 
 export const oceanInspectDataTool = defineTool({
   name: 'ocean_inspect_data',
@@ -213,7 +61,7 @@ export const oceanInspectDataTool = defineTool({
 
 **防错规则**：
 - A1: 自动区分动态变量（有时间维）、静态变量（无时间维）、掩码变量（mask_*）
-- A2: 陆地掩码变量（mask_u, mask_rho, mask_v）会被标记为不可修改
+- A2: 陆地掩码变量会被标记为不可修改
 - A3: NC文件会自动排序以确保时间顺序正确
 
 **返回**：变量列表、形状信息、统计信息、动态变量候选列表
@@ -232,9 +80,15 @@ export const oceanInspectDataTool = defineTool({
     },
     file_filter: {
       type: 'string',
-      description: '文件名过滤关键字，默认为"avg"',
+      description: '文件名过滤关键字（可选）',
       required: false,
-      default: 'avg'
+      default: ''
+    },
+    dyn_file_pattern: {
+      type: 'string',
+      description: '动态文件的 glob 匹配模式，如 "*.nc"',
+      required: false,
+      default: '*.nc'
     }
   },
 
@@ -244,10 +98,16 @@ export const oceanInspectDataTool = defineTool({
   },
 
   async exec(args, ctx) {
-    const { nc_folder, static_file, file_filter = 'avg' } = args
+    const {
+      nc_folder,
+      static_file,
+      file_filter = '',
+      dyn_file_pattern = '*.nc'
+    } = args
 
     ctx.emit('step_started', { step: 'A', description: '查看数据并定义变量' })
 
+    // 1. 检查 Python 环境
     const pythonPath = findFirstPythonPath()
     if (!pythonPath) {
       const errorMsg = '未找到可用的Python解释器，请安装Python或配置PYTHON/PYENV'
@@ -258,20 +118,34 @@ export const oceanInspectDataTool = defineTool({
         message: '数据检查失败'
       }
     }
+
+    // 2. 准备路径
     const pythonCmd = `"${pythonPath}"`
     const tempDir = path.resolve(ctx.sandbox.workDir, 'ocean_preprocess_temp')
-    const outputJson = `${tempDir}/inspect_result.json`
+    const configPath = path.join(tempDir, 'inspect_config.json')
+    const outputPath = path.join(tempDir, 'inspect_result.json')
 
-    const script = generateInspectScript(nc_folder, static_file || null, file_filter, outputJson)
-    const scriptPath = `${tempDir}/inspect_data.py`
+    // Python 脚本路径（相对于项目根目录）
+    const scriptPath = path.resolve(process.cwd(), 'scripts/ocean_preprocess/inspect_data.py')
+
+    // 3. 准备配置
+    const config = {
+      nc_folder,
+      static_file: static_file || null,
+      file_filter,
+      dyn_file_pattern
+    }
 
     try {
-      await ctx.sandbox.exec(`mkdir -p ${tempDir}`)
-      await ctx.sandbox.fs.write(scriptPath, script)
+      // 4. 创建临时目录并写入配置
+      await ctx.sandbox.exec(`mkdir -p "${tempDir}"`)
+      await ctx.sandbox.fs.write(configPath, JSON.stringify(config, null, 2))
 
-      const result = await ctx.sandbox.exec(`${pythonCmd} ${scriptPath}`, {
-        timeoutMs: 300000,
-      })
+      // 5. 执行 Python 脚本
+      const result = await ctx.sandbox.exec(
+        `${pythonCmd} "${scriptPath}" --config "${configPath}" --output "${outputPath}"`,
+        { timeoutMs: 300000 }
+      )
 
       if (result.code !== 0) {
         ctx.emit('step_failed', { step: 'A', error: result.stderr })
@@ -282,7 +156,8 @@ export const oceanInspectDataTool = defineTool({
         }
       }
 
-      const jsonContent = await ctx.sandbox.fs.read(outputJson)
+      // 6. 读取结果
+      const jsonContent = await ctx.sandbox.fs.read(outputPath)
       const inspectResult: InspectResult = JSON.parse(jsonContent)
 
       ctx.emit('step_completed', {
@@ -292,6 +167,7 @@ export const oceanInspectDataTool = defineTool({
       })
 
       return inspectResult
+
     } catch (error: any) {
       ctx.emit('step_failed', { step: 'A', error: error.message })
       return {

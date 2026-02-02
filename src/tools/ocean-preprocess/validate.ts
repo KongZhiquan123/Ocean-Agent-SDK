@@ -1,6 +1,23 @@
+/**
+ * @file validate.ts
+ * @description Step B: 张量约定验证工具
+ *              调用 Python 脚本验证变量形状
+ *
+ * @author leizheng
+ * @date 2026-02-02
+ * @version 2.0.0
+ *
+ * @changelog
+ *   - 2026-02-02 leizheng: v2.0.0 重构为调用独立 Python 脚本
+ */
+
 import { defineTool } from '@shareai-lab/kode-sdk'
 import { findFirstPythonPath } from '@/utils/python-manager'
 import path from 'node:path'
+
+// ========================================
+// 类型定义
+// ========================================
 
 export interface ValidateResult {
   status: 'pass' | 'error' | 'pending'
@@ -17,103 +34,9 @@ export interface ValidateResult {
   message: string
 }
 
-function generateValidateScript(
-  variablesJson: string,
-  researchVars: string[],
-  maskVars: string[],
-  outputJson: string
-): string {
-  return `
-import json
-
-VARIABLES_JSON = ${JSON.stringify(variablesJson)}
-RESEARCH_VARS = ${JSON.stringify(researchVars)}
-MASK_VARS = ${JSON.stringify(maskVars)}
-OUTPUT_JSON = ${JSON.stringify(outputJson)}
-
-with open(VARIABLES_JSON, 'r', encoding='utf-8') as f:
-    inspect_result = json.load(f)
-
-variables_info = inspect_result.get("variables", {})
-
-result = {
-    "status": "pending",
-    "research_vars": RESEARCH_VARS,
-    "tensor_convention": {},
-    "var_names_config": {
-        "dynamic": [],
-        "static": [],
-        "research": RESEARCH_VARS,
-        "mask": MASK_VARS
-    },
-    "warnings": [],
-    "errors": [],
-    "message": ""
-}
-
-# 防错规则 B3: 验证研究变量存在
-for var in RESEARCH_VARS:
-    if var not in variables_info:
-        result["errors"].append(f"研究变量 '{var}' 不存在于数据中")
-
-if result["errors"]:
-    result["status"] = "error"
-    result["message"] = "研究变量验证失败"
-else:
-    # 防错规则 B1, B2: 张量形状检查
-    for var_name, var_info in variables_info.items():
-        shape = tuple(var_info["shape"])
-        category = var_info["category"]
-        ndim = len(shape)
-
-        convention = {
-            "name": var_name,
-            "original_shape": shape,
-            "category": category,
-            "valid": False,
-            "interpretation": ""
-        }
-
-        if category == "dynamic":
-            result["var_names_config"]["dynamic"].append(var_name)
-            if ndim == 3:
-                convention["valid"] = True
-                convention["interpretation"] = "[T, H, W]"
-                convention["T"], convention["H"], convention["W"] = shape
-            elif ndim == 4:
-                convention["valid"] = True
-                convention["interpretation"] = "[T, D, H, W]"
-                convention["T"], convention["D"], convention["H"], convention["W"] = shape
-            else:
-                convention["interpretation"] = f"不符合约定: {ndim}D"
-                result["warnings"].append(f"动态变量 '{var_name}' 维度不符合约定: {shape}")
-
-        elif category == "static":
-            result["var_names_config"]["static"].append(var_name)
-            if ndim == 2:
-                convention["valid"] = True
-                convention["interpretation"] = "[H, W]"
-                convention["H"], convention["W"] = shape
-            else:
-                convention["interpretation"] = f"不符合约定: {ndim}D"
-                if var_name in MASK_VARS:
-                    result["errors"].append(f"掩码变量 '{var_name}' 维度错误: {shape}")
-
-        result["tensor_convention"][var_name] = convention
-
-    if result["errors"]:
-        result["status"] = "error"
-        result["message"] = "张量约定验证失败"
-    else:
-        result["status"] = "pass"
-        result["message"] = "张量约定验证通过"
-
-with open(OUTPUT_JSON, 'w', encoding='utf-8') as f:
-    json.dump(result, f, ensure_ascii=False, indent=2)
-
-print(json.dumps(result, ensure_ascii=False))
-`
-}
+// ========================================
+// 工具定义
+// ========================================
 
 export const oceanValidateTensorTool = defineTool({
   name: 'ocean_validate_tensor',
@@ -125,7 +48,7 @@ export const oceanValidateTensorTool = defineTool({
 - B1: 动态变量必须是 [T, H, W] 或 [T, D, H, W] 形状
 - B2: 静态变量必须是 [H, W] 形状
 - B3: 研究变量必须在数据中存在
-- B4: 掩码变量形状必须与数据空间维匹配
+- B4: 掩码变量形状必须是 2D
 
 **输入**：Step A 的结果文件路径 + 用户确认的研究变量列表
 **返回**：验证结果、var_names配置、张量约定信息`,
@@ -138,14 +61,14 @@ export const oceanValidateTensorTool = defineTool({
     research_vars: {
       type: 'array',
       items: { type: 'string' },
-      description: '用户确认的研究变量列表，如 ["u_eastward", "v_northward"]'
+      description: '用户确认的研究变量列表，如 ["uo", "vo"]'
     },
     mask_vars: {
       type: 'array',
       items: { type: 'string' },
       description: '掩码变量列表',
       required: false,
-      default: ['mask_u', 'mask_rho', 'mask_v']
+      default: ['mask_rho', 'mask_u', 'mask_v', 'mask_psi']
     }
   },
 
@@ -158,11 +81,12 @@ export const oceanValidateTensorTool = defineTool({
     const {
       inspect_result_path,
       research_vars,
-      mask_vars = ['mask_u', 'mask_rho', 'mask_v']
+      mask_vars = ['mask_rho', 'mask_u', 'mask_v', 'mask_psi']
     } = args
 
     ctx.emit('step_started', { step: 'B', description: '进行张量约定验证' })
 
+    // 1. 检查 Python 环境
     const pythonPath = findFirstPythonPath()
     if (!pythonPath) {
       const errorMsg = '未找到可用的Python解释器，请安装Python或配置PYTHON/PYENV'
@@ -173,18 +97,32 @@ export const oceanValidateTensorTool = defineTool({
         message: '张量验证失败'
       }
     }
+
+    // 2. 准备路径
     const pythonCmd = `"${pythonPath}"`
-    const tempDir = path.join(ctx.sandbox.workDir, 'ocean_preprocess_temp')
-    const outputJson = `${tempDir}/validate_result.json`
-    const script = generateValidateScript(inspect_result_path, research_vars, mask_vars, outputJson)
-    const scriptPath = `${tempDir}/validate_tensor.py`
+    const tempDir = path.resolve(ctx.sandbox.workDir, 'ocean_preprocess_temp')
+    const configPath = path.join(tempDir, 'validate_config.json')
+    const outputPath = path.join(tempDir, 'validate_result.json')
+
+    // Python 脚本路径
+    const scriptPath = path.resolve(process.cwd(), 'scripts/ocean_preprocess/validate_tensor.py')
+
+    // 3. 准备配置
+    const config = {
+      inspect_result_path,
+      research_vars,
+      mask_vars
+    }
 
     try {
-      await ctx.sandbox.fs.write(scriptPath, script)
+      // 4. 写入配置
+      await ctx.sandbox.fs.write(configPath, JSON.stringify(config, null, 2))
 
-      const result = await ctx.sandbox.exec(`${pythonCmd} ${scriptPath}`, {
-        timeoutMs: 60000,
-      })
+      // 5. 执行 Python 脚本
+      const result = await ctx.sandbox.exec(
+        `${pythonCmd} "${scriptPath}" --config "${configPath}" --output "${outputPath}"`,
+        { timeoutMs: 60000 }
+      )
 
       if (result.code !== 0) {
         ctx.emit('step_failed', { step: 'B', error: result.stderr })
@@ -195,7 +133,8 @@ export const oceanValidateTensorTool = defineTool({
         }
       }
 
-      const jsonContent = await ctx.sandbox.fs.read(outputJson)
+      // 6. 读取结果
+      const jsonContent = await ctx.sandbox.fs.read(outputPath)
       const validateResult: ValidateResult = JSON.parse(jsonContent)
 
       ctx.emit('step_completed', {
@@ -205,6 +144,7 @@ export const oceanValidateTensorTool = defineTool({
       })
 
       return validateResult
+
     } catch (error: any) {
       ctx.emit('step_failed', { step: 'B', error: error.message })
       return {
