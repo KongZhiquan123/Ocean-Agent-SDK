@@ -1,7 +1,8 @@
 // src/config.ts
 // 配置和依赖初始化
 
-import 'dotenv/config'
+import dotenv from 'dotenv'
+dotenv.config({ override: true })
 import {
   JSONStore,
   AgentTemplateRegistry,
@@ -31,22 +32,46 @@ export const config = {
   skillsDir: process.env.SKILLS_DIR ?? './.skills',
 } as const
 
+console.log('[config] 环境变量 ANTHROPIC_MODEL_ID:', process.env.ANTHROPIC_MODEL_ID)
+console.log('[config] 最终使用模型:', config.anthropicModelId)
+
 const skillsWhiteList= ['ocean-preprocess']
 
 // ========================================
 // 配置验证
 // ========================================
- 
+
 export function validateConfig(): void {
-  if (!config.apiSecret) {
-    console.warn(
-      '[config] 警告：未设置 KODE_API_SECRET 环境变量！服务将拒绝所有未认证的请求。',
-    )
+  const errors: string[] = []
+  const warnings: string[] = []
+
+  // 必需配置
+  if (!config.anthropicApiKey) {
+    errors.push('未设置 ANTHROPIC_API_KEY 环境变量')
   }
 
-  if (!config.anthropicApiKey) {
-    throw new Error('错误：未设置 ANTHROPIC_API_KEY 环境变量！')
+  if (!config.anthropicModelId) {
+    errors.push('未设置 ANTHROPIC_MODEL_ID 环境变量')
   }
+
+  if (!config.anthropicBaseUrl) {
+    errors.push('未设置 ANTHROPIC_BASE_URL 环境变量')
+  }
+
+  // 警告配置
+  if (!config.apiSecret) {
+    warnings.push('未设置 KODE_API_SECRET，服务将拒绝所有未认证请求')
+  }
+
+  // 输出警告
+  warnings.forEach(w => console.warn(`[config] 警告：${w}`))
+
+  // 有错误则抛出
+  if (errors.length > 0) {
+    throw new Error(`配置错误：\n${errors.map(e => `  - ${e}`).join('\n')}`)
+  }
+
+  console.log('[config] 配置验证通过')
 }
 
 // ========================================
@@ -115,7 +140,22 @@ function createTemplateRegistry() {
 4. 向用户确认哪些文件已更新/创建。
 
 # Skills 使用
-当用户需要进行海洋数据预处理时，使用 skills 工具加载 ocean-preprocess 技能获取完整流程指导。`,
+- 查看可用技能：skills 工具，参数 {"action": "list"}
+- 加载特定技能：skills 工具，参数 {"action": "load", "skill_name": "ocean-preprocess"}
+- 当用户需要进行海洋数据预处理时，先加载 ocean-preprocess 技能获取完整流程指导。
+
+# 海洋数据预处理注意事项
+当使用 ocean_preprocess_full 工具时：
+1. **首次调用**：仅提供必需参数（nc_folder, output_base, research_vars）
+2. **如果返回 awaiting_confirmation 状态**：
+   - 工具会在 message 中展示 suspected_masks 和 suspected_coordinates
+   - 你必须向用户展示这些信息，并询问确认：
+     * "检测到疑似掩码变量: [列表]，是否正确？"
+     * "检测到疑似坐标变量: [列表]，哪些需要保存为静态数据？"
+   - 等待用户回复
+3. **用户确认后**：使用用户确认的变量列表重新调用 ocean_preprocess_full，这次提供 mask_vars 和 static_vars 参数
+4. **如果用户不确定**：建议使用默认的 ROMS 配置（工具会自动使用默认值）
+5. **第二次调用时**：工具会跳过确认步骤，直接执行完整的 A→B→C 流程`,
     tools: [
       'fs_read',
       'fs_write',

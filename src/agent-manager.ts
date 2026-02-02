@@ -67,10 +67,49 @@ export async function createAgent(config: AgentConfig): Promise<Agent> {
 // Agent 事件处理
 // ========================================
 
+// ========================================
+// 权限控制 - 危险命令黑名单
+// ========================================
+
+const DANGEROUS_PATTERNS = [
+  /rm\s+(-[rRf]+\s+)*[\/~]/,         // rm -rf / 或 rm -rf ~
+  /rm\s+(-[rRf]+\s+)*\.\./,          // rm -rf ..
+  />\s*\/etc\//,                      // 重定向写入 /etc/
+  />\s*\/usr\//,                      // 重定向写入 /usr/
+  />\s*\/bin\//,                      // 重定向写入 /bin/
+  /sudo\s+/,                          // sudo 命令
+  /chmod\s+777/,                      // 危险权限
+  /chown\s+root/,                     // 改变所有者为 root
+  /mkfs/,                             // 格式化磁盘
+  /dd\s+.*of=\/dev/,                  // 写入设备
+  /:(){ :|:& };:/,                    // fork 炸弹
+  />\s*\/dev\/(sda|hda|nvme)/,        // 写入磁盘设备
+  /curl.*\|\s*(ba)?sh/,               // curl | bash 远程执行
+  /wget.*\|\s*(ba)?sh/,               // wget | bash 远程执行
+]
+
+function isDangerousCommand(command: string): boolean {
+  return DANGEROUS_PATTERNS.some(pattern => pattern.test(command))
+}
+
 export function setupAgentHandlers(agent: Agent, reqId: string): void {
-  // 权限请求处理：自动批准
+  // 权限请求处理：检查危险命令
   agent.on('permission_required', async (event: any) => {
-    console.log(`[agent-manager] [req ${reqId}] 工具 ${event.call.name} 需要权限批准`)
+    const toolName = event.call.name
+    const input = event.call.input || {}
+
+    console.log(`[agent-manager] [req ${reqId}] 工具 ${toolName} 需要权限批准`)
+
+    // 检查 bash 命令是否危险
+    if (toolName === 'bash_run' && input.command) {
+      if (isDangerousCommand(input.command)) {
+        console.warn(`[agent-manager] [req ${reqId}] 拒绝危险命令: ${input.command}`)
+        await event.respond('deny')
+        return
+      }
+    }
+
+    // 其他情况允许
     await event.respond('allow')
   })
 

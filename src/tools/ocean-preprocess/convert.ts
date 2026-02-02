@@ -19,29 +19,30 @@ function generateConvertScript(
   staticFile: string | null,
   staticVars: string[],
   maskVars: string[],
-  fileFilter: string,
+  filePattern: string,
   outputJson: string
 ): string {
   return `
 import os
+import glob
 import json
 import numpy as np
+import warnings
 
 try:
     import xarray as xr
-    from tqdm import tqdm
 except ImportError:
-    print(json.dumps({"status": "error", "errors": ["需要安装 xarray tqdm: pip install xarray netCDF4 tqdm"]}))
+    print(json.dumps({"status": "error", "errors": ["需要安装 xarray: pip install xarray netCDF4 dask"]}))
     exit(1)
 
 # 配置
 NC_FOLDER = ${JSON.stringify(ncFolder)}
 OUTPUT_BASE = ${JSON.stringify(outputBase)}
-RESEARCH_VARS = ${JSON.stringify(researchVars)}
+DYN_VARS = ${JSON.stringify(researchVars)}
 STATIC_FILE = ${staticFile ? JSON.stringify(staticFile) : 'None'}
-STATIC_VARS = ${JSON.stringify(staticVars)}
+STAT_VARS = ${JSON.stringify(staticVars)}
 MASK_VARS = ${JSON.stringify(maskVars)}
-FILE_FILTER = ${JSON.stringify(fileFilter)}
+DYN_FILE_PATTERN = ${JSON.stringify(filePattern)}
 OUTPUT_JSON = ${JSON.stringify(outputJson)}
 
 result = {
@@ -55,121 +56,147 @@ result = {
 }
 
 try:
-    # 防错规则 C1: 创建目录结构
-    hr_dir = os.path.join(OUTPUT_BASE, "hr")
-    stat_dir = os.path.join(OUTPUT_BASE, "static")
-    os.makedirs(hr_dir, exist_ok=True)
-    os.makedirs(stat_dir, exist_ok=True)
+    # --- 1. 路径与环境设置 ---
+    dyn_out_dir = os.path.join(OUTPUT_BASE, 'target_variables')
+    stat_out_dir = os.path.join(OUTPUT_BASE, 'static_variables')
 
-    # 防错规则 C4: NC文件排序
-    nc_files = sorted([f for f in os.listdir(NC_FOLDER)
-                      if f.endswith('.nc') and FILE_FILTER in f])
+    os.makedirs(dyn_out_dir, exist_ok=True)
+    os.makedirs(stat_out_dir, exist_ok=True)
+
+    print(f"Start processing...")
+    print(f"Dynamic output: {dyn_out_dir}")
+    print(f"Static output:  {stat_out_dir}")
+
+    # --- 2. 处理动态变量 (Dynamic Variables) ---
+    print(f"\\n--- Processing Dynamic Files in: {NC_FOLDER} ---")
+
+    # 使用 glob 获取并排序文件（与原脚本一致）
+    search_path = os.path.join(NC_FOLDER, DYN_FILE_PATTERN)
+    nc_files = sorted(glob.glob(search_path))
 
     if not nc_files:
-        result["errors"].append("未找到NC文件")
+        result["errors"].append(f"未找到匹配 '{DYN_FILE_PATTERN}' 的NC文件，搜索路径: {search_path}")
         result["status"] = "error"
     else:
-        # 按变量收集数据
-        data_accum = {var: [] for var in RESEARCH_VARS}
+        print(f"Found {len(nc_files)} dynamic files. Using xarray multi-file dataset...")
 
-        for fname in tqdm(nc_files, desc="读取NC文件"):
-            fp = os.path.join(NC_FOLDER, fname)
-            try:
-                with xr.open_dataset(fp) as ds:
-                    for var in RESEARCH_VARS:
-                        if var in ds.variables:
-                            arr = ds[var].values
-                            data_accum[var].append(arr)
-            except Exception as e:
-                result["warnings"].append(f"读取 {fname} 失败: {str(e)}")
+        try:
+            # 使用 open_mfdataset 进行惰性加载和自动拼接
+            # combine='by_coords' 智能按坐标合并
+            # parallel=True 利用多核加速元数据读取
+            # chunks='auto' 开启 dask 惰性加载，防止内存溢出
+            with xr.open_mfdataset(
+                nc_files,
+                combine='by_coords',
+                chunks='auto',
+                parallel=True,
+                decode_times=False  # 防止非常规时间格式报错
+            ) as ds:
 
-        # 拼接并保存动态变量
-        for var, arr_list in data_accum.items():
-            if not arr_list:
-                result["errors"].append(f"变量 '{var}' 无数据")
-                continue
+                for var in DYN_VARS:
+                    out_fp = os.path.join(dyn_out_dir, f"{var}.npy")
 
-            # 检查空间维度一致性
-            shape0 = arr_list[0].shape[1:]
-            valid = True
-            for i, arr in enumerate(arr_list):
-                if arr.shape[1:] != shape0:
-                    result["errors"].append(f"变量 '{var}' 空间维度不一致: 文件#{i}")
-                    valid = False
-                    break
+                    if var in ds.data_vars or var in ds.coords:
+                        try:
+                            print(f"Extracting dynamic variable: {var} ...", end="", flush=True)
 
-            if not valid:
-                continue
+                            # .values 会触发实际的计算和读取 (compute)
+                            data_arr = ds[var].values
 
-            # 按时间轴拼接
-            data_concat = np.concatenate(arr_list, axis=0)
+                            np.save(out_fp, data_arr)
+                            print(f" Done. Shape: {data_arr.shape}")
 
-            # 防错规则 C2: 维度检查
-            ndim = data_concat.ndim
-            if ndim == 3:
-                interp = f"[T={data_concat.shape[0]}, H={data_concat.shape[1]}, W={data_concat.shape[2]}]"
-            elif ndim == 4:
-                interp = f"[T={data_concat.shape[0]}, D={data_concat.shape[1]}, H={data_concat.shape[2]}, W={data_concat.shape[3]}]"
-            else:
-                result["errors"].append(f"数据维度检查有问题，请检查变量 '{var}'：期望3D或4D，实际{ndim}D")
-                continue
+                            # 维度解释
+                            ndim = data_arr.ndim
+                            if ndim == 3:
+                                interp = f"[T={data_arr.shape[0]}, H={data_arr.shape[1]}, W={data_arr.shape[2]}]"
+                            elif ndim == 4:
+                                interp = f"[T={data_arr.shape[0]}, D={data_arr.shape[1]}, H={data_arr.shape[2]}, W={data_arr.shape[3]}]"
+                            else:
+                                interp = f"shape={data_arr.shape}"
 
-            out_fp = os.path.join(hr_dir, f"{var}.npy")
-            np.save(out_fp, data_concat)
+                            result["saved_files"][var] = {
+                                "path": out_fp,
+                                "shape": list(data_arr.shape),
+                                "dtype": str(data_arr.dtype),
+                                "interpretation": interp
+                            }
 
-            result["saved_files"][var] = {
-                "path": out_fp,
-                "shape": list(data_concat.shape),
-                "dtype": str(data_concat.dtype),
-                "interpretation": interp
-            }
+                            # 显式删除引用，辅助垃圾回收
+                            del data_arr
 
-        # 防错规则 C3: 处理静态变量（掩码原样保存）
-        if STATIC_FILE and os.path.exists(STATIC_FILE):
+                        except Exception as e:
+                            result["warnings"].append(f"处理变量 '{var}' 失败: {str(e)}")
+                    else:
+                        result["warnings"].append(f"变量 '{var}' 在数据集中不存在")
+
+        except Exception as e:
+            result["errors"].append(f"打开动态数据集失败: {str(e)}")
+            result["warnings"].append("提示: 检查所有NetCDF文件是否具有一致的维度和坐标")
+
+    # --- 3. 处理静态变量 (Static Variables) ---
+    print(f"\\n--- Processing Static File: {STATIC_FILE} ---")
+
+    if STATIC_FILE and os.path.exists(STATIC_FILE):
+        try:
             with xr.open_dataset(STATIC_FILE) as ds:
-                for var in STATIC_VARS:
-                    if var in ds.variables:
-                        arr = ds[var].values
-                        is_mask = var in MASK_VARS
-                        out_fp = os.path.join(stat_dir, f"{var}.npy")
-                        np.save(out_fp, arr)
+                for var in STAT_VARS:
+                    out_fp = os.path.join(stat_out_dir, f"{var}.npy")
 
-                        result["saved_files"][var] = {
-                            "path": out_fp,
-                            "shape": list(arr.shape),
-                            "dtype": str(arr.dtype),
-                            "is_mask": is_mask
-                        }
+                    if var in ds.variables:  # variables 包含 data_vars 和 coords
+                        try:
+                            data_arr = ds[var].values
+                            np.save(out_fp, data_arr)
+                            print(f"Saved static {var}.npy, shape={data_arr.shape}")
 
-        # 事后防错规则 1 & 2: 验证
-        validation_passed = True
+                            is_mask = var in MASK_VARS
+                            result["saved_files"][var] = {
+                                "path": out_fp,
+                                "shape": list(data_arr.shape),
+                                "dtype": str(data_arr.dtype),
+                                "is_mask": is_mask
+                            }
+                        except Exception as e:
+                            result["warnings"].append(f"保存静态变量 '{var}' 失败: {str(e)}")
+                    else:
+                        result["warnings"].append(f"静态文件中不存在变量 '{var}'")
+        except Exception as e:
+            result["errors"].append(f"读取静态文件失败: {str(e)}")
+    elif STATIC_FILE:
+        result["warnings"].append(f"静态文件不存在: {STATIC_FILE}")
 
-        if not os.path.exists(hr_dir):
-            result["errors"].append("事后检查失败：hr目录不存在")
+    # --- 4. 事后验证 ---
+    print("\\n--- Post Validation ---")
+    validation_passed = True
+
+    if not os.path.exists(dyn_out_dir):
+        result["errors"].append("事后检查失败：target_variables 目录不存在")
+        validation_passed = False
+
+    for var in DYN_VARS:
+        expected_file = os.path.join(dyn_out_dir, f"{var}.npy")
+        if not os.path.exists(expected_file):
+            result["errors"].append(f"事后检查失败：{var}.npy 不存在")
             validation_passed = False
-
-        for var in RESEARCH_VARS:
-            expected_file = os.path.join(hr_dir, f"{var}.npy")
-            if not os.path.exists(expected_file):
-                result["errors"].append(f"事后检查失败：{var}.npy 不存在")
+        else:
+            loaded = np.load(expected_file)
+            if loaded.ndim not in [3, 4]:
+                result["errors"].append(f"数据维度检查有问题，请检查 '{var}'：期望3D或4D，实际{loaded.ndim}D, shape={loaded.shape}")
                 validation_passed = False
             else:
-                loaded = np.load(expected_file)
-                if loaded.ndim not in [3, 4]:
-                    result["errors"].append(f"数据维度检查有问题，请检查 '{var}' 部分：期望[T,H,W]，实际shape={loaded.shape}")
-                    validation_passed = False
-                else:
-                    result["post_validation"][var] = {
-                        "shape": list(loaded.shape),
-                        "valid": True
-                    }
+                result["post_validation"][var] = {
+                    "shape": list(loaded.shape),
+                    "valid": True
+                }
 
-        if result["errors"]:
-            result["status"] = "error"
-            result["message"] = f"处理失败，存在 {len(result['errors'])} 个错误"
-        else:
-            result["status"] = "pass"
-            result["message"] = f"预处理完成，已保存 {len(result['saved_files'])} 个文件"
+    if result["errors"]:
+        result["status"] = "error"
+        result["message"] = f"处理失败，存在 {len(result['errors'])} 个错误"
+    else:
+        result["status"] = "pass"
+        result["message"] = f"预处理完成，已保存 {len(result['saved_files'])} 个文件到 {OUTPUT_BASE}"
+
+    print("\\nAll processing complete.")
 
 except Exception as e:
     result["status"] = "error"
@@ -188,42 +215,50 @@ export const oceanConvertNpyTool = defineTool({
 
 将NC文件中的变量转换为NPY格式，按 OceanSRDataset 要求的目录结构保存。
 
+**核心特性**：
+- 使用 xr.open_mfdataset 进行多文件惰性加载和自动拼接
+- 支持 Dask 惰性加载（chunks='auto'），防止内存溢出
+- 支持多核并行加速（parallel=True）
+
+**输出目录结构**：
+- output_base/target_variables/变量.npy - 动态研究变量
+- output_base/static_variables/变量.npy - 静态变量
+
 **防错规则**：
-- C1: 输出目录结构为 output_base/hr/变量.npy 和 output_base/static/变量.npy
-- C2: 保存前验证维度：动态 [T,H,W] 或 [T,D,H,W]，静态 [H,W]
+- C1: 自动创建输出目录结构
+- C2: 保存前验证维度：动态 [T,H,W] 或 [T,D,H,W]
 - C3: 掩码变量（mask_*）原样保存，不做任何修改
 - C4: NC文件按文件名排序后处理，确保时间顺序
 
 **事后验证**：
 - 检查目录结构是否存在
 - 检查每个文件的维度是否正确
-- 如果不对，报错"数据维度检查有问题，请检查xxx部分"
 
 **返回**：保存的文件列表、验证结果、状态（pass/error）`,
 
   params: {
     nc_folder: {
       type: 'string',
-      description: 'NC文件所在目录'
+      description: '动态NC文件所在目录 (dyn_dir)'
     },
     output_base: {
       type: 'string',
-      description: '输出基础目录'
+      description: '输出根目录 (output_base_dir)'
     },
-    research_vars: {
+    dyn_vars: {
       type: 'array',
       items: { type: 'string' },
-      description: '研究变量列表'
+      description: '动态变量列表 (dyn_vars)'
     },
     static_file: {
       type: 'string',
-      description: '静态NC文件路径（可选）',
+      description: '静态NC文件路径 (stat_file)',
       required: false
     },
-    static_vars: {
+    stat_vars: {
       type: 'array',
       items: { type: 'string' },
-      description: '静态变量列表',
+      description: '静态变量列表 (stat_vars)',
       required: false,
       default: ['angle', 'h', 'mask_u', 'mask_rho', 'mask_v', 'pn', 'pm', 'f',
                 'x_rho', 'x_u', 'x_v', 'y_rho', 'y_u', 'y_v', 'lat_psi', 'lon_psi']
@@ -231,15 +266,15 @@ export const oceanConvertNpyTool = defineTool({
     mask_vars: {
       type: 'array',
       items: { type: 'string' },
-      description: '掩码变量列表（不可修改）',
+      description: '掩码变量列表',
       required: false,
       default: ['mask_u', 'mask_rho', 'mask_v']
     },
-    file_filter: {
+    dyn_file_pattern: {
       type: 'string',
-      description: '文件名过滤关键字',
+      description: '动态文件的 glob 匹配模式，如 "*.nc" 或 "*avg*.nc"',
       required: false,
-      default: 'avg'
+      default: '*.nc'
     }
   },
 
@@ -252,12 +287,12 @@ export const oceanConvertNpyTool = defineTool({
     const {
       nc_folder,
       output_base,
-      research_vars,
+      dyn_vars,
       static_file,
-      static_vars = ['angle', 'h', 'mask_u', 'mask_rho', 'mask_v', 'pn', 'pm', 'f',
-                     'x_rho', 'x_u', 'x_v', 'y_rho', 'y_u', 'y_v', 'lat_psi', 'lon_psi'],
+      stat_vars = ['angle', 'h', 'mask_u', 'mask_rho', 'mask_v', 'pn', 'pm', 'f',
+                   'x_rho', 'x_u', 'x_v', 'y_rho', 'y_u', 'y_v', 'lat_psi', 'lon_psi'],
       mask_vars = ['mask_u', 'mask_rho', 'mask_v'],
-      file_filter = 'avg'
+      dyn_file_pattern = '*.nc'
     } = args
 
     ctx.emit('step_started', { step: 'C', description: '转换为NPY格式存储' })
@@ -279,11 +314,11 @@ export const oceanConvertNpyTool = defineTool({
     const script = generateConvertScript(
       nc_folder,
       output_base,
-      research_vars,
+      dyn_vars,
       static_file || null,
-      static_vars,
+      stat_vars,
       mask_vars,
-      file_filter,
+      dyn_file_pattern,
       outputJson
     )
     const scriptPath = `${tempDir}/convert_npy.py`

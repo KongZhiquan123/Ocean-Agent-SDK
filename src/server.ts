@@ -167,11 +167,28 @@ app.post('/api/chat/stream', requireAuth, async (req: Request, res: Response) =>
     }
   }, 2000)
 
+  // 请求超时（10 分钟）
+  const REQUEST_TIMEOUT = 10 * 60 * 1000
+  const timeoutTimer = setTimeout(() => {
+    if (!res.writableEnded && !clientDisconnected) {
+      console.warn(`[server] [req ${reqId}] 请求超时`)
+      sendSSE(res, {
+        type: 'error',
+        error: 'REQUEST_TIMEOUT',
+        message: 'Request timeout after 10 minutes',
+        timestamp: Date.now(),
+      })
+      cleanup()
+      res.end()
+    }
+  }, REQUEST_TIMEOUT)
+
   // 监听客户端断开连接
   const cleanup = () => {
     if (!clientDisconnected) {
       clientDisconnected = true
       clearInterval(heartbeatInterval)
+      clearTimeout(timeoutTimer)
       console.log(`[server] [req ${reqId}] 客户端断开连接，清理资源`)
 
       // 中断 agent 处理
@@ -205,7 +222,9 @@ app.post('/api/chat/stream', requireAuth, async (req: Request, res: Response) =>
       sendSSE(res, {
         type: 'error',
         error: 'INTERNAL_ERROR',
-        message: String(err?.message ?? err),
+        message: process.env.NODE_ENV === 'development'
+          ? String(err?.message ?? err)
+          : 'Internal server error',  // 生产环境隐藏详细错误
         timestamp: Date.now(),
       })
     }
@@ -264,4 +283,14 @@ process.on('SIGINT', () => {
     console.log('[server] 服务器已关闭')
     process.exit(0)
   })
+})
+
+// 全局错误处理
+process.on('uncaughtException', (err) => {
+  console.error('[server] 未捕获的异常:', err)
+  process.exit(1)
+})
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[server] 未处理的 Promise 拒绝:', reason)
 })

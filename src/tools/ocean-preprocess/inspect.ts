@@ -11,6 +11,7 @@ interface VariableInfo {
   units: string
   long_name: string
   is_mask: boolean
+  suspected_type: 'suspected_mask' | 'suspected_coordinate' | 'dynamic' | 'static' | 'unknown'
 }
 
 export interface InspectResult {
@@ -24,6 +25,8 @@ export interface InspectResult {
   warnings: string[]
   errors: string[]
   message: string
+  suspected_masks: string[]
+  suspected_coordinates: string[]
 }
 
 function generateInspectScript(
@@ -54,6 +57,34 @@ MASK_VARS = ['mask_u', 'mask_rho', 'mask_v']
 STATIC_VARS = ['angle', 'h', 'mask_u', 'mask_rho', 'mask_v', 'pn', 'pm', 'f',
                'x_rho', 'x_u', 'x_v', 'y_rho', 'y_u', 'y_v', 'lat_psi', 'lon_psi']
 
+# 时间维度检测模式
+TIME_DIM_PATTERNS = ['time', 'ocean_time', 't', 'Time', 'TIME', 'nt', 'ntime', 'MT', 'time_counter']
+
+def guess_variable_type(var_name, category, dims):
+    """
+    猜测变量类型（仅供参考，不做决策）
+    返回: "suspected_mask" / "suspected_coordinate" / "dynamic" / "static" / "unknown"
+    """
+    name_lower = var_name.lower()
+
+    # 1. 检测掩码
+    mask_keywords = ['mask', 'land', 'lsm', 'landmask']
+    if any(kw in name_lower for kw in mask_keywords):
+        return "suspected_mask"
+
+    # 2. 检测坐标/地形
+    coord_keywords = ['lat', 'lon', 'x_', 'y_', 'angle', 'depth', 'h', 'bathymetry', 'f', 'pn', 'pm']
+    if any(kw in name_lower for kw in coord_keywords):
+        return "suspected_coordinate"
+
+    # 3. 已分类的动态/静态
+    if category == "dynamic":
+        return "dynamic"
+    elif category == "static":
+        return "static"
+
+    return "unknown"
+
 result = {
     "status": "success",
     "nc_folder": NC_FOLDER,
@@ -64,7 +95,9 @@ result = {
     "statistics": {},
     "warnings": [],
     "errors": [],
-    "message": ""
+    "message": "",
+    "suspected_masks": [],
+    "suspected_coordinates": []
 }
 
 try:
@@ -84,7 +117,8 @@ try:
                 for var_name in ds.data_vars:
                     var = ds[var_name]
                     dims = list(var.dims)
-                    has_time = any(d in dims for d in ['time', 'ocean_time', 't'])
+                    # 改进的时间维度检测
+                    has_time = any(any(pattern in d for pattern in TIME_DIM_PATTERNS) for d in dims)
 
                     # 防错规则 A1: 变量分类
                     if var_name in MASK_VARS:
@@ -108,7 +142,8 @@ try:
                         "dtype": str(var.dtype),
                         "units": var.attrs.get("units", "unknown"),
                         "long_name": var.attrs.get("long_name", var_name),
-                        "is_mask": is_mask
+                        "is_mask": is_mask,
+                        "suspected_type": guess_variable_type(var_name, category, dims)
                     }
                     result["variables"][var_name] = var_info
 
@@ -134,17 +169,27 @@ try:
                 for var_name in ds.data_vars:
                     if var_name not in result["variables"]:
                         var = ds[var_name]
+                        dims = list(var.dims)
                         is_mask = var_name in MASK_VARS
                         result["variables"][var_name] = {
                             "name": var_name,
                             "category": "static",
-                            "dims": list(var.dims),
+                            "dims": dims,
                             "shape": list(var.shape),
                             "dtype": str(var.dtype),
                             "units": var.attrs.get("units", "unknown"),
                             "long_name": var.attrs.get("long_name", var_name),
-                            "is_mask": is_mask
+                            "is_mask": is_mask,
+                            "suspected_type": guess_variable_type(var_name, "static", dims)
                         }
+
+        # 收集疑似掩码和坐标（仅供用户参考）
+        for var_name, var_info in result["variables"].items():
+            suspected_type = var_info.get("suspected_type")
+            if suspected_type == "suspected_mask":
+                result["suspected_masks"].append(var_name)
+            elif suspected_type == "suspected_coordinate":
+                result["suspected_coordinates"].append(var_name)
 
         result["status"] = "awaiting_confirmation"
         result["message"] = f"找到 {len(nc_files)} 个NC文件，{len(result['dynamic_vars_candidates'])} 个动态变量候选"
