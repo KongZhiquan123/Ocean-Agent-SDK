@@ -5,12 +5,14 @@
  * Time: 2026-02-02
  * Description: 海洋数据预处理自动化测试
  *              - 核心防错规则测试（NaN/Inf/维度/变量缺失）
+ *              - 静态文件防错测试（坐标NaN/范围/掩码二值/形状匹配）
  *              - 不同问法/表达方式测试（口语化/英文夹杂/简短/专业/错别字）
  *              - 模糊请求追问测试（缺少变量/输出目录/文件路径）
  *              - 成功后输出结构展示
- * Version: 2.0.0
+ * Version: 2.1.0
  *
  * Changelog:
+ *   - 2026-02-03 leizheng: v2.1.0 新增静态文件相关 badcase (DQ-009 ~ DQ-017)
  *   - 2026-02-02 leizheng: v2.0.0 重构测试框架，新增表达方式和模糊请求测试
  *   - 2026-02-02 leizheng: v1.0.0 初始版本，核心 bad case 测试
  */
@@ -131,6 +133,104 @@ const DATA_QUALITY_CASES: TestCase[] = [
     dynVars: ['uo', 'vo'],
     initialMessage: `帮我预处理海洋数据 ${BAD_CASES_DIR}/good_normal_data.nc，动态变量是 uo 和 vo，输出到 ${OUTPUT_DIR}/good_data`,
     userConfirmations: ['确认，继续', '处理吧']
+  },
+  // ============================================================
+  // 静态文件相关测试用例
+  // ============================================================
+  {
+    id: 'DQ-009',
+    type: 'data_quality',
+    file: 'good_dynamic_for_static.nc + good_static.nc',
+    description: '正常静态文件（应该成功）',
+    expectedResult: 'pass',
+    dynVars: ['uo', 'vo'],
+    initialMessage: `预处理海洋数据：
+- 动态文件目录: ${BAD_CASES_DIR}
+- 文件匹配: good_dynamic_for_static.nc
+- 静态文件: ${BAD_CASES_DIR}/good_static.nc
+- 研究变量: uo, vo
+- 输出目录: ${OUTPUT_DIR}/static_good`,
+    userConfirmations: ['使用检测到的掩码和静态变量', '确认，开始处理']
+  },
+  {
+    id: 'DQ-010',
+    type: 'data_quality',
+    file: 'bad_static_nan.nc',
+    description: '静态变量(h)含NaN检测',
+    expectedResult: 'error',
+    dynVars: ['uo', 'vo'],
+    initialMessage: `预处理海洋数据，动态文件在 ${BAD_CASES_DIR}/good_dynamic_for_static.nc，静态文件用 ${BAD_CASES_DIR}/bad_static_nan.nc，变量 uo vo，输出 ${OUTPUT_DIR}/static_nan`,
+    userConfirmations: ['确认配置', '继续']
+  },
+  {
+    id: 'DQ-011',
+    type: 'data_quality',
+    file: 'bad_static_lon_nan.nc',
+    description: '经度坐标含NaN检测',
+    expectedResult: 'error',
+    dynVars: ['uo', 'vo'],
+    initialMessage: `处理 ${BAD_CASES_DIR}/good_dynamic_for_static.nc，静态文件 ${BAD_CASES_DIR}/bad_static_lon_nan.nc，uo vo 变量，输出 ${OUTPUT_DIR}/lon_nan`,
+    userConfirmations: ['好', '处理']
+  },
+  {
+    id: 'DQ-012',
+    type: 'data_quality',
+    file: 'bad_static_lat_nan.nc',
+    description: '纬度坐标含NaN检测',
+    expectedResult: 'error',
+    dynVars: ['uo', 'vo'],
+    initialMessage: `${BAD_CASES_DIR}/good_dynamic_for_static.nc 预处理，静态文件 ${BAD_CASES_DIR}/bad_static_lat_nan.nc，变量 uo vo，输出 ${OUTPUT_DIR}/lat_nan`,
+    userConfirmations: ['确认', '开始']
+  },
+  {
+    id: 'DQ-013',
+    type: 'data_quality',
+    file: 'bad_static_lon_range.nc',
+    description: '经度超出范围检测',
+    expectedResult: 'error',
+    dynVars: ['uo', 'vo'],
+    initialMessage: `预处理 ${BAD_CASES_DIR}/good_dynamic_for_static.nc，静态文件 ${BAD_CASES_DIR}/bad_static_lon_range.nc，uo vo，输出 ${OUTPUT_DIR}/lon_range，经度范围限制 [-180, 180]`,
+    userConfirmations: ['确认', '继续处理']
+  },
+  {
+    id: 'DQ-014',
+    type: 'data_quality',
+    file: 'bad_static_lat_range.nc',
+    description: '纬度超出范围检测',
+    expectedResult: 'error',
+    dynVars: ['uo', 'vo'],
+    initialMessage: `处理海洋数据 ${BAD_CASES_DIR}/good_dynamic_for_static.nc，静态 ${BAD_CASES_DIR}/bad_static_lat_range.nc，变量 uo vo，输出 ${OUTPUT_DIR}/lat_range，纬度范围 [-90, 90]`,
+    userConfirmations: ['ok', 'go']
+  },
+  {
+    id: 'DQ-015',
+    type: 'data_quality',
+    file: 'bad_mask_not_binary.nc',
+    description: '掩码非二值检测（警告）',
+    expectedResult: 'pass',  // 非二值是警告，不是错误
+    dynVars: ['uo', 'vo'],
+    initialMessage: `预处理 ${BAD_CASES_DIR}/good_dynamic_for_static.nc，静态文件 ${BAD_CASES_DIR}/bad_mask_not_binary.nc，uo vo 变量，${OUTPUT_DIR}/mask_binary`,
+    userConfirmations: ['用检测到的配置', '继续']
+  },
+  {
+    id: 'DQ-016',
+    type: 'data_quality',
+    file: 'bad_mask_shape_mismatch.nc',
+    description: '掩码形状不匹配检测',
+    expectedResult: 'error',
+    dynVars: ['uo', 'vo'],
+    initialMessage: `海洋数据预处理：${BAD_CASES_DIR}/good_dynamic_for_static.nc，静态 ${BAD_CASES_DIR}/bad_mask_shape_mismatch.nc，变量 uo vo，输出 ${OUTPUT_DIR}/mask_shape`,
+    userConfirmations: ['确认', '处理']
+  },
+  {
+    id: 'DQ-017',
+    type: 'data_quality',
+    file: 'bad_mask_inverted.nc',
+    description: '掩码反转检测（启发式验证）',
+    expectedResult: 'pass',  // 启发式验证只是警告
+    dynVars: ['uo', 'vo'],
+    initialMessage: `预处理 ${BAD_CASES_DIR}/bad_dynamic_for_inverted_mask.nc，静态文件 ${BAD_CASES_DIR}/bad_mask_inverted.nc，uo vo，输出 ${OUTPUT_DIR}/mask_inverted`,
+    userConfirmations: ['使用默认配置', '继续处理']
   }
 ]
 

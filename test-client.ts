@@ -5,9 +5,10 @@
  *              支持多轮对话、海洋数据预处理交互测试
  * Author: leizheng
  * Time: 2026-02-02
- * Version: 1.1.0
+ * Version: 1.2.0
  *
  * Changelog:
+ *   - 2026-02-03 leizheng: v1.2.0 海洋预处理测试增加输出目录输入
  *   - 2026-02-02 leizheng: v1.1.0 使用 agentId 支持多轮对话
  */
 
@@ -240,6 +241,13 @@ async function testOceanPreprocess() {
     return
   }
 
+  const outputDir = await prompt('输出目录路径: ')
+  if (!outputDir.trim()) {
+    console.log('错误: 必须指定输出目录')
+    rl.close()
+    return
+  }
+
   // ========== 发送请求，Agent 会分析并展示疑似变量让用户确认 ==========
   console.log('\n' + '='.repeat(60))
   console.log('开始处理，Agent 会分析数据并展示变量信息供你确认...')
@@ -248,7 +256,7 @@ async function testOceanPreprocess() {
   let msg = `请帮我预处理海洋数据：
 - 动态数据目录: ${dynFolder}
 - 研究变量: ${researchVars}
-- 输出目录: ${dynFolder}`
+- 输出目录: ${outputDir}`
 
   if (staticFile.trim()) {
     msg += `\n- 静态文件: ${staticFile}`

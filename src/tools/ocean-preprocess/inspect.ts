@@ -5,9 +5,12 @@
  *
  * @author leizheng
  * @date 2026-02-02
- * @version 2.0.0
+ * @version 2.2.0
  *
  * @changelog
+ *   - 2026-02-03 leizheng: v2.2.0 添加 nc_files 参数支持明确指定文件列表
+ *   - 2026-02-03 leizheng: v2.1.0 P0 安全修复
+ *     - 添加路径验证（检测文件路径 vs 目录路径）
  *   - 2026-02-02 leizheng: v2.0.0 重构为调用独立 Python 脚本
  */
 
@@ -47,6 +50,10 @@ export interface InspectResult {
   message: string
   suspected_masks: string[]
   suspected_coordinates: string[]
+  // v2.2 新增
+  dynamic_files: string[]
+  suspected_static_files: string[]
+  file_analysis: Record<string, any>
 }
 
 // ========================================
@@ -59,12 +66,17 @@ export const oceanInspectDataTool = defineTool({
 
 用于超分辨率场景的数据预处理第一步。从NC文件中提取变量信息，自动分类动态/静态/掩码变量。
 
+**v2.2 新功能**：
+- 支持 nc_files 参数明确指定要处理的文件
+- 逐个文件检测时间维度，自动识别混入目录的静态文件
+
 **防错规则**：
 - A1: 自动区分动态变量（有时间维）、静态变量（无时间维）、掩码变量（mask_*）
 - A2: 陆地掩码变量会被标记为不可修改
 - A3: NC文件会自动排序以确保时间顺序正确
+- A4: 检测静态文件混入动态目录的情况
 
-**返回**：变量列表、形状信息、统计信息、动态变量候选列表
+**返回**：变量列表、形状信息、统计信息、动态变量候选列表、文件分类
 
 **重要**：执行后需要用户确认研究变量是什么`,
 
@@ -72,6 +84,12 @@ export const oceanInspectDataTool = defineTool({
     nc_folder: {
       type: 'string',
       description: 'NC文件所在目录的绝对路径'
+    },
+    nc_files: {
+      type: 'array',
+      items: { type: 'string' },
+      description: '可选：明确指定要处理的文件列表（支持简单通配符如 "ocean_avg_*.nc"）',
+      required: false
     },
     static_file: {
       type: 'string',
@@ -86,7 +104,7 @@ export const oceanInspectDataTool = defineTool({
     },
     dyn_file_pattern: {
       type: 'string',
-      description: '动态文件的 glob 匹配模式，如 "*.nc"',
+      description: '动态文件的 glob 匹配模式，如 "*.nc"（当 nc_files 未指定时使用）',
       required: false,
       default: '*.nc'
     }
@@ -100,6 +118,7 @@ export const oceanInspectDataTool = defineTool({
   async exec(args, ctx) {
     const {
       nc_folder,
+      nc_files,
       static_file,
       file_filter = '',
       dyn_file_pattern = '*.nc'
@@ -129,11 +148,16 @@ export const oceanInspectDataTool = defineTool({
     const scriptPath = path.resolve(process.cwd(), 'scripts/ocean_preprocess/inspect_data.py')
 
     // 3. 准备配置
-    const config = {
+    const config: Record<string, any> = {
       nc_folder,
       static_file: static_file || null,
       file_filter,
       dyn_file_pattern
+    }
+
+    // 如果指定了 nc_files，添加到配置
+    if (nc_files && nc_files.length > 0) {
+      config.nc_files = nc_files
     }
 
     try {
@@ -163,6 +187,8 @@ export const oceanInspectDataTool = defineTool({
       ctx.emit('step_completed', {
         step: 'A',
         file_count: inspectResult.file_count,
+        dynamic_files: inspectResult.dynamic_files,
+        suspected_static_files: inspectResult.suspected_static_files,
         dynamic_vars: inspectResult.dynamic_vars_candidates
       })
 

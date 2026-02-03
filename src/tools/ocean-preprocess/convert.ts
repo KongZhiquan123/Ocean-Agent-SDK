@@ -5,9 +5,12 @@
  *
  * @author leizheng
  * @date 2026-02-02
- * @version 2.1.0
+ * @version 2.2.0
  *
  * @changelog
+ *   - 2026-02-03 leizheng: v2.2.0 P0 安全修复
+ *     - 移除硬编码默认值（mask_vars, lon_var, lat_var, mask_src_var）
+ *     - 所有变量名必须由调用方显式传入
  *   - 2026-02-02 leizheng: v2.1.0 增加 P0 特性
  *     - allow_nan: NaN/Inf 采样检测
  *     - lon_range/lat_range: 坐标范围验证
@@ -99,21 +102,21 @@ export const oceanConvertNpyTool = defineTool({
     mask_vars: {
       type: 'array',
       items: { type: 'string' },
-      description: '掩码变量列表',
-      required: false,
-      default: ['mask_rho', 'mask_u', 'mask_v', 'mask_psi']
+      description: '掩码变量列表（必须由用户指定或从数据检测）',
+      required: false
+      // P0 修复：移除硬编码默认值 ['mask_rho', 'mask_u', 'mask_v', 'mask_psi']
     },
     lon_var: {
       type: 'string',
-      description: '经度参考变量名',
-      required: false,
-      default: 'lon_rho'
+      description: '经度参考变量名（必须由用户指定或从数据检测）',
+      required: false
+      // P0 修复：移除硬编码默认值 'lon_rho'
     },
     lat_var: {
       type: 'string',
-      description: '纬度参考变量名',
-      required: false,
-      default: 'lat_rho'
+      description: '纬度参考变量名（必须由用户指定或从数据检测）',
+      required: false
+      // P0 修复：移除硬编码默认值 'lat_rho'
     },
     dyn_file_pattern: {
       type: 'string',
@@ -129,9 +132,9 @@ export const oceanConvertNpyTool = defineTool({
     },
     mask_src_var: {
       type: 'string',
-      description: '用于精确对比的源掩码变量名',
-      required: false,
-      default: 'mask_rho'
+      description: '用于精确对比的源掩码变量名（必须由用户指定或从数据检测）',
+      required: false
+      // P0 修复：移除硬编码默认值 'mask_rho'
     },
     mask_derive_op: {
       type: 'string',
@@ -194,12 +197,12 @@ export const oceanConvertNpyTool = defineTool({
       dyn_vars,
       static_file,
       stat_vars = [],
-      mask_vars = ['mask_rho', 'mask_u', 'mask_v', 'mask_psi'],
-      lon_var = 'lon_rho',
-      lat_var = 'lat_rho',
+      mask_vars = [],  // P0 修复：默认为空数组，由调用方负责传入
+      lon_var,         // P0 修复：移除硬编码默认值
+      lat_var,         // P0 修复：移除硬编码默认值
       dyn_file_pattern = '*.nc',
       run_validation = true,
-      mask_src_var = 'mask_rho',
+      mask_src_var,    // P0 修复：移除硬编码默认值
       mask_derive_op = 'identity',
       allow_nan = false,
       lon_range,
@@ -211,6 +214,12 @@ export const oceanConvertNpyTool = defineTool({
     } = args
 
     ctx.emit('step_started', { step: 'C', description: '转换为NPY格式存储' })
+
+    // P0 修复：验证必要参数
+    if (!mask_vars || mask_vars.length === 0) {
+      const warningMsg = '未指定掩码变量（mask_vars），将跳过掩码相关处理'
+      ctx.emit('warning', { step: 'C', message: warningMsg })
+    }
 
     // 1. 检查 Python 环境
     const pythonPath = findFirstPythonPath()
@@ -241,11 +250,11 @@ export const oceanConvertNpyTool = defineTool({
       static_file: static_file || null,
       stat_vars,
       mask_vars,
-      lon_var,
-      lat_var,
+      lon_var: lon_var || null,   // P0 修复：允许为空
+      lat_var: lat_var || null,   // P0 修复：允许为空
       dyn_file_pattern,
       run_validation,
-      mask_src_var,
+      mask_src_var: mask_src_var || (mask_vars.length > 0 ? mask_vars[0] : null),  // P0 修复：使用第一个掩码变量
       mask_derive_op,
       allow_nan,
       lon_range: lon_range || null,
