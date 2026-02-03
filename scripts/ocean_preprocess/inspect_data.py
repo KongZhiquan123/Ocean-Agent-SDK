@@ -4,7 +4,7 @@ inspect_data.py - Step A: 数据检查与变量分类
 
 @author leizheng
 @date 2026-02-02
-@version 2.0.0
+@version 2.0.1
 
 功能:
 - 扫描 NC 文件目录，获取文件列表
@@ -26,8 +26,11 @@ inspect_data.py - Step A: 数据检查与变量分类
 }
 
 Changelog:
-    - 2026-02-03 v2.0.0: 添加逐文件时间维度检测，支持 nc_files 参数
-    - 2026-02-02 v1.0.0: 初始版本
+    - 2026-02-03 leizheng v2.0.1: 修复 'h' 关键字误匹配 'chl' 问题
+        - 将 'h' 改为精确匹配（COORD_EXACT_NAMES）
+        - 避免 'chl'（叶绿素）被误判为坐标变量
+    - 2026-02-03 leizheng v2.0.0: 添加逐文件时间维度检测，支持 nc_files 参数
+    - 2026-02-02 leizheng v1.0.0: 初始版本
 """
 
 import argparse
@@ -61,8 +64,13 @@ TIME_DIM_PATTERNS = [
 # 掩码变量关键字
 MASK_KEYWORDS = ['mask', 'land', 'lsm', 'landmask']
 
-# 坐标变量关键字
-COORD_KEYWORDS = ['lat', 'lon', 'x_', 'y_', 'angle', 'depth', 'h', 'bathymetry', 'f', 'pn', 'pm']
+# 坐标变量关键字（更精确，避免误匹配）
+# 注意：'h' 改为更精确的匹配，避免匹配到 'chl' 等变量
+COORD_KEYWORDS = ['lat', 'lon', 'x_rho', 'y_rho', 'x_u', 'y_u', 'x_v', 'y_v',
+                  'angle', 'depth', 'bathymetry', 'f', 'pn', 'pm']
+
+# 需要精确匹配的变量名（不能用 in 判断）
+COORD_EXACT_NAMES = ['h', 'hraw']
 
 # 默认静态变量列表（ROMS 模型）
 DEFAULT_STATIC_VARS = [
@@ -141,11 +149,15 @@ def guess_variable_type(var_name: str, dims: List[str], has_time: bool) -> str:
     if any(kw in name_lower for kw in MASK_KEYWORDS):
         return "suspected_mask"
 
-    # 2. 检测坐标/地形
+    # 2. 检测坐标/地形（关键字匹配）
     if any(kw in name_lower for kw in COORD_KEYWORDS):
         return "suspected_coordinate"
 
-    # 3. 根据时间维度判断
+    # 3. 精确匹配的坐标变量名（如 'h'）
+    if name_lower in COORD_EXACT_NAMES:
+        return "suspected_coordinate"
+
+    # 4. 根据时间维度判断
     if has_time:
         return "dynamic"
 

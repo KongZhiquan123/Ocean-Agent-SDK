@@ -1,7 +1,7 @@
 ---
 name: ocean-preprocess
 description: 海洋数据预处理技能 - 专用于超分辨率场景的NC到NPY数据格式转换
-version: 2.3.0
+version: 2.5.0
 author: kzq
 contributors: leizheng
 last_modified: 2026-02-03
@@ -9,6 +9,16 @@ last_modified: 2026-02-03
 
 <!--
 Changelog:
+  - 2026-02-03 leizheng: v2.5.0
+    - ocean_preprocess_full 集成下采样和可视化
+    - 完整流程变为 A→B→C→D→E 五步
+    - scale 参数变为必须
+  - 2026-02-03 leizheng: v2.4.0
+    - 新增裁剪功能（h_slice/w_slice/scale 参数）
+    - 新增下采样工具 ocean_downsample
+    - 新增可视化工具 ocean_visualize
+    - 新增指标检测工具 ocean_metrics
+    - 更新完整流程文档
   - 2026-02-03 leizheng: v2.3.0
     - 支持 nc_files 参数明确指定文件列表
     - 支持单个文件路径自动转换为目录模式
@@ -73,7 +83,10 @@ Changelog:
 
 | 工具名 | 用途 | 什么时候用 |
 |--------|------|-----------|
-| `ocean_preprocess_full` | 一键执行完整流程 A→B→C | **推荐**，信息完整时直接用这个 |
+| `ocean_preprocess_full` | 一键执行完整流程 A→B→C→D→E（含下采样+可视化） | **推荐**，信息完整时直接用这个 |
+| `ocean_downsample` | HR→LR 下采样 | 单独执行下采样（full 已集成） |
+| `ocean_visualize` | HR vs LR 可视化对比 | 单独生成可视化（full 已集成） |
+| `ocean_metrics` | 质量指标检测 | 计算 SSIM、Relative L2 等指标 |
 | `ocean_inspect_data` | 只查看数据，不处理 | 用户只想看看有什么变量时 |
 | `ocean_validate_tensor` | 只验证张量形状 | 一般不单独用 |
 | `ocean_convert_npy` | 只执行转换 | 一般不单独用 |
@@ -483,5 +496,232 @@ Changelog:
    - "掩码变量使用 xxx 吗？"
    - "需要保存哪些静态变量？"
    - "是否允许数据中有 NaN 值？"
+   - "数据集划分比例是多少？（train/valid/test）"
+   - "需要裁剪数据吗？如果需要，请指定 h_slice 和 w_slice"
 4. **等待用户逐一确认**
 5. 用户确认后，第二次调用时提供所有确认的参数
+
+---
+
+## 完整超分预处理流程（v2.5 更新）
+
+### 流程概览
+
+`ocean_preprocess_full` 现在已集成完整的 5 步流程：
+
+```
+NC 文件 → [Step A: 数据检查]
+              ↓
+         [Step B: 张量验证]
+              ↓
+         [Step C: 转换+裁剪+划分] → HR 数据
+              ↓
+         [Step D: 下采样] → LR 数据
+              ↓
+         [Step E: 可视化检查] → 对比图
+```
+
+### 一键执行完整流程
+
+使用 `ocean_preprocess_full` 工具，提供必要参数后自动完成所有步骤：
+
+```json
+{
+  "nc_folder": "/data/ocean",
+  "output_base": "/output/dataset",
+  "dyn_vars": ["chl", "no3"],
+  "user_confirmed": true,
+  "train_ratio": 0.7,
+  "valid_ratio": 0.15,
+  "test_ratio": 0.15,
+  "h_slice": "0:680",
+  "w_slice": "0:1440",
+  "scale": 4,
+  "downsample_method": "area"
+}
+```
+
+**输出目录结构**：
+```
+/output/dataset/
+├── train/
+│   ├── hr/
+│   │   ├── chl.npy
+│   │   └── no3.npy
+│   └── lr/
+│       ├── chl.npy
+│       └── no3.npy
+├── valid/
+│   ├── hr/
+│   └── lr/
+├── test/
+│   ├── hr/
+│   └── lr/
+├── static_variables/
+└── visualisation_data_process/
+    ├── train/*.png
+    ├── valid/*.png
+    └── test/*.png
+```
+
+### 新增参数
+
+| 参数 | 类型 | 必需 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| scale | number | ✅ 是 | - | 下采样倍数（必须由用户指定） |
+| downsample_method | string | ✅ 是 | - | 下采样插值方法：area/cubic/linear/nearest/lanczos |
+| skip_downsample | boolean | 否 | false | 跳过下采样步骤 |
+| skip_visualize | boolean | 否 | false | 跳过可视化步骤 |
+
+**插值方法说明**：
+- `area`（推荐）：区域平均，最接近真实低分辨率采样
+- `cubic`：三次插值，较平滑
+- `linear`：双线性插值
+- `nearest`：最近邻插值，保留原始值
+- `lanczos`：Lanczos 插值，高质量但计算较慢
+
+### 单独执行各步骤（可选）
+
+如果需要单独控制某个步骤，可以使用独立工具：
+
+#### Step 1: NC → NPY 转换（含裁剪和划分）
+
+使用 `ocean_downsample` 工具：
+
+```json
+{
+  "dataset_root": "/output/dataset",
+  "scale": 4,
+  "method": "area"
+}
+```
+
+**参数说明**：
+- `scale`: 下采样倍数（如 4 表示尺寸缩小为 1/4）
+- `method`: 插值方法
+  - `area`（推荐）：区域平均，最接近真实低分辨率
+  - `bicubic`：双三次插值
+  - `nearest`：最近邻插值
+  - `linear`：双线性插值
+  - `lanczos`：Lanczos 插值
+
+**输出**：
+```
+/output/dataset/
+├── train/
+│   ├── hr/  (已有)
+│   └── lr/  ← 新生成
+│       ├── chl.npy
+│       └── no3.npy
+├── valid/
+│   ├── hr/
+│   └── lr/  ← 新生成
+└── test/
+    ├── hr/
+    └── lr/  ← 新生成
+```
+
+### Step 3: 可视化检查
+
+使用 `ocean_visualize` 工具：
+
+```json
+{
+  "dataset_root": "/output/dataset"
+}
+```
+
+**输出**：
+```
+/output/dataset/
+└── visualisation_data_process/
+    ├── train/
+    │   ├── chl.png
+    │   └── no3.png
+    ├── valid/
+    └── test/
+```
+
+### Step 4: 质量指标检测
+
+使用 `ocean_metrics` 工具：
+
+```json
+{
+  "dataset_root": "/output/dataset",
+  "scale": 4
+}
+```
+
+**输出**：
+```
+/output/dataset/
+└── metrics_result.json
+```
+
+**指标说明**：
+- `SSIM`: 结构相似性 (0~1, 越接近 1 越好)
+- `Relative L2`: 相对 L2 误差 (越小越好, HR 作为分母)
+- `MSE`: 均方误差
+- `RMSE`: 均方根误差
+
+---
+
+## 新工具参数速查表
+
+### ocean_downsample
+
+| 参数 | 类型 | 必需 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| dataset_root | string | ✅ | - | 数据集根目录 |
+| scale | number | ✅ | - | 下采样倍数 |
+| method | string | 否 | "area" | 插值方法 |
+| splits | string[] | 否 | ["train","valid","test"] | 要处理的划分 |
+| include_static | boolean | 否 | false | 是否处理静态变量 |
+
+### ocean_visualize
+
+| 参数 | 类型 | 必需 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| dataset_root | string | ✅ | - | 数据集根目录 |
+| splits | string[] | 否 | ["train","valid","test"] | 要检查的划分 |
+| out_dir | string | 否 | dataset_root/visualisation_data_process | 输出目录 |
+
+### ocean_metrics
+
+| 参数 | 类型 | 必需 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| dataset_root | string | ✅ | - | 数据集根目录 |
+| scale | number | ✅ | - | 下采样倍数 |
+| splits | string[] | 否 | ["train","valid","test"] | 要检查的划分 |
+| output | string | 否 | dataset_root/metrics_result.json | 输出文件路径 |
+
+---
+
+## 裁剪参数说明（v2.4 新增）
+
+### 为什么需要裁剪？
+
+超分辨率训练要求 HR 尺寸能被 scale 整除：
+```
+HR: (680, 1440)  ← 能被 4 整除
+LR: (170, 360)   ← 680÷4=170, 1440÷4=360
+
+❌ HR: (681, 1440)  ← 681 不能被 4 整除
+```
+
+### 裁剪参数格式
+
+| 格式 | 含义 | 示例 |
+|------|------|------|
+| `"0:680"` | 取 [0, 680) | `data[..., 0:680, :]` |
+| `":680"` | 取 [0, 680) | 同上 |
+| `"1:"` | 从 1 开始到末尾 | `data[..., 1:, :]` |
+| `"1:-1"` | 去掉首尾各 1 行 | `data[..., 1:-1, :]` |
+
+### 裁剪验证
+
+如果提供了 `scale` 参数，工具会自动验证裁剪后的尺寸能否被整除：
+- 能整除 → 继续处理
+- 不能整除 → 报错并提示建议值
+

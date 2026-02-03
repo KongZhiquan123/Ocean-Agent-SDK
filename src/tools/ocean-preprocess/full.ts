@@ -1,13 +1,28 @@
 /**
  * @file full.ts
  * @description 完整的海洋数据预处理流程工具
- *              串联 Step A -> B -> C 三个步骤
+ *              串联 Step A -> B -> C -> D -> E 五个步骤
  *
  * @author leizheng
  * @date 2026-02-02
- * @version 2.3.0
+ * @version 2.5.0
  *
  * @changelog
+ *   - 2026-02-03 leizheng: v2.5.0 集成下采样和可视化
+ *     - 新增 Step D: HR → LR 下采样
+ *     - 新增 Step E: 可视化检查
+ *     - 新增 downsample_method 参数
+ *     - 新增 skip_downsample/skip_visualize 参数
+ *   - 2026-02-03 leizheng: v2.4.0 裁剪与多线程
+ *     - 新增 h_slice/w_slice 参数，在转换时直接裁剪
+ *     - 新增 scale 参数，验证裁剪后尺寸能否被整除
+ *     - 新增 workers 参数，多线程并行处理（默认 32）
+ *   - 2026-02-03 leizheng: v2.3.2 修复确认流程被绕过问题
+ *     - 添加 user_confirmed 参数，必须显式设置为 true 才能继续处理
+ *     - 防止 AI Agent 自行决定跳过确认步骤
+ *   - 2026-02-03 leizheng: v2.3.1 修复无掩码数据集分析失败
+ *     - 掩码/静态变量改为可选，缺失时发出警告而非报错
+ *     - 修复 primaryMaskVar 空数组时的错误
  *   - 2026-02-03 leizheng: v2.3.0 路径灵活处理
  *     - 支持 nc_files 参数明确指定文件列表
  *     - 支持单个文件路径自动转换为目录模式
@@ -29,23 +44,31 @@ import { defineTool } from '@shareai-lab/kode-sdk'
 import { oceanInspectDataTool } from './inspect'
 import { oceanValidateTensorTool } from './validate'
 import { oceanConvertNpyTool } from './convert'
+import { oceanDownsampleTool } from './downsample'
+import { oceanVisualizeTool } from './visualize'
 
 export const oceanPreprocessFullTool = defineTool({
   name: 'ocean_preprocess_full',
-  description: `运行完整的超分辨率数据预处理流程 (A -> B -> C)
+  description: `运行完整的超分辨率数据预处理流程 (A -> B -> C -> D -> E)
 
-自动执行所有三个步骤：
+自动执行所有五个步骤：
 1. Step A: 查看数据并定义变量
 2. Step B: 进行张量约定验证
 3. Step C: 转换为NPY格式存储（含后置验证 Rule 1/2/3）
+4. Step D: HR → LR 下采样
+5. Step E: 可视化检查（生成 HR vs LR 对比图）
 
 **重要**：如果 Step A 检测到疑似变量但未提供 mask_vars/stat_vars，会返回 awaiting_confirmation 状态，此时需要用户确认后重新调用。
 
-**注意**：研究变量必须由用户明确指定
+**注意**：研究变量、数据集划分比例、下采样倍数必须由用户明确指定
 
 **输出目录结构**：
-- output_base/target_variables/变量.npy - 动态研究变量
-- output_base/static_variables/编号_变量.npy - 静态变量（带编号）
+- output_base/train/hr/*.npy - 训练集高分辨率数据
+- output_base/train/lr/*.npy - 训练集低分辨率数据
+- output_base/valid/hr/*.npy, valid/lr/*.npy - 验证集
+- output_base/test/hr/*.npy, test/lr/*.npy - 测试集
+- output_base/static_variables/*.npy - 静态变量
+- output_base/visualisation_data_process/*.png - 可视化对比图
 - output_base/preprocess_manifest.json - 数据溯源清单
 
 **后置验证**：
@@ -133,6 +156,69 @@ export const oceanPreprocessFullTool = defineTool({
       items: { type: 'number' },
       description: '纬度有效范围 [min, max]，如 [-90, 90]',
       required: false
+    },
+    user_confirmed: {
+      type: 'boolean',
+      description: '【必须】用户确认标志。必须在展示 Step A 分析结果并获得用户明确确认后，才能设置为 true。禁止自动设置！',
+      required: false,
+      default: false
+    },
+    train_ratio: {
+      type: 'number',
+      description: '【必须由用户指定】训练集比例（按时间顺序取前 N%），如 0.7。Agent 禁止自动设置！',
+      required: false
+      // 注意：无默认值，必须由用户提供
+    },
+    valid_ratio: {
+      type: 'number',
+      description: '【必须由用户指定】验证集比例（按时间顺序取中间 N%），如 0.15。Agent 禁止自动设置！',
+      required: false
+      // 注意：无默认值，必须由用户提供
+    },
+    test_ratio: {
+      type: 'number',
+      description: '【必须由用户指定】测试集比例（按时间顺序取最后 N%），如 0.15。Agent 禁止自动设置！',
+      required: false
+      // 注意：无默认值，必须由用户提供
+    },
+    h_slice: {
+      type: 'string',
+      description: '【必须由用户指定】H 方向裁剪切片，如 "0:680"。确保裁剪后尺寸能被 scale 整除',
+      required: false
+    },
+    w_slice: {
+      type: 'string',
+      description: '【必须由用户指定】W 方向裁剪切片，如 "0:1440"。确保裁剪后尺寸能被 scale 整除',
+      required: false
+    },
+    scale: {
+      type: 'number',
+      description: '【必须由用户指定】下采样倍数（用于验证裁剪后尺寸能否被整除）',
+      required: false
+    },
+    workers: {
+      type: 'number',
+      description: '并行线程数（默认 32）',
+      required: false,
+      default: 32
+    },
+    downsample_method: {
+      type: 'string',
+      description: '【必须由用户指定】下采样插值方法：area（推荐）、cubic、nearest、linear、lanczos',
+      required: false
+      // 注意：无默认值，必须由用户提供
+    },
+    skip_downsample: {
+      type: 'boolean',
+      description: '是否跳过下采样步骤（默认 false，即执行下采样）',
+      required: false,
+      default: false
+    },
+    skip_visualize: {
+      type: 'boolean',
+      description: '是否跳过可视化步骤（默认 false，即生成可视化）',
+      required: false,
+      default: false
     }
   },
 
@@ -156,7 +242,18 @@ export const oceanPreprocessFullTool = defineTool({
       run_validation = true,
       allow_nan = false,
       lon_range,
-      lat_range
+      lat_range,
+      user_confirmed = false,
+      train_ratio,   // 无默认值，必须由用户提供
+      valid_ratio,   // 无默认值，必须由用户提供
+      test_ratio,    // 无默认值，必须由用户提供
+      h_slice,       // 裁剪参数
+      w_slice,       // 裁剪参数
+      scale,         // 下采样倍数
+      workers = 32,  // 并行线程数
+      downsample_method,   // 下采样插值方法，无默认值
+      skip_downsample = false,     // 是否跳过下采样
+      skip_visualize = false       // 是否跳过可视化
     } = args
 
     // 智能路径处理：支持目录或单个文件
@@ -197,6 +294,8 @@ export const oceanPreprocessFullTool = defineTool({
       step_a: null as any,
       step_b: null as any,
       step_c: null as any,
+      step_d: null as any,  // 下采样结果
+      step_e: null as any,  // 可视化结果
       overall_status: 'pending' as string,
       message: '',
       validation_summary: null as any
@@ -289,16 +388,12 @@ ${allVarNames.slice(0, 15).join(', ')}${allVarNames.length > 15 ? '...' : ''}
       return result
     }
 
-    // P0 修复：必须等待用户确认后才能继续处理
-    // 判断条件：用户必须同时提供 mask_vars 和 stat_vars 才表示已确认
-    // 如果只检测到了变量但用户未明确确认，必须返回 awaiting_confirmation
+    // P0 修复 v2.3.2：必须等待用户显式确认后才能继续处理
+    // 使用 user_confirmed 参数而非依赖 mask_vars/stat_vars 的存在
+    // 这样即使数据集没有 mask/static 变量，用户也能明确确认继续
 
-    const userProvidedMaskVars = mask_vars !== undefined && mask_vars.length > 0
-    const userProvidedStaticVars = stat_vars !== undefined && stat_vars.length > 0
-    const userConfirmedAllVars = userProvidedMaskVars && userProvidedStaticVars
-
-    // 如果用户没有同时提供 mask_vars 和 stat_vars，说明还没确认，必须暂停
-    if (!userConfirmedAllVars) {
+    // 如果用户未显式确认，必须返回 awaiting_confirmation
+    if (!user_confirmed) {
       // 格式化变量信息表格
       const formatVarInfo = (vars: Record<string, any>) => {
         const lines: string[] = []
@@ -389,25 +484,47 @@ ${hasStaticFileMixedIn ? `
 ` : ''}
 ${hasStaticFileMixedIn ? '3' : '2'}. **掩码变量**：使用哪些掩码变量？
    - 检测到的疑似掩码: ${(stepAResult.suspected_masks || []).join(', ') || '无'}
-   ${!userProvidedMaskVars ? '   ⚠️ 您尚未指定 mask_vars' : ''}
+   - 如果数据中没有掩码变量，可以跳过（设置 mask_vars: []）
 
 ${hasStaticFileMixedIn ? '4' : '3'}. **静态变量**：需要保存哪些静态变量？
    - 检测到的疑似坐标: ${(stepAResult.suspected_coordinates || []).join(', ') || '无'}
-   ${!userProvidedStaticVars ? '   ⚠️ 您尚未指定 stat_vars' : ''}
+   - 如果数据中没有静态变量，可以跳过（设置 stat_vars: []）
 
 ${hasStaticFileMixedIn ? '5' : '4'}. **NaN/Inf 处理**：数据中是否允许 NaN/Inf 值存在？
    - 当前设置: allow_nan = ${allow_nan}
 
+${hasStaticFileMixedIn ? '6' : '5'}. **数据集划分**【必须由用户决定】：
+   - 请指定 train_ratio, valid_ratio, test_ratio（三者之和应为 1.0）
+   - 示例: train_ratio=0.7, valid_ratio=0.15, test_ratio=0.15
+   - 数据将按时间顺序划分（不随机），保存到 train/hr/, valid/hr/, test/hr/
+   ⚠️ Agent 不得自动决定划分比例！
+
+${hasStaticFileMixedIn ? '7' : '6'}. **下采样参数**【必须由用户决定】：
+   - scale: 下采样倍数（如 4 表示尺寸缩小为 1/4）
+   - downsample_method: 插值方法，可选：
+     • area（推荐）：区域平均，最接近真实低分辨率
+     • cubic：三次插值，较平滑
+     • linear：双线性插值
+     • nearest：最近邻插值，保留原始值
+     • lanczos：Lanczos 插值，高质量
+   ⚠️ Agent 不得自动决定下采样参数！
+
 **用户确认后**，请 Agent 使用以下参数重新调用工具：
+- user_confirmed: true  ← 【必须】表示用户已确认
+- train_ratio: 用户指定的训练集比例  ← 【必须】
+- valid_ratio: 用户指定的验证集比例  ← 【必须】
+- test_ratio: 用户指定的测试集比例   ← 【必须】
+- scale: 用户指定的下采样倍数  ← 【必须，如 4】
+- downsample_method: 用户指定的插值方法  ← 【必须，如 area】
+- mask_vars: [用户确认的掩码变量列表]（无则传空数组 []）
+- stat_vars: [用户确认的静态变量列表]（无则传空数组 []）
 - nc_files: [要处理的文件列表]（如果需要排除某些文件）
-- mask_vars: [用户确认的掩码变量列表]
-- stat_vars: [用户确认的静态变量列表]
 ================================================================================`
 
       ctx.emit('awaiting_user_confirmation', {
         requires_confirmation: true,
-        missing_mask_vars: !userProvidedMaskVars,
-        missing_stat_vars: !userProvidedStaticVars,
+        user_confirmed: false,
+        requires_split_ratio: true,
         suspected_masks: stepAResult.suspected_masks,
         suspected_coordinates: stepAResult.suspected_coordinates,
         dynamic_vars_candidates: stepAResult.dynamic_vars_candidates
@@ -415,75 +532,154 @@ ${hasStaticFileMixedIn ? '5' : '4'}. **NaN/Inf 处理**：数据中是否允许 
       return result
     }
 
+    // 检查用户是否提供了数据集划分比例（必须由用户决定，Agent 不能自动设置）
+    const userProvidedSplitRatio = train_ratio !== undefined && valid_ratio !== undefined && test_ratio !== undefined
+    if (!userProvidedSplitRatio) {
+      result.step_a = stepAResult
+      result.overall_status = 'error'
+      result.message = `数据集划分比例必须由用户指定！
+
+【错误】Agent 不能自动决定划分比例。
+
+请用户明确指定以下参数：
+- train_ratio: 训练集比例（如 0.7）
+- valid_ratio: 验证集比例（如 0.15）
+- test_ratio: 测试集比例（如 0.15）
+
+注意：三者之和应为 1.0
+
+示例：
+train_ratio: 0.7
+valid_ratio: 0.15
+test_ratio: 0.15`
+
+      ctx.emit('error', {
+        type: 'missing_split_ratio',
+        message: '用户未指定数据集划分比例',
+        required: ['train_ratio', 'valid_ratio', 'test_ratio']
+      })
+      return result
+    }
+
+    // 检查用户是否提供了下采样倍数（必须由用户决定）
+    if (!scale || scale <= 1) {
+      result.step_a = stepAResult
+      result.overall_status = 'error'
+      result.message = `下采样倍数必须由用户指定！
+
+【错误】Agent 不能自动决定下采样倍数。
+
+请用户明确指定 scale 参数（如 scale=4 表示尺寸缩小为 1/4）。
+
+示例：
+scale: 4`
+
+      ctx.emit('error', {
+        type: 'missing_scale',
+        message: '用户未指定下采样倍数',
+        required: ['scale']
+      })
+      return result
+    }
+
+    // 检查用户是否提供了下采样方法（必须由用户决定）
+    const validMethods = ['nearest', 'linear', 'cubic', 'area', 'lanczos']
+    if (!downsample_method || !validMethods.includes(downsample_method)) {
+      result.step_a = stepAResult
+      result.overall_status = 'error'
+      result.message = `下采样插值方法必须由用户指定！
+
+【错误】Agent 不能自动决定下采样方法。
+
+请用户从以下方法中选择一个：
+- area（推荐）：区域平均，最接近真实低分辨率
+- cubic：三次插值，较平滑
+- linear：双线性插值
+- nearest：最近邻插值，保留原始值
+- lanczos：Lanczos 插值，高质量
+
+示例：
+downsample_method: area`
+
+      ctx.emit('error', {
+        type: 'missing_downsample_method',
+        message: '用户未指定下采样方法',
+        required: ['downsample_method'],
+        valid_options: validMethods
+      })
+      return result
+    }
+
+    // 验证划分比例之和
+    const totalRatio = train_ratio + valid_ratio + test_ratio
+    if (Math.abs(totalRatio - 1.0) > 0.01) {
+      result.step_a = stepAResult
+      result.overall_status = 'error'
+      result.message = `数据集划分比例之和必须为 1.0！
+
+当前设置：
+- train_ratio: ${train_ratio}
+- valid_ratio: ${valid_ratio}
+- test_ratio: ${test_ratio}
+- 总和: ${totalRatio}
+
+请调整比例使其总和为 1.0`
+
+      ctx.emit('error', {
+        type: 'invalid_split_ratio',
+        message: `划分比例之和 ${totalRatio} != 1.0`
+      })
+      return result
+    }
+
     // P0 修复：移除硬编码默认值，必须使用用户确认的值或从数据检测的值
     // 如果没有检测到任何掩码或坐标变量，且用户未提供，应该报错而非使用默认值
 
-    // 掩码变量：必须由用户指定或从 Step A 检测到
+    // 掩码变量：由用户指定或从 Step A 检测到
+    // 注意：某些数据集可能没有掩码变量，这是允许的
     const detectedMaskVars = stepAResult.suspected_masks || []
-    const finalMaskVars = mask_vars || (detectedMaskVars.length > 0 ? detectedMaskVars : null)
+    const finalMaskVars = mask_vars || (detectedMaskVars.length > 0 ? detectedMaskVars : [])
 
-    if (!finalMaskVars || finalMaskVars.length === 0) {
-      result.overall_status = 'error'
-      result.message = `未检测到掩码变量，且用户未指定 mask_vars 参数！
-
-【问题说明】
-掩码变量（mask）用于标识陆地/海洋区域，是海洋数据预处理的必要组件。
-
-【检测结果】
-- 未自动检测到任何疑似掩码变量（如 mask_rho, mask_u, mask_v 等）
-
-【解决方案】
-请使用 mask_vars 参数明确指定掩码变量，例如：
-  mask_vars: ["mask_rho", "mask_u", "mask_v"]
-
-如果数据中确实没有掩码变量，请检查：
-1. 数据文件是否完整？
-2. 是否需要从其他静态文件中获取掩码？`
-      ctx.emit('pipeline_failed', { step: 'A', error: '缺少掩码变量' })
-      return result
+    // 如果没有掩码变量，发出警告但继续（不强制报错）
+    if (finalMaskVars.length === 0) {
+      ctx.emit('warning', {
+        type: 'no_mask_vars',
+        message: '未检测到掩码变量，将跳过掩码相关处理',
+        suggestion: '如果数据中有掩码变量，请通过 mask_vars 参数指定'
+      })
     }
 
-    // 静态变量：必须由用户指定或从 Step A 检测到
+    // 静态变量：由用户指定或从 Step A 检测到
+    // 注意：某些数据集可能没有静态变量，这是允许的
     const detectedCoordVars = stepAResult.suspected_coordinates || []
     const finalStaticVars = stat_vars || (detectedCoordVars.length > 0
       ? [...detectedCoordVars, ...detectedMaskVars]
-      : null)
+      : [])
 
-    if (!finalStaticVars || finalStaticVars.length === 0) {
-      result.overall_status = 'error'
-      result.message = `未检测到静态/坐标变量，且用户未指定 stat_vars 参数！
-
-【问题说明】
-静态变量（如经纬度、地形深度等）是海洋数据的重要辅助信息。
-
-【检测结果】
-- 未自动检测到任何疑似坐标变量（如 lon_rho, lat_rho, h, angle 等）
-
-【解决方案】
-请使用 stat_vars 参数明确指定静态变量，例如：
-  stat_vars: ["lon_rho", "lat_rho", "h", "angle", "mask_rho"]
-
-如果数据中确实没有静态变量，请确认是否需要提供静态文件（static_file 参数）。`
-      ctx.emit('pipeline_failed', { step: 'A', error: '缺少静态变量' })
-      return result
+    // 如果没有静态变量，发出警告但继续
+    if (finalStaticVars.length === 0) {
+      ctx.emit('warning', {
+        type: 'no_static_vars',
+        message: '未检测到静态变量，将跳过静态变量保存',
+        suggestion: '如果需要保存坐标等静态变量，请通过 stat_vars 参数指定'
+      })
     }
 
-    // P0 修复：主掩码变量选择需要用户确认，不再自动选择
-    // 但如果只有一个掩码变量，可以直接使用
-    let primaryMaskVar: string
+    // 主掩码变量选择（如果有掩码变量的话）
+    let primaryMaskVar: string | undefined
     if (finalMaskVars.length === 1) {
       primaryMaskVar = finalMaskVars[0]
-    } else {
+    } else if (finalMaskVars.length > 1) {
       // 有多个掩码变量时，优先选择 rho 网格的（ROMS 模型常见）
       const rhoMask = finalMaskVars.find((m: string) => m.includes('rho'))
       primaryMaskVar = rhoMask || finalMaskVars[0]
-      // 在返回结果中告知用户使用了哪个主掩码
       ctx.emit('info', {
         type: 'primary_mask_selected',
         message: `自动选择主掩码变量: ${primaryMaskVar}（共有 ${finalMaskVars.length} 个掩码变量）`,
         all_masks: finalMaskVars
       })
     }
+    // 如果没有掩码变量，primaryMaskVar 保持 undefined
 
     // P0 修复：经纬度变量必须从数据中检测到或由用户指定，不使用硬编码默认值
     const detectedLonVar = finalStaticVars.find((v: string) =>
@@ -548,11 +744,79 @@ ${hasStaticFileMixedIn ? '5' : '4'}. **NaN/Inf 处理**：数据中是否允许 
       heuristic_check_var: dyn_vars?.[0],  // 使用第一个动态变量进行启发式验证
       land_threshold_abs: 1e-12,
       heuristic_sample_size: 2000,
-      require_sorted: true
+      require_sorted: true,
+      // 数据集划分参数
+      train_ratio,
+      valid_ratio,
+      test_ratio,
+      // 裁剪参数
+      h_slice,
+      w_slice,
+      scale,
+      workers
     }, ctx)
 
     result.step_c = stepCResult
 
+    if (stepCResult.status !== 'pass') {
+      result.overall_status = 'error'
+      result.message = 'Step C 失败'
+      ctx.emit('pipeline_failed', { step: 'C', result })
+      return result
+    }
+
+    // Step D: 下采样
+    if (!skip_downsample) {
+      ctx.emit('step_started', { step: 'D', description: 'HR → LR 下采样' })
+
+      const stepDResult = await oceanDownsampleTool.exec({
+        dataset_root: output_base,
+        scale: scale,
+        method: downsample_method,
+        splits: ['train', 'valid', 'test'],
+        include_static: false
+      }, ctx)
+
+      result.step_d = stepDResult
+
+      if (stepDResult.status === 'error') {
+        result.overall_status = 'error'
+        result.message = 'Step D 下采样失败'
+        ctx.emit('pipeline_failed', { step: 'D', result })
+        return result
+      }
+
+      ctx.emit('step_completed', { step: 'D', result: stepDResult })
+    } else {
+      result.step_d = { status: 'skipped', reason: 'skip_downsample=true' }
+    }
+
+    // Step E: 可视化
+    if (!skip_visualize) {
+      ctx.emit('step_started', { step: 'E', description: '生成可视化对比图' })
+
+      const stepEResult = await oceanVisualizeTool.exec({
+        dataset_root: output_base,
+        splits: ['train', 'valid', 'test']
+      }, ctx)
+
+      result.step_e = stepEResult
+
+      if (stepEResult.status === 'error') {
+        // 可视化失败不阻止整体流程，只是警告
+        ctx.emit('warning', {
+          type: 'visualize_failed',
+          message: '可视化生成失败，但不影响数据处理结果',
+          error: stepEResult.errors
+        })
+      } else {
+        ctx.emit('step_completed', { step: 'E', result: stepEResult })
+      }
+    } else {
+      result.step_e = { status: 'skipped', reason: 'skip_visualize=true' }
+    }
+
+    // 最终状态
     if (stepCResult.status === 'pass') {
       result.overall_status = 'pass'
       result.message = '预处理完成，所有检查通过'

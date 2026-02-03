@@ -5,9 +5,17 @@
  *
  * @author leizheng
  * @date 2026-02-02
- * @version 2.2.0
+ * @version 2.4.0
  *
  * @changelog
+ *   - 2026-02-03 leizheng: v2.4.0 裁剪与多线程
+ *     - 新增 h_slice/w_slice 参数，在转换时直接裁剪
+ *     - 新增 scale 参数，验证裁剪后尺寸能否被整除
+ *     - 新增 workers 参数，多线程并行处理（默认 32）
+ *   - 2026-02-03 leizheng: v2.3.0 数据集划分功能
+ *     - 新增 train_ratio/valid_ratio/test_ratio 参数
+ *     - 按时间顺序划分数据到 train/valid/test 目录
+ *     - 输出目录结构改为 train/hr/, valid/hr/, test/hr/
  *   - 2026-02-03 leizheng: v2.2.0 P0 安全修复
  *     - 移除硬编码默认值（mask_vars, lon_var, lat_var, mask_src_var）
  *     - 所有变量名必须由调用方显式传入
@@ -59,8 +67,19 @@ export const oceanConvertNpyTool = defineTool({
 - 执行后置验证 (Rule 1/2/3)
 
 **输出目录结构**：
-- output_base/target_variables/变量.npy - 动态研究变量
+- output_base/train/hr/变量.npy - 训练集高分辨率数据
+- output_base/train/lr/ - 训练集低分辨率数据（预留）
+- output_base/valid/hr/变量.npy - 验证集高分辨率数据
+- output_base/valid/lr/ - 验证集低分辨率数据（预留）
+- output_base/test/hr/变量.npy - 测试集高分辨率数据
+- output_base/test/lr/ - 测试集低分辨率数据（预留）
 - output_base/static_variables/编号_变量.npy - 静态变量（带编号）
+
+**数据集划分**：
+- 按时间顺序划分（不随机）
+- 前 train_ratio 为训练集
+- 中间 valid_ratio 为验证集
+- 最后 test_ratio 为测试集
 
 **编号规则**：
 - 00-09: 经度变量 (lon_rho, lon_u, ...)
@@ -182,6 +201,42 @@ export const oceanConvertNpyTool = defineTool({
       description: '是否要求 NC 文件按字典序排序（默认 true）',
       required: false,
       default: true
+    },
+    train_ratio: {
+      type: 'number',
+      description: '【必须由用户指定】训练集比例（按时间顺序取前 N%），如 0.7',
+      required: false
+    },
+    valid_ratio: {
+      type: 'number',
+      description: '【必须由用户指定】验证集比例（按时间顺序取中间 N%），如 0.15',
+      required: false
+    },
+    test_ratio: {
+      type: 'number',
+      description: '【必须由用户指定】测试集比例（按时间顺序取最后 N%），如 0.15',
+      required: false
+    },
+    h_slice: {
+      type: 'string',
+      description: 'H 方向裁剪切片，如 "0:680"（在转换时直接裁剪）',
+      required: false
+    },
+    w_slice: {
+      type: 'string',
+      description: 'W 方向裁剪切片，如 "0:1440"（在转换时直接裁剪）',
+      required: false
+    },
+    scale: {
+      type: 'number',
+      description: '下采样倍数（用于验证裁剪后尺寸能否被整除）',
+      required: false
+    },
+    workers: {
+      type: 'number',
+      description: '并行线程数（默认 32）',
+      required: false,
+      default: 32
     }
   },
 
@@ -210,10 +265,40 @@ export const oceanConvertNpyTool = defineTool({
       heuristic_check_var,
       land_threshold_abs = 1e-12,
       heuristic_sample_size = 2000,
-      require_sorted = true
+      require_sorted = true,
+      train_ratio,
+      valid_ratio,
+      test_ratio,
+      h_slice,
+      w_slice,
+      scale,
+      workers = 32
     } = args
 
     ctx.emit('step_started', { step: 'C', description: '转换为NPY格式存储' })
+
+    // 验证数据集划分比例（必须由用户指定）
+    if (train_ratio === undefined || valid_ratio === undefined || test_ratio === undefined) {
+      const errorMsg = '数据集划分比例必须由用户指定！请提供 train_ratio, valid_ratio, test_ratio 参数'
+      ctx.emit('step_failed', { step: 'C', error: errorMsg })
+      return {
+        status: 'error',
+        errors: [errorMsg],
+        message: '缺少划分比例参数'
+      }
+    }
+
+    // 验证划分比例之和
+    const totalRatio = train_ratio + valid_ratio + test_ratio
+    if (Math.abs(totalRatio - 1.0) > 0.01) {
+      const errorMsg = `数据集划分比例之和必须为 1.0，当前为 ${totalRatio}`
+      ctx.emit('step_failed', { step: 'C', error: errorMsg })
+      return {
+        status: 'error',
+        errors: [errorMsg],
+        message: '划分比例错误'
+      }
+    }
 
     // P0 修复：验证必要参数
     if (!mask_vars || mask_vars.length === 0) {
@@ -262,7 +347,15 @@ export const oceanConvertNpyTool = defineTool({
       heuristic_check_var: heuristic_check_var || null,
       land_threshold_abs,
       heuristic_sample_size,
-      require_sorted
+      require_sorted,
+      train_ratio,
+      valid_ratio,
+      test_ratio,
+      // 裁剪参数
+      h_slice: h_slice || null,
+      w_slice: w_slice || null,
+      scale: scale || null,
+      workers
     }
 
     try {

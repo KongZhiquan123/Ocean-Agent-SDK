@@ -2,12 +2,17 @@
  * test-client.ts
  *
  * Description: 测试 kode-agent-service 的交互式客户端
- *              支持多轮对话、海洋数据预处理交互测试
+ *              支持多轮对话、海洋数据预处理完整流程测试
  * Author: leizheng
  * Time: 2026-02-02
- * Version: 1.2.0
+ * Version: 2.0.0
  *
  * Changelog:
+ *   - 2026-02-03 leizheng: v2.0.0 完善海洋预处理完整流程测试
+ *     - 新增裁剪参数输入
+ *     - 新增下采样测试
+ *     - 新增可视化测试
+ *     - 新增指标检测测试
  *   - 2026-02-03 leizheng: v1.2.0 海洋预处理测试增加输出目录输入
  *   - 2026-02-02 leizheng: v1.1.0 使用 agentId 支持多轮对话
  */
@@ -211,18 +216,19 @@ async function interactiveMode() {
   rl.close()
 }
 
-// 测试海洋数据预处理的交互流程
+// 测试海洋数据预处理的完整流程
 async function testOceanPreprocess() {
   console.log('\n' + '='.repeat(60))
-  console.log('海洋数据预处理交互式测试')
+  console.log('海洋数据预处理完整流程测试 v2.0')
   console.log('='.repeat(60))
 
   // 重置会话
   agentId = null
   showFullToolResult = true
 
-  // ========== 收集必要的路径信息 ==========
-  console.log('\n请提供数据路径信息：')
+  // ========== Step 1: 收集必要的路径信息 ==========
+  console.log('\n【Step 1】收集数据路径信息')
+  console.log('-'.repeat(40))
 
   const dynFolder = await prompt('动态数据文件夹路径: ')
   if (!dynFolder.trim()) {
@@ -233,7 +239,7 @@ async function testOceanPreprocess() {
 
   const staticFile = await prompt('静态文件路径 (无则回车): ')
   const fileFilter = await prompt('文件名过滤关键字 (无则回车): ')
-  const researchVars = await prompt('研究变量 (逗号分隔，如 uo,vo): ')
+  const researchVars = await prompt('研究变量 (逗号分隔，如 chl,no3): ')
 
   if (!researchVars.trim()) {
     console.log('错误: 必须指定研究变量')
@@ -248,10 +254,22 @@ async function testOceanPreprocess() {
     return
   }
 
-  // ========== 发送请求，Agent 会分析并展示疑似变量让用户确认 ==========
-  console.log('\n' + '='.repeat(60))
-  console.log('开始处理，Agent 会分析数据并展示变量信息供你确认...')
-  console.log('='.repeat(60))
+  // ========== Step 2: 收集裁剪和划分参数 ==========
+  console.log('\n【Step 2】收集裁剪和划分参数')
+  console.log('-'.repeat(40))
+
+  const scale = await prompt('下采样倍数 (如 4): ')
+  const hSlice = await prompt('H 方向裁剪 (如 0:680，无则回车): ')
+  const wSlice = await prompt('W 方向裁剪 (如 0:1440，无则回车): ')
+
+  const trainRatio = await prompt('训练集比例 (如 0.7): ')
+  const validRatio = await prompt('验证集比例 (如 0.15): ')
+  const testRatio = await prompt('测试集比例 (如 0.15): ')
+
+  // ========== Step 3: 发送 NC→NPY 转换请求 ==========
+  console.log('\n【Step 3】NC → NPY 转换（含裁剪和划分）')
+  console.log('-'.repeat(40))
+  console.log('Agent 会分析数据并展示变量信息供你确认...')
 
   let msg = `请帮我预处理海洋数据：
 - 动态数据目录: ${dynFolder}
@@ -264,20 +282,35 @@ async function testOceanPreprocess() {
   if (fileFilter.trim()) {
     msg += `\n- 文件过滤器: ${fileFilter}`
   }
+  if (scale.trim()) {
+    msg += `\n- 下采样倍数: ${scale}`
+  }
+  if (hSlice.trim()) {
+    msg += `\n- H 方向裁剪: ${hSlice}`
+  }
+  if (wSlice.trim()) {
+    msg += `\n- W 方向裁剪: ${wSlice}`
+  }
+  if (trainRatio.trim() && validRatio.trim() && testRatio.trim()) {
+    msg += `\n- 数据集划分: train=${trainRatio}, valid=${validRatio}, test=${testRatio}`
+  }
 
   await chat(msg, 'edit')
 
   // ========== 交互式确认循环 ==========
-  // Agent 会返回 awaiting_confirmation 并展示疑似变量
-  // 用户在这里进行确认
   console.log('\n' + '-'.repeat(60))
   console.log('请根据 Agent 展示的变量信息进行确认')
-  console.log('输入 done 结束测试')
+  console.log('输入 "next" 进入下一步，输入 "done" 结束测试')
   console.log('-'.repeat(60))
 
   while (true) {
     const userInput = await prompt('\n你: ')
     if (userInput.toLowerCase() === 'done') {
+      console.log('\n测试结束')
+      rl.close()
+      return
+    }
+    if (userInput.toLowerCase() === 'next') {
       break
     }
     if (userInput.trim()) {
@@ -285,9 +318,129 @@ async function testOceanPreprocess() {
     }
   }
 
+  // ========== Step 4: 下采样 ==========
+  console.log('\n【Step 4】HR → LR 下采样')
+  console.log('-'.repeat(40))
+
+  const doDownsample = await prompt('是否执行下采样？(y/n): ')
+  if (doDownsample.toLowerCase() === 'y') {
+    const method = await prompt('插值方法 (area/bicubic/nearest，默认 area): ')
+
+    let downsampleMsg = `请对 ${outputDir} 目录执行下采样：
+- 下采样倍数: ${scale || '4'}
+- 插值方法: ${method || 'area'}`
+
+    await chat(downsampleMsg, 'edit')
+
+    // 等待用户确认
+    while (true) {
+      const userInput = await prompt('\n你 (输入 next 继续): ')
+      if (userInput.toLowerCase() === 'next') break
+      if (userInput.toLowerCase() === 'done') {
+        rl.close()
+        return
+      }
+      if (userInput.trim()) {
+        await chat(userInput, 'edit')
+      }
+    }
+  }
+
+  // ========== Step 5: 可视化检查 ==========
+  console.log('\n【Step 5】可视化检查')
+  console.log('-'.repeat(40))
+
+  const doVisualize = await prompt('是否生成可视化对比图？(y/n): ')
+  if (doVisualize.toLowerCase() === 'y') {
+    await chat(`请对 ${outputDir} 目录生成 HR vs LR 可视化对比图`, 'edit')
+
+    // 等待用户确认
+    while (true) {
+      const userInput = await prompt('\n你 (输入 next 继续): ')
+      if (userInput.toLowerCase() === 'next') break
+      if (userInput.toLowerCase() === 'done') {
+        rl.close()
+        return
+      }
+      if (userInput.trim()) {
+        await chat(userInput, 'edit')
+      }
+    }
+  }
+
+  // ========== Step 6: 质量指标检测 ==========
+  console.log('\n【Step 6】质量指标检测')
+  console.log('-'.repeat(40))
+
+  const doMetrics = await prompt('是否计算质量指标？(y/n): ')
+  if (doMetrics.toLowerCase() === 'y') {
+    await chat(`请对 ${outputDir} 目录计算下采样质量指标（SSIM、Relative L2 等），下采样倍数为 ${scale || '4'}`, 'edit')
+
+    // 等待用户确认
+    while (true) {
+      const userInput = await prompt('\n你 (输入 done 结束): ')
+      if (userInput.toLowerCase() === 'done') break
+      if (userInput.trim()) {
+        await chat(userInput, 'edit')
+      }
+    }
+  }
+
+  // ========== 完成 ==========
   console.log('\n' + '='.repeat(60))
-  console.log('海洋数据预处理测试完成！')
+  console.log('海洋数据预处理完整流程测试完成！')
   console.log('='.repeat(60))
+  console.log('\n输出目录结构:')
+  console.log(`${outputDir}/`)
+  console.log('├── train/')
+  console.log('│   ├── hr/')
+  console.log('│   └── lr/')
+  console.log('├── valid/')
+  console.log('│   ├── hr/')
+  console.log('│   └── lr/')
+  console.log('├── test/')
+  console.log('│   ├── hr/')
+  console.log('│   └── lr/')
+  console.log('├── static_variables/')
+  console.log('├── visualisation_data_process/')
+  console.log('└── metrics_result.json')
+  console.log('='.repeat(60))
+
+  rl.close()
+}
+
+// 快速测试海洋预处理工具（自动化）
+async function testOceanToolsQuick() {
+  console.log('\n' + '='.repeat(60))
+  console.log('海洋预处理工具快速测试（自动化）')
+  console.log('='.repeat(60))
+
+  // 重置会话
+  agentId = null
+  showFullToolResult = false
+
+  // 测试数据目录
+  const testDir = '/tmp/test_ocean_tools'
+
+  // 测试 1: 加载 skill
+  console.log('\n--- 测试 1: 加载 ocean-preprocess skill ---')
+  await chat('加载 ocean-preprocess skill', 'edit')
+  await new Promise((resolve) => setTimeout(resolve, 2000))
+
+  // 测试 2: 查看可用工具
+  console.log('\n--- 测试 2: 查看可用工具 ---')
+  await chat('ocean-preprocess skill 有哪些工具可用？', 'ask')
+  await new Promise((resolve) => setTimeout(resolve, 2000))
+
+  // 测试 3: 检查测试数据
+  console.log('\n--- 测试 3: 检查测试数据 ---')
+  await chat(`检查 /tmp/test_split_output 目录下有什么文件`, 'edit')
+  await new Promise((resolve) => setTimeout(resolve, 2000))
+
+  console.log('\n' + '='.repeat(60))
+  console.log('快速测试完成！')
+  console.log('='.repeat(60))
+
   rl.close()
 }
 
@@ -329,7 +482,7 @@ async function runAutomatedTests() {
 
 // 主程序
 async function main() {
-  console.log('KODE Agent Service 交互式测试客户端')
+  console.log('KODE Agent Service 交互式测试客户端 v2.0')
   console.log(`API URL: ${API_URL}`)
   console.log(`API Key: ${API_KEY.slice(0, 10)}...`)
 
@@ -344,11 +497,12 @@ async function main() {
   console.log('\n服务正常！')
   console.log('\n选择测试模式:')
   console.log('  1. 交互式对话')
-  console.log('  2. 海洋数据预处理测试（交互式）')
-  console.log('  3. 单条消息测试')
-  console.log('  4. 自动化测试套件（原测试）')
+  console.log('  2. 海洋数据预处理完整流程测试（交互式）')
+  console.log('  3. 海洋预处理工具快速测试（自动化）')
+  console.log('  4. 单条消息测试')
+  console.log('  5. 自动化测试套件（原测试）')
 
-  const choice = await prompt('\n请选择 (1/2/3/4): ')
+  const choice = await prompt('\n请选择 (1/2/3/4/5): ')
 
   switch (choice) {
     case '1':
@@ -358,11 +512,14 @@ async function main() {
       await testOceanPreprocess()
       break
     case '3':
+      await testOceanToolsQuick()
+      break
+    case '4':
       const msg = await prompt('请输入消息: ')
       await chat(msg, 'edit')
       rl.close()
       break
-    case '4':
+    case '5':
       await runAutomatedTests()
       break
     default:
@@ -386,6 +543,15 @@ if (args.includes('--interactive') || args.includes('-i')) {
   testHealth().then((healthy) => {
     if (healthy) {
       testOceanPreprocess()
+    } else {
+      console.error('服务不可用')
+      process.exit(1)
+    }
+  })
+} else if (args.includes('--ocean-quick') || args.includes('-q')) {
+  testHealth().then((healthy) => {
+    if (healthy) {
+      testOceanToolsQuick()
     } else {
       console.error('服务不可用')
       process.exit(1)

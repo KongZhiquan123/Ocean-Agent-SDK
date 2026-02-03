@@ -4,17 +4,17 @@ convert_npy.py - Step C: NC 转 NPY 转换（含后置验证）
 
 @author leizheng
 @date 2026-02-02
-@version 2.1.0
+@version 2.3.0
 
 功能:
 - 将 NC 文件中的变量转换为 NPY 格式
+- 按时间顺序划分数据集（train/valid/test）
+- 输出目录结构: train/hr/, valid/hr/, test/hr/, static_variables/
 - 静态变量添加编号前缀（00_lon_rho, 01_lat_rho, 99_mask_rho）
 - 自动生成 preprocess_manifest.json
 - 执行后置验证 (Rule 1/2/3)
 - NaN/Inf 检测（采样校验）
 - 多网格支持（C-grid staggered mesh）
-- object dtype 检查
-- 启发式掩码验证（陆地/海洋采样）
 
 用法:
     python convert_npy.py --config config.json --output result.json
@@ -27,17 +27,27 @@ convert_npy.py - Step C: NC 转 NPY 转换（含后置验证）
     "static_file": "/path/to/static.nc",
     "stat_vars": ["lon_rho", "lat_rho", "h", "mask_rho"],
     "mask_vars": ["mask_rho", "mask_u", "mask_v"],
-    "lon_var": "lon_rho",
-    "lat_var": "lat_rho",
-    "dyn_file_pattern": "*.nc",
-    "run_validation": true,
-    "allow_nan": false,
-    "lon_range": [-180, 180],
-    "lat_range": [-90, 90],
-    "heuristic_check_var": "uo",
-    "land_threshold_abs": 1e-12,
-    "heuristic_sample_size": 2000
+    "train_ratio": 0.7,
+    "valid_ratio": 0.15,
+    "test_ratio": 0.15,
+    "h_slice": "0:680",
+    "w_slice": "0:1440",
+    "scale": 4,
+    "workers": 32,
+    ...
 }
+
+Changelog:
+    - 2026-02-03 leizheng v2.3.0: 裁剪与多线程
+        - 新增 h_slice/w_slice 参数，在转换时直接裁剪
+        - 新增 scale 参数，验证裁剪后尺寸能否被整除
+        - 新增 workers 参数，多线程并行处理（默认 32）
+    - 2026-02-03 leizheng v2.2.0: 数据集划分功能
+        - 新增 train_ratio/valid_ratio/test_ratio 参数
+        - 按时间顺序划分数据到 train/valid/test 目录
+        - 输出目录结构改为 train/hr/, valid/hr/, test/hr/
+    - 2026-02-03 leizheng v2.1.0: 增加 P0 特性
+    - 2026-02-02 leizheng v2.0.0: 初始版本
 """
 
 import argparse
@@ -46,6 +56,7 @@ import hashlib
 import json
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -87,6 +98,141 @@ HEURISTIC_SAMPLE_SIZE = 2000   # 陆地/海洋采样点数
 LAND_THRESHOLD_ABS = 1e-12     # 陆地零值判定阈值
 LAND_ZERO_RATIO_MIN = 0.90     # 陆地点零值比例下限
 OCEAN_ZERO_RATIO_MAX = 0.90    # 海洋点零值比例上限
+
+# 多线程默认参数
+DEFAULT_WORKERS = 32
+
+
+# ========================================
+# 裁剪相关函数
+# ========================================
+
+def parse_slice_str(slice_str: Optional[str]) -> Optional[slice]:
+    """
+    解析切片字符串为 slice 对象
+
+    支持格式:
+    - "0:680"   -> slice(0, 680)
+    - ":680"    -> slice(None, 680)
+    - "1:"      -> slice(1, None)
+    - "1:-1"    -> slice(1, -1)
+    - None      -> None (不裁剪)
+
+    Args:
+        slice_str: 切片字符串
+
+    Returns:
+        slice 对象或 None
+    """
+    if not slice_str:
+        return None
+
+    parts = slice_str.split(':')
+    if len(parts) != 2:
+        raise ValueError(f"无效的切片格式: '{slice_str}'，应为 'start:end'")
+
+    start_str, end_str = parts
+
+    start = int(start_str) if start_str.strip() else None
+    end = int(end_str) if end_str.strip() else None
+
+    return slice(start, end)
+
+
+def crop_spatial(arr: np.ndarray, h_slice: Optional[slice], w_slice: Optional[slice]) -> np.ndarray:
+    """
+    裁剪数组的空间维度（最后两维）
+
+    Args:
+        arr: 输入数组，支持 2D/3D/4D
+        h_slice: H 方向切片
+        w_slice: W 方向切片
+
+    Returns:
+        裁剪后的数组
+    """
+    if h_slice is None and w_slice is None:
+        return arr
+
+    h_sl = h_slice if h_slice else slice(None)
+    w_sl = w_slice if w_slice else slice(None)
+
+    ndim = arr.ndim
+
+    if ndim == 2:
+        return arr[h_sl, w_sl]
+    elif ndim == 3:
+        return arr[:, h_sl, w_sl]
+    elif ndim == 4:
+        return arr[:, :, h_sl, w_sl]
+    else:
+        raise ValueError(f"不支持的维度: {ndim}D")
+
+
+def validate_crop_divisible(h: int, w: int, scale: int) -> Tuple[bool, str]:
+    """
+    验证裁剪后的尺寸能否被 scale 整除
+
+    Args:
+        h: 高度
+        w: 宽度
+        scale: 下采样倍数
+
+    Returns:
+        (is_valid, message)
+    """
+    h_remainder = h % scale
+    w_remainder = w % scale
+
+    if h_remainder == 0 and w_remainder == 0:
+        return True, f"尺寸验证通过: H={h} % {scale} = 0, W={w} % {scale} = 0"
+
+    # 计算建议值
+    suggested_h = (h // scale) * scale
+    suggested_w = (w // scale) * scale
+
+    msg = f"尺寸无法被 scale={scale} 整除:\n"
+    msg += f"  当前: H={h} (余 {h_remainder}), W={w} (余 {w_remainder})\n"
+    msg += f"  建议: H={suggested_h}, W={suggested_w}"
+
+    return False, msg
+
+
+def get_cropped_shape(original_shape: Tuple, h_slice: Optional[slice], w_slice: Optional[slice]) -> Tuple[int, int]:
+    """
+    计算裁剪后的空间尺寸
+
+    Args:
+        original_shape: 原始 shape
+        h_slice: H 方向切片
+        w_slice: W 方向切片
+
+    Returns:
+        (cropped_h, cropped_w)
+    """
+    # 获取原始空间尺寸（最后两维）
+    if len(original_shape) >= 2:
+        orig_h, orig_w = original_shape[-2], original_shape[-1]
+    else:
+        raise ValueError(f"数组维度不足: {original_shape}")
+
+    # 计算裁剪后的尺寸
+    def calc_slice_len(orig_len: int, sl: Optional[slice]) -> int:
+        if sl is None:
+            return orig_len
+        start = sl.start if sl.start is not None else 0
+        stop = sl.stop if sl.stop is not None else orig_len
+        # 处理负数索引
+        if start < 0:
+            start = orig_len + start
+        if stop < 0:
+            stop = orig_len + stop
+        return max(0, stop - start)
+
+    cropped_h = calc_slice_len(orig_h, h_slice)
+    cropped_w = calc_slice_len(orig_w, w_slice)
+
+    return cropped_h, cropped_w
 
 
 # ========================================
@@ -463,10 +609,17 @@ def convert_dynamic_vars(
     dyn_vars: List[str],
     output_dir: str,
     result: Dict[str, Any],
-    allow_nan: bool = False
+    allow_nan: bool = False,
+    train_ratio: float = 0.7,
+    valid_ratio: float = 0.15,
+    test_ratio: float = 0.15,
+    h_slice: Optional[slice] = None,
+    w_slice: Optional[slice] = None,
+    scale: Optional[int] = None,
+    workers: int = DEFAULT_WORKERS
 ) -> Dict[str, Dict[str, Any]]:
     """
-    转换动态变量
+    转换动态变量，并按时间顺序划分为 train/valid/test
 
     Args:
         nc_files: NC 文件列表
@@ -474,18 +627,32 @@ def convert_dynamic_vars(
         output_dir: 输出目录
         result: 结果字典（用于添加警告/错误）
         allow_nan: 是否允许 NaN/Inf 值
+        train_ratio: 训练集比例（默认 0.7）
+        valid_ratio: 验证集比例（默认 0.15）
+        test_ratio: 测试集比例（默认 0.15）
+        h_slice: H 方向裁剪切片
+        w_slice: W 方向裁剪切片
+        scale: 下采样倍数（用于验证裁剪后尺寸）
+        workers: 并行线程数（默认 32）
 
     Returns:
         保存的文件信息字典
     """
-    dyn_out_dir = os.path.join(output_dir, 'target_variables')
-    os.makedirs(dyn_out_dir, exist_ok=True)
+    # 创建输出目录结构: train/hr, train/lr, valid/hr, valid/lr, test/hr, test/lr
+    splits = ['train', 'valid', 'test']
+    for split in splits:
+        hr_dir = os.path.join(output_dir, split, 'hr')
+        lr_dir = os.path.join(output_dir, split, 'lr')
+        os.makedirs(hr_dir, exist_ok=True)
+        os.makedirs(lr_dir, exist_ok=True)  # 预留 lr 目录
 
     saved_files = {}
     time_lengths = {}
     nan_check_results = {}
+    split_info = {}  # 记录划分信息
 
     print(f"处理动态变量，文件数: {len(nc_files)}", file=sys.stderr)
+    print(f"划分比例: train={train_ratio}, valid={valid_ratio}, test={test_ratio}", file=sys.stderr)
 
     try:
         # 使用 open_mfdataset 进行多文件惰性加载
@@ -522,8 +689,6 @@ def convert_dynamic_vars(
                 if var not in ds.data_vars and var not in ds.coords:
                     result["warnings"].append(f"动态变量 '{var}' 不存在于数据集中")
                     continue
-
-                out_fp = os.path.join(dyn_out_dir, f"{var}.npy")
 
                 try:
                     print(f"  提取动态变量: {var} ...", file=sys.stderr)
@@ -565,14 +730,95 @@ def convert_dynamic_vars(
                             print(f"    错误: {msg}", file=sys.stderr)
                             continue
 
-                    np.save(out_fp, data_arr)
+                    # ========== 空间裁剪 ==========
+                    original_shape = data_arr.shape
+                    if h_slice is not None or w_slice is not None:
+                        data_arr = crop_spatial(data_arr, h_slice, w_slice)
+                        print(f"    裁剪: {original_shape} -> {data_arr.shape}", file=sys.stderr)
+
+                        # 验证裁剪后尺寸能否被 scale 整除
+                        if scale is not None:
+                            cropped_h, cropped_w = data_arr.shape[-2], data_arr.shape[-1]
+                            is_valid, msg = validate_crop_divisible(cropped_h, cropped_w, scale)
+                            if not is_valid:
+                                result["errors"].append(f"变量 '{var}' {msg}")
+                                print(f"    错误: {msg}", file=sys.stderr)
+                                continue
+                            else:
+                                print(f"    {msg}", file=sys.stderr)
+
+                    # ========== 按时间顺序划分数据集 ==========
+                    total_time = data_arr.shape[0]
+
+                    # 边界情况：时间步太少，无法划分
+                    if total_time < 3:
+                        # 所有数据放入 train
+                        print(f"    时间步数({total_time})太少，全部放入 train", file=sys.stderr)
+                        train_data = data_arr
+                        valid_data = np.array([]).reshape(0, *data_arr.shape[1:])
+                        test_data = np.array([]).reshape(0, *data_arr.shape[1:])
+                        train_end = total_time
+                        valid_end = total_time
+
+                        split_info[var] = {
+                            "total_time": total_time,
+                            "train": {"start": 0, "end": total_time, "count": total_time},
+                            "valid": {"start": total_time, "end": total_time, "count": 0},
+                            "test": {"start": total_time, "end": total_time, "count": 0},
+                            "note": "时间步太少，全部放入 train"
+                        }
+                    else:
+                        train_end = int(total_time * train_ratio)
+                        valid_end = int(total_time * (train_ratio + valid_ratio))
+
+                        # 确保至少有 1 个时间步在 train
+                        train_end = max(1, train_end)
+                        # 确保 valid 和 test 不重叠
+                        valid_end = max(train_end, min(valid_end, total_time))
+
+                        # 如果 valid_ratio > 0 但没有分到数据，调整
+                        if valid_ratio > 0 and valid_end == train_end and train_end < total_time:
+                            valid_end = min(train_end + 1, total_time)
+
+                        # 划分数据
+                        train_data = data_arr[0:train_end]
+                        valid_data = data_arr[train_end:valid_end] if valid_end > train_end else np.array([]).reshape(0, *data_arr.shape[1:])
+                        test_data = data_arr[valid_end:total_time] if total_time > valid_end else np.array([]).reshape(0, *data_arr.shape[1:])
+
+                        # 记录划分信息
+                        split_info[var] = {
+                            "total_time": total_time,
+                            "train": {"start": 0, "end": train_end, "count": train_end},
+                            "valid": {"start": train_end, "end": valid_end, "count": valid_end - train_end},
+                            "test": {"start": valid_end, "end": total_time, "count": total_time - valid_end}
+                        }
+
+                    print(f"    划分: train={split_info[var]['train']['count']}, valid={split_info[var]['valid']['count']}, test={split_info[var]['test']['count']}", file=sys.stderr)
+
+                    # 保存到对应目录
+                    spatial_shape = get_spatial_shape(data_arr)
+                    var_saved_files = {}
+
+                    for split_name, split_data in [('train', train_data), ('valid', valid_data), ('test', test_data)]:
+                        if split_data.size == 0:
+                            continue
+
+                        out_fp = os.path.join(output_dir, split_name, 'hr', f"{var}.npy")
+                        np.save(out_fp, split_data)
+
+                        var_saved_files[split_name] = {
+                            "path": out_fp,
+                            "filename": f"{var}.npy",
+                            "shape": list(split_data.shape),
+                            "spatial_shape": list(spatial_shape),
+                            "dtype": str(split_data.dtype),
+                            "time_steps": split_data.shape[0]
+                        }
+
+                        print(f"      {split_name}/hr/{var}.npy: shape={split_data.shape}", file=sys.stderr)
 
                     # 记录时间长度
-                    if data_arr.ndim >= 1:
-                        time_lengths[var] = data_arr.shape[0]
-
-                    # 获取空间维度
-                    spatial_shape = get_spatial_shape(data_arr)
+                    time_lengths[var] = total_time
 
                     # 维度解释
                     ndim = data_arr.ndim
@@ -584,18 +830,18 @@ def convert_dynamic_vars(
                         interp = f"shape={data_arr.shape}"
 
                     saved_files[var] = {
-                        "path": out_fp,
-                        "filename": f"{var}.npy",
-                        "shape": list(data_arr.shape),
-                        "spatial_shape": list(spatial_shape),  # 新增：空间维度
+                        "splits": var_saved_files,
+                        "total_shape": list(data_arr.shape),
+                        "spatial_shape": list(spatial_shape),
                         "dtype": str(data_arr.dtype),
                         "interpretation": interp,
                         "is_dynamic": True,
-                        "nan_check": nan_result
+                        "nan_check": nan_result,
+                        "split_info": split_info[var]
                     }
 
-                    print(f"    完成，shape={data_arr.shape}, spatial={spatial_shape}", file=sys.stderr)
-                    del data_arr
+                    print(f"    完成，total_shape={data_arr.shape}, spatial={spatial_shape}", file=sys.stderr)
+                    del data_arr, train_data, valid_data, test_data
 
                 except Exception as e:
                     result["warnings"].append(f"处理动态变量 '{var}' 失败: {str(e)}")
@@ -605,6 +851,7 @@ def convert_dynamic_vars(
 
     result["time_lengths"] = time_lengths
     result["nan_check_results"] = nan_check_results
+    result["split_info"] = split_info
     return saved_files
 
 
@@ -616,7 +863,9 @@ def convert_static_vars(
     result: Dict[str, Any],
     allow_nan: bool = False,
     lon_range: Optional[Tuple[float, float]] = None,
-    lat_range: Optional[Tuple[float, float]] = None
+    lat_range: Optional[Tuple[float, float]] = None,
+    h_slice: Optional[slice] = None,
+    w_slice: Optional[slice] = None
 ) -> Dict[str, Dict[str, Any]]:
     """
     转换静态变量（带编号前缀）
@@ -630,6 +879,8 @@ def convert_static_vars(
         allow_nan: 是否允许 NaN/Inf 值
         lon_range: 经度有效范围 (min, max)
         lat_range: 纬度有效范围 (min, max)
+        h_slice: H 方向裁剪切片
+        w_slice: W 方向裁剪切片
 
     Returns:
         保存的文件信息字典
@@ -726,6 +977,12 @@ def convert_static_vars(
                                 f"掩码变量 '{var}' 不是二值 (0/1): 唯一值 = {unique_vals[:10].tolist()}"
                                 + ("..." if len(unique_vals) > 10 else "")
                             )
+
+                    # ========== 空间裁剪 ==========
+                    original_shape = data_arr.shape
+                    if h_slice is not None or w_slice is not None:
+                        data_arr = crop_spatial(data_arr, h_slice, w_slice)
+                        print(f"    裁剪: {original_shape} -> {data_arr.shape}", file=sys.stderr)
 
                     np.save(out_fp, data_arr)
 
@@ -1318,6 +1575,28 @@ def convert_npy(config: Dict[str, Any]) -> Dict[str, Any]:
     # Rule 3 参数
     require_sorted = config.get("require_sorted", True)
 
+    # 数据集划分参数
+    train_ratio = config.get("train_ratio", 0.7)
+    valid_ratio = config.get("valid_ratio", 0.15)
+    test_ratio = config.get("test_ratio", 0.15)
+
+    # 裁剪参数
+    h_slice_str = config.get("h_slice")  # 如 "0:680"
+    w_slice_str = config.get("w_slice")  # 如 "0:1440"
+    scale = config.get("scale")  # 下采样倍数，用于验证
+    workers = config.get("workers", DEFAULT_WORKERS)
+
+    # 解析切片字符串
+    try:
+        h_slice = parse_slice_str(h_slice_str)
+        w_slice = parse_slice_str(w_slice_str)
+    except ValueError as e:
+        return {
+            "status": "error",
+            "errors": [str(e)],
+            "message": f"切片参数解析失败: {e}"
+        }
+
     # 转换为元组
     if lon_range and isinstance(lon_range, list):
         lon_range = tuple(lon_range)
@@ -1335,7 +1614,14 @@ def convert_npy(config: Dict[str, Any]) -> Dict[str, Any]:
         "config": {
             "allow_nan": allow_nan,
             "lon_range": list(lon_range) if lon_range else None,
-            "lat_range": list(lat_range) if lat_range else None
+            "lat_range": list(lat_range) if lat_range else None,
+            "train_ratio": train_ratio,
+            "valid_ratio": valid_ratio,
+            "test_ratio": test_ratio,
+            "h_slice": h_slice_str,
+            "w_slice": w_slice_str,
+            "scale": scale,
+            "workers": workers
         }
     }
 
@@ -1355,10 +1641,17 @@ def convert_npy(config: Dict[str, Any]) -> Dict[str, Any]:
         # 2. 创建输出目录
         os.makedirs(output_base, exist_ok=True)
 
-        # 3. 转换动态变量
+        # 3. 转换动态变量（按时间顺序划分）
         dyn_saved = convert_dynamic_vars(
             nc_files, dyn_vars, output_base, result,
-            allow_nan=allow_nan
+            allow_nan=allow_nan,
+            train_ratio=train_ratio,
+            valid_ratio=valid_ratio,
+            test_ratio=test_ratio,
+            h_slice=h_slice,
+            w_slice=w_slice,
+            scale=scale,
+            workers=workers
         )
         result["saved_files"].update(dyn_saved)
 
@@ -1368,7 +1661,9 @@ def convert_npy(config: Dict[str, Any]) -> Dict[str, Any]:
                 static_file, stat_vars, mask_vars, output_base, result,
                 allow_nan=allow_nan,
                 lon_range=lon_range,
-                lat_range=lat_range
+                lat_range=lat_range,
+                h_slice=h_slice,
+                w_slice=w_slice
             )
             result["saved_files"].update(sta_saved)
 
