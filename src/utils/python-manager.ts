@@ -1,3 +1,12 @@
+/**
+ * python-manager.ts
+ *
+ * Description: 管理和查找系统中可能的 Python 可执行文件路径
+ * Author: kongzhiquan
+ * Time: 2026-02-01
+ * Version: 1.0.0
+ *
+ */
 import { existsSync, readdirSync, statSync } from 'fs'
 import os from 'os'
 import path from 'path'

@@ -5,16 +5,17 @@
 ## 项目结构
 
 ```
-agent-trying/
-├── src/                  # 源代码
-│   ├── config.ts          # 环境配置和依赖初始化
-│   ├── agent-manager.ts   # Agent 创建和事件处理
-│   └── server.ts          # HTTP 服务器（Express）
-├── docs/                  # KODE SDK 文档
-├── .env                   # 环境变量
-├── package.json          # 项目配置
-├── README.md            # 本文件
-└── QUICKSTART.md        # 快速上手指南
+Ocean-Agent-SDK/
+├── src/                   # 服务主代码（Agent、工具、服务端）
+├── docs/                  # 多语言文档
+├── scripts/               # 数据预处理与校验脚本
+├── work_ocean/            # 示例数据、坏例与规则
+├── test-client.ts         # 客户端 SSE 调用示例
+├── test-ocean-badcases.ts # 海洋预处理坏例测试用例
+├── package.json           # 项目依赖与脚本
+├── tsconfig.json          # TypeScript 编译配置
+├── README.md              # 项目说明
+└── CLAUDE.md              # Claude 模型使用说明
 ```
 
 ## 快速开始
@@ -404,3 +405,7 @@ skills/
 
 - ✅ 确保使用了 `edit` 模式（不是 `ask`）
 - ✅ 查看服务器日志，确认工具是否执行成功
+
+### Q4: CLAUDE.md文件会被kode-sdk传给Anthropic Claude模型吗？
+- 不会，`CLAUDE.md`文件仅作为本项目的使用说明文档，不会被传递给Anthropic Claude模型。
+- `CLAUDE.md`文件仅仅用于本地使用Claude Code进行开发时参考使用。

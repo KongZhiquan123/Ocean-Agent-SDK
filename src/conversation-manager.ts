@@ -2,194 +2,148 @@
  * conversation-manager.ts
  *
  * Description: 会话管理器 - 实现多轮对话支持
- *              维护 Agent 实例池，支持会话复用和自动过期清理
- *              直接使用 agentId 作为会话标识
- * Author: leizheng
+ *              从 .kode 文件夹持久化读取会话记录，按需加载 Agent 实例
+ *              不再维护内存 Map，节省内存资源
+ * Author: leizheng, kongzhiquan
  * Time: 2026-02-02
- * Version: 1.1.0
+ * Version: 2.0.0
  *
  * Changelog:
+ *   - 2026-02-03 kongzhiquan: v2.0.0 重构为从磁盘持久化读取，移除内存缓存和过期清理
  *   - 2026-02-02 leizheng: v1.1.0 简化为直接使用 agentId
  *   - 2026-02-02 leizheng: v1.0.0 初始版本
  */
 
 import { Agent } from '@shareai-lab/kode-sdk'
+import { getDependencies } from './config'
+import * as fs from 'fs'
+import * as path from 'path'
 
 // ========================================
 // 类型定义
 // ========================================
 
-interface SessionEntry {
-  agent: Agent
-  agentId: string
-  userId: string
-  workingDir: string
-  createdAt: number
-  lastActiveAt: number
-  messageCount: number
-}
-
 interface ConversationManagerConfig {
-  sessionTimeoutMs?: number
-  cleanupIntervalMs?: number
-  maxSessions?: number
+  storePath?: string  // .kode 文件夹路径
 }
 
 // ========================================
 // 会话管理器类
-// @author leizheng
+// @author leizheng, kongzhiquan
 // @date 2026-02-02
 // ========================================
 
 class ConversationManager {
-  private sessions: Map<string, SessionEntry> = new Map()
-  private sessionTimeoutMs: number
-  private maxSessions: number
-  private cleanupTimer: NodeJS.Timeout | null = null
+  private storePath: string
 
   constructor(config: ConversationManagerConfig = {}) {
-    this.sessionTimeoutMs = config.sessionTimeoutMs || 30 * 60 * 1000
-    this.maxSessions = config.maxSessions || 100
-
-    const cleanupIntervalMs = config.cleanupIntervalMs || 5 * 60 * 1000
-    this.startCleanupTimer(cleanupIntervalMs)
-
+    this.storePath = config.storePath || './.kode'
     console.log('[ConversationManager] 初始化完成', {
-      sessionTimeoutMs: this.sessionTimeoutMs,
-      maxSessions: this.maxSessions,
+      storePath: this.storePath,
     })
   }
 
   /**
-   * 检查 agentId 对应的会话是否存在且未过期
+   * 检查 agentId 对应的会话是否存在于磁盘
    */
   hasSession(agentId: string): boolean {
-    const entry = this.sessions.get(agentId)
-    if (!entry) return false
+    const agentDir = path.join(this.storePath, agentId)
+    const metaPath = path.join(agentDir, 'meta.json')
 
-    const now = Date.now()
-    if (now - entry.lastActiveAt > this.sessionTimeoutMs) {
-      this.removeSession(agentId)
+    try {
+      return fs.existsSync(metaPath)
+    } catch (error) {
+      console.error(`[ConversationManager] 检查会话失败 ${agentId}:`, error)
       return false
     }
-    return true
   }
 
   /**
-   * 获取 agentId 对应的 Agent 实例
+   * 从磁盘加载 agentId 对应的 Agent 实例
    */
-  getAgent(agentId: string): Agent | null {
-    const entry = this.sessions.get(agentId)
-    if (!entry) return null
-
-    const now = Date.now()
-    if (now - entry.lastActiveAt > this.sessionTimeoutMs) {
-      this.removeSession(agentId)
+  async getAgent(agentId: string): Promise<Agent | null> {
+    if (!this.hasSession(agentId)) {
+      console.log(`[ConversationManager] 会话不存在: ${agentId}`)
       return null
     }
 
-    entry.lastActiveAt = now
-    entry.messageCount++
-    console.log(`[ConversationManager] 复用会话 ${agentId}, 消息计数: ${entry.messageCount}`)
-    return entry.agent
+    try {
+      const deps = getDependencies()
+
+      // 使用 KODE SDK 的 resumeFromStore 方法从磁盘恢复 Agent
+      const agent = await Agent.resumeFromStore(agentId, deps, {
+        autoRun: false,  // 不自动运行，等待新消息
+      })
+
+      console.log(`[ConversationManager] 从磁盘加载会话 ${agentId}`)
+      return agent
+    } catch (error) {
+      console.error(`[ConversationManager] 加载会话失败 ${agentId}:`, error)
+      return null
+    }
   }
 
   /**
-   * 注册新的 Agent 会话（使用 agent.agentId 作为 key）
+   * 注册新的 Agent 会话（实际上不需要做任何事，因为 KODE SDK 已经持久化了），如果后续涉及到数据库交互，可以在这里处理
    */
-  registerSession(
-    agent: Agent,
-    userId: string,
-    workingDir: string
-  ): void {
-    if (this.sessions.size >= this.maxSessions) {
-      this.evictOldestSession()
-    }
-
+  registerSession(agent: Agent): void {
     const agentId = agent.agentId
-    const now = Date.now()
-    this.sessions.set(agentId, {
-      agent,
-      agentId,
-      userId,
-      workingDir,
-      createdAt: now,
-      lastActiveAt: now,
-      messageCount: 1,
-    })
-
-    console.log(`[ConversationManager] 注册新会话 ${agentId}, 当前会话数: ${this.sessions.size}`)
+    console.log(`[ConversationManager] 注册新会话 ${agentId}`)
   }
 
   /**
-   * 移除指定会话
+   * 获取所有会话的 agentId 列表
    */
-  removeSession(agentId: string): boolean {
-    const deleted = this.sessions.delete(agentId)
-    if (deleted) {
-      console.log(`[ConversationManager] 移除会话 ${agentId}, 剩余: ${this.sessions.size}`)
+  listSessions(): string[] {
+    try {
+      if (!fs.existsSync(this.storePath)) {
+        return []
+      }
+
+      const entries = fs.readdirSync(this.storePath, { withFileTypes: true })
+      return entries
+        .filter(entry => entry.isDirectory() && entry.name.startsWith('agt-'))
+        .map(entry => entry.name)
+    } catch (error) {
+      console.error('[ConversationManager] 列出会话失败:', error)
+      return []
     }
-    return deleted
   }
 
   /**
    * 获取会话统计信息
    */
   getStats() {
+    const sessions = this.listSessions()
     return {
-      totalSessions: this.sessions.size,
-      maxSessions: this.maxSessions,
+      totalSessions: sessions.length,
+      storePath: this.storePath,
     }
   }
 
-  private startCleanupTimer(intervalMs: number): void {
-    this.cleanupTimer = setInterval(() => {
-      this.cleanupExpiredSessions()
-    }, intervalMs)
-  }
+  /**
+   * 删除指定会话（从磁盘删除）
+   */
+  removeSession(agentId: string): boolean {
+    const agentDir = path.join(this.storePath, agentId)
 
-  private cleanupExpiredSessions(): void {
-    const now = Date.now()
-    const expiredIds: string[] = []
-
-    for (const [id, entry] of this.sessions.entries()) {
-      if (now - entry.lastActiveAt > this.sessionTimeoutMs) {
-        expiredIds.push(id)
+    try {
+      if (fs.existsSync(agentDir)) {
+        fs.rmSync(agentDir, { recursive: true, force: true })
+        console.log(`[ConversationManager] 删除会话 ${agentId}`)
+        return true
       }
-    }
-
-    for (const id of expiredIds) {
-      this.removeSession(id)
-    }
-
-    if (expiredIds.length > 0) {
-      console.log(`[ConversationManager] 清理了 ${expiredIds.length} 个过期会话`)
-    }
-  }
-
-  private evictOldestSession(): void {
-    let oldestId: string | null = null
-    let oldestTime = Infinity
-
-    for (const [id, entry] of this.sessions.entries()) {
-      if (entry.lastActiveAt < oldestTime) {
-        oldestTime = entry.lastActiveAt
-        oldestId = id
-      }
-    }
-
-    if (oldestId) {
-      console.log(`[ConversationManager] 驱逐最旧会话 ${oldestId}`)
-      this.removeSession(oldestId)
+      return false
+    } catch (error) {
+      console.error(`[ConversationManager] 删除会话失败 ${agentId}:`, error)
+      return false
     }
   }
 
   shutdown(): void {
-    if (this.cleanupTimer) {
-      clearInterval(this.cleanupTimer)
-      this.cleanupTimer = null
-    }
-    this.sessions.clear()
+    /**
+     * 因后续将是与数据库交互，这里预留关闭连接的接口，直接与磁盘交互无需处理
+     */
     console.log('[ConversationManager] 已关闭')
   }
 }
@@ -199,9 +153,7 @@ class ConversationManager {
 // ========================================
 
 export const conversationManager = new ConversationManager({
-  sessionTimeoutMs: 30 * 60 * 1000,
-  cleanupIntervalMs: 5 * 60 * 1000,
-  maxSessions: 100,
+  storePath: process.env.KODE_STORE_PATH || './.kode',
 })
 
-export { ConversationManager, ConversationManagerConfig, SessionEntry }
+export { ConversationManager, ConversationManagerConfig }

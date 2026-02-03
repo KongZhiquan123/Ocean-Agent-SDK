@@ -1,5 +1,12 @@
-// src/config.ts
-// 配置和依赖初始化
+/**
+ * config.ts
+ *
+ * Description: 配置文件，包含环境变量加载、配置验证和依赖初始化
+ * Author: kongzhiquan
+ * Time: 2026-02-02
+ * Version: 1.0.0
+ *
+ */
 
 import dotenv from 'dotenv'
 dotenv.config({ override: true })

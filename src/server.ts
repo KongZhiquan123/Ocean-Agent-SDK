@@ -3,13 +3,15 @@
  *
  * Description: HTTP 服务器（使用 Node.js HTTP 模块 + express）
  *              支持 SSE 流式对话和多轮会话管理
- * Author: leizheng
+ * Author: leizheng, kongzhiquan
  * Time: 2026-02-02
- * Version: 1.2.0
+ * Version: 2.0.0
  *
  * Changelog:
+ *   - 2026-02-03 kongzhiquan: v2.0.0 适配持久化会话管理器
  *   - 2026-02-02 leizheng: v1.2.0 简化为直接使用 agentId 复用会话
  *   - 2026-02-02 leizheng: v1.1.0 添加多轮对话支持
+ *   - 2026-02-01 kongzhiquan: v1.0.0 初始版本
  */
 
 import express, { Request, Response, NextFunction } from 'express'
@@ -112,6 +114,7 @@ app.get('/health', (req: Request, res: Response) => {
 
 // ========================================
 // 路由：对话接口（SSE 流式）
+// @modified 2026-02-03 kongzhiquan: 持久化读取
 // @modified 2026-02-02 leizheng: 使用 agentId 复用会话
 // ========================================
 
@@ -120,21 +123,18 @@ app.post('/api/chat/stream', requireAuth, async (req: Request, res: Response) =>
   const { message, mode = 'edit', outputsPath, context = {}, agentId: inputAgentId } = req.body
 
   // 参数验证
-  if (!message || typeof message !== 'string') {
-    console.warn(`[server] [req ${reqId}] 缺少或无效的 "message" 字段`)
-    sendError(res, 400, 'BAD_REQUEST', 'Field "message" must be a non-empty string')
-    return
+  const validateField = (value: any, fieldName: string) => {
+    if (!value || typeof value !== 'string') {
+      console.warn(`[server] [req ${reqId}] 缺少或无效的 "${fieldName}" 字段`)
+      sendError(res, 400, 'BAD_REQUEST', `Field "${fieldName}" must be a non-empty string`)
+      return false
+    }
+    return true
   }
-  if (!context.userId) {
-    console.warn(`[server] [req ${reqId}] 缺少 "context.userId" 字段`)
-    sendError(res, 400, 'BAD_REQUEST', 'Field "context.userId" is required')
-    return
-  }
-  if (!context.workingDir) {
-    console.warn(`[server] [req ${reqId}] 缺少 "context.workingDir" 字段`)
-    sendError(res, 400, 'BAD_REQUEST', 'Field "context.workingDir" is required')
-    return
-  }
+  if (!validateField(message, 'message')) return
+  if (!validateField(context?.userId, 'context.userId')) return
+  if (!validateField(context?.workingDir, 'context.workingDir')) return
+
   const userId = context.userId
   const workingDir = context.workingDir
   const files = Array.isArray(context.files) ? context.files : []
@@ -149,19 +149,17 @@ app.post('/api/chat/stream', requireAuth, async (req: Request, res: Response) =>
   res.setHeader('Connection', 'keep-alive')
   res.flushHeaders()
 
-  // ========================================
-  // 多轮对话支持 - 直接使用 agentId
-  // @author leizheng
-  // @date 2026-02-02
-  // ========================================
   let agent
   let isNewSession = false
 
   try {
-    // 尝试复用已有会话
+    // 尝试加载已有会话
     if (inputAgentId && conversationManager.hasSession(inputAgentId)) {
-      agent = conversationManager.getAgent(inputAgentId)
-      console.log(`[server] [req ${reqId}] 复用已有会话: ${inputAgentId}`)
+      agent = await conversationManager.getAgent(inputAgentId)
+      if (agent) {
+        setupAgentHandlers(agent, reqId)
+        console.log(`[server] [req ${reqId}] 加载会话: ${inputAgentId}`)
+      }
     }
 
     // 如果没有可用会话，创建新的
@@ -171,16 +169,16 @@ app.post('/api/chat/stream', requireAuth, async (req: Request, res: Response) =>
       setupAgentHandlers(agent, reqId)
 
       // 注册到会话管理器
-      conversationManager.registerSession(agent, userId, workingDir)
+      conversationManager.registerSession(agent)
       isNewSession = true
       console.log(`[server] [req ${reqId}] 创建新会话: ${agent.agentId}`)
     }
   } catch (err: any) {
-    console.error(`[server] [req ${reqId}] Agent 创建失败:`, err)
+    console.error(`[server] [req ${reqId}] Agent 创建/加载失败:`, err)
     sendSSE(res, {
       type: 'error',
       error: 'INTERNAL_ERROR',
-      message: 'Failed to create agent',
+      message: 'Failed to create or load agent',
       timestamp: Date.now(),
     })
     res.end()
@@ -225,12 +223,14 @@ app.post('/api/chat/stream', requireAuth, async (req: Request, res: Response) =>
       clearInterval(heartbeatInterval)
       clearTimeout(timeoutTimer)
       console.log(`[server] [req ${reqId}] 客户端断开连接，清理资源`)
-
-      // 注意：不再中断 agent，因为会话可能还要继续使用
-      // 会话管理器会在过期后自动清理
+      // 中断 agent 处理
+      if (agent && typeof agent.interrupt === 'function') {
+        agent.interrupt({ note: 'Client disconnected' }).catch((err: any) => {
+          console.error(`[server] [req ${reqId}] 中断 Agent 失败:`, err)
+        })
+      }
     }
   }
-
 
   req.on('aborted', cleanup)
   req.on('error', cleanup)

@@ -1,5 +1,12 @@
-// src/agent-manager.ts
-// Agent 创建和管理逻辑
+/**
+ * agent-manager.ts
+ *
+ * Description: 管理 Agent 实例的创建与消息处理
+ * Author: kongzhiquan
+ * Time: 2026-02-02
+ * Version: 1.0.0
+ *
+ */
 
 import { Agent, type ProgressEvent } from '@shareai-lab/kode-sdk'
 import { getDependencies } from './config'
