@@ -3,11 +3,13 @@
 generate_report.py - 海洋数据预处理报告生成脚本
 
 @author kongzhiquan
+@contributors leizheng
 @date 2026-02-04
-@version 1.0.0
+@version 3.0.0
 
 功能:
 - 整合预处理流程中的所有关键信息
+- 记录 4 阶段用户确认信息
 - 生成包含可视化图片的 Markdown 报告
 - 添加数据质量分析和建议
 
@@ -18,6 +20,11 @@ generate_report.py - 海洋数据预处理报告生成脚本
     dataset_root/preprocessing_report.md
 
 Changelog:
+    - 2026-02-04 kongzhiquan v3.0.0: 适配 v2.9.0 流程 + 可视化改进
+        - 新增 Section 2: 用户确认记录（4 阶段）
+        - 新增全局统计汇总图展示 (statistics_summary.png)
+        - 分离展示空间对比图和统计分布图
+        - 更新输出文件结构说明（逐时间步保存）
     - 2026-02-04 kongzhiquan v1.0.0: 初始版本
         - 整合 inspect/validate/convert/metrics 结果
         - 嵌入可视化图片
@@ -62,11 +69,12 @@ def analyze_data_quality(metrics: Dict, inspect: Dict, validate: Dict) -> str:
 ⚠️ **重要提示**: 此部分需要由 Agent 根据实际数据情况进行分析。
 
 Agent 应该：
-1. 仔细阅读上述所有数据（数据集概览、验证结果、质量指标等）
+1. 仔细阅读上述所有数据（数据集概览、用户确认记录、验证结果、质量指标等）
 2. 识别关键问题和亮点
 3. 提供具体的、有针对性的分析和建议
 
 分析应包括但不限于：
+- **用户选择评估**: 用户选择的研究变量是否合理？静态/掩码变量是否正确？
 - **SSIM 指标分析**: 哪些变量的结构相似性好/差？为什么？
 - **Relative L2 误差分析**: 误差分布是否合理？是否有异常值？
 - **数据量评估**: 数据量是否充足？训练集/验证集/测试集划分是否合理？
@@ -90,6 +98,9 @@ def generate_report(config: Dict) -> str:
     convert = load_json_safe(config.get('convert_result_path', ''))
     metrics = load_json_safe(config.get('metrics_result_path', ''))
 
+    # 用户确认信息（从 config 中获取）
+    user_confirmation = config.get('user_confirmation', {})
+
     dataset_root = config['dataset_root']
 
     # 开始生成报告
@@ -98,6 +109,7 @@ def generate_report(config: Dict) -> str:
     lines.append("")
     lines.append(f"**生成时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     lines.append(f"**数据集路径**: `{dataset_root}`")
+    lines.append(f"**流程版本**: v3.0.0（4 阶段强制确认）")
     lines.append("")
     lines.append("---")
     lines.append("")
@@ -109,23 +121,23 @@ def generate_report(config: Dict) -> str:
     lines.append("")
 
     if inspect:
-        lines.append(f"### 1.1 基本信息")
+        lines.append("### 1.1 基本信息")
         lines.append("")
         lines.append(f"- **文件数量**: {inspect.get('file_count', 'N/A')}")
         lines.append(f"- **动态文件**: {len(inspect.get('dynamic_files', []))}")
         lines.append(f"- **疑似静态文件**: {len(inspect.get('suspected_static_files', []))}")
         lines.append("")
 
-        lines.append(f"### 1.2 变量分类")
+        lines.append("### 1.2 检测到的变量（原始）")
         lines.append("")
 
         dyn_vars = inspect.get('dynamic_vars_candidates', [])
         stat_vars = inspect.get('static_vars_found', [])
         mask_vars = inspect.get('mask_vars_found', [])
 
-        lines.append(f"- **动态变量** ({len(dyn_vars)}): {', '.join([f'`{v}`' for v in dyn_vars]) if dyn_vars else '无'}")
-        lines.append(f"- **静态变量** ({len(stat_vars)}): {', '.join([f'`{v}`' for v in stat_vars]) if stat_vars else '无'}")
-        lines.append(f"- **掩码变量** ({len(mask_vars)}): {', '.join([f'`{v}`' for v in mask_vars]) if mask_vars else '无'}")
+        lines.append(f"- **动态变量候选** ({len(dyn_vars)}): {', '.join([f'`{v}`' for v in dyn_vars]) if dyn_vars else '无'}")
+        lines.append(f"- **静态变量候选** ({len(stat_vars)}): {', '.join([f'`{v}`' for v in stat_vars]) if stat_vars else '无'}")
+        lines.append(f"- **掩码变量候选** ({len(mask_vars)}): {', '.join([f'`{v}`' for v in mask_vars]) if mask_vars else '无'}")
         lines.append("")
 
         # 变量详细信息表格
@@ -148,13 +160,92 @@ def generate_report(config: Dict) -> str:
         lines.append("")
 
     # ========================================
-    # 2. 验证结果
+    # 2. 用户确认记录
     # ========================================
-    lines.append("## 2. 验证结果")
+    lines.append("## 2. 用户确认记录")
+    lines.append("")
+    lines.append("以下是预处理流程中用户确认的关键选择（4 阶段强制确认）：")
+    lines.append("")
+
+    # 阶段 1: 研究变量选择
+    lines.append("### 2.1 阶段 1：研究变量选择")
+    lines.append("")
+    stage1 = user_confirmation.get('stage1_research_vars', {})
+    if stage1:
+        selected_vars = stage1.get('selected', [])
+        lines.append(f"- **选择的研究变量**: {', '.join([f'`{v}`' for v in selected_vars]) if selected_vars else '无'}")
+        if stage1.get('confirmed_at'):
+            lines.append(f"- **确认时间**: {stage1.get('confirmed_at')}")
+    else:
+        lines.append("- ⚠️ 未记录")
+    lines.append("")
+
+    # 阶段 2: 静态/掩码变量选择
+    lines.append("### 2.2 阶段 2：静态/掩码变量选择")
+    lines.append("")
+    stage2 = user_confirmation.get('stage2_static_mask', {})
+    if stage2:
+        static_vars = stage2.get('static_vars', [])
+        mask_vars_confirmed = stage2.get('mask_vars', [])
+        coord_vars = stage2.get('coord_vars', {})
+        lines.append(f"- **静态变量**: {', '.join([f'`{v}`' for v in static_vars]) if static_vars else '无'}")
+        lines.append(f"- **掩码变量**: {', '.join([f'`{v}`' for v in mask_vars_confirmed]) if mask_vars_confirmed else '无'}")
+        if coord_vars:
+            lines.append(f"- **坐标变量**: lon=`{coord_vars.get('lon', 'N/A')}`, lat=`{coord_vars.get('lat', 'N/A')}`")
+        if stage2.get('confirmed_at'):
+            lines.append(f"- **确认时间**: {stage2.get('confirmed_at')}")
+    else:
+        lines.append("- ⚠️ 未记录")
+    lines.append("")
+
+    # 阶段 3: 处理参数确认
+    lines.append("### 2.3 阶段 3：处理参数确认")
+    lines.append("")
+    stage3 = user_confirmation.get('stage3_parameters', {})
+    if stage3:
+        lines.append(f"- **下采样倍数 (scale)**: {stage3.get('scale', 'N/A')}")
+        lines.append(f"- **下采样方法**: {stage3.get('downsample_method', 'N/A')}")
+        lines.append(f"- **数据集划分**: train={stage3.get('train_ratio', 'N/A')}, valid={stage3.get('valid_ratio', 'N/A')}, test={stage3.get('test_ratio', 'N/A')}")
+
+        # 裁剪信息
+        h_slice = stage3.get('h_slice')
+        w_slice = stage3.get('w_slice')
+        if h_slice or w_slice:
+            lines.append(f"- **裁剪设置**: H=`{h_slice or '无'}`, W=`{w_slice or '无'}`")
+
+        # 裁剪推荐
+        crop_recommendation = stage3.get('crop_recommendation')
+        if crop_recommendation:
+            lines.append(f"- **系统推荐裁剪**: {crop_recommendation}")
+
+        if stage3.get('confirmed_at'):
+            lines.append(f"- **确认时间**: {stage3.get('confirmed_at')}")
+    else:
+        lines.append("- ⚠️ 未记录")
+    lines.append("")
+
+    # 阶段 4: 执行确认
+    lines.append("### 2.4 阶段 4：执行确认")
+    lines.append("")
+    stage4 = user_confirmation.get('stage4_execution', {})
+    if stage4:
+        lines.append(f"- **用户确认执行**: {'✓ 是' if stage4.get('confirmed') else '✗ 否'}")
+        if stage4.get('confirmed_at'):
+            lines.append(f"- **确认时间**: {stage4.get('confirmed_at')}")
+        if stage4.get('execution_started_at'):
+            lines.append(f"- **开始执行时间**: {stage4.get('execution_started_at')}")
+    else:
+        lines.append("- ⚠️ 未记录")
+    lines.append("")
+
+    # ========================================
+    # 3. 验证结果
+    # ========================================
+    lines.append("## 3. 验证结果")
     lines.append("")
 
     if validate:
-        lines.append(f"### 2.1 张量约定验证")
+        lines.append("### 3.1 张量约定验证")
         lines.append("")
         lines.append(f"- **状态**: `{validate.get('status', 'N/A')}`")
         lines.append(f"- **研究变量**: {', '.join([f'`{v}`' for v in validate.get('research_vars', [])])}")
@@ -186,13 +277,13 @@ def generate_report(config: Dict) -> str:
         lines.append("")
 
     # ========================================
-    # 3. 转换结果
+    # 4. 转换结果
     # ========================================
-    lines.append("## 3. 转换结果")
+    lines.append("## 4. 转换结果")
     lines.append("")
 
     if convert:
-        lines.append(f"### 3.1 数据集划分")
+        lines.append("### 4.1 数据集划分")
         lines.append("")
 
         config_info = convert.get('config', {})
@@ -202,14 +293,14 @@ def generate_report(config: Dict) -> str:
         lines.append("")
 
         if 'h_slice' in config_info or 'w_slice' in config_info:
-            lines.append(f"### 3.2 裁剪信息")
+            lines.append("### 4.2 裁剪信息")
             lines.append("")
             lines.append(f"- **H 方向裁剪**: `{config_info.get('h_slice', '无')}`")
             lines.append(f"- **W 方向裁剪**: `{config_info.get('w_slice', '无')}`")
             lines.append(f"- **下采样倍数**: {config_info.get('scale', 'N/A')}")
             lines.append("")
 
-        lines.append(f"### 3.3 后置验证")
+        lines.append("### 4.3 后置验证")
         lines.append("")
 
         validation = convert.get('validation', {})
@@ -220,10 +311,29 @@ def generate_report(config: Dict) -> str:
             lines.append("")
 
         # 输出文件统计
+        lines.append("### 4.4 输出文件结构")
+        lines.append("")
+        lines.append("**v3.0.0 新格式**：每个时间步单独保存为一个文件")
+        lines.append("")
+        lines.append("```")
+        lines.append("output_base/")
+        lines.append("├── train/")
+        lines.append("│   ├── hr/")
+        lines.append("│   │   ├── var1/          # 变量目录")
+        lines.append("│   │   │   ├── 000000.npy # 时间步 0, 形状 [H, W]")
+        lines.append("│   │   │   ├── 000001.npy # 时间步 1")
+        lines.append("│   │   │   └── ...")
+        lines.append("│   │   └── var2/")
+        lines.append("│   └── lr/")
+        lines.append("│       └── (同上)")
+        lines.append("├── valid/")
+        lines.append("├── test/")
+        lines.append("└── static_variables/")
+        lines.append("```")
+        lines.append("")
+
         if 'saved_files' in convert:
             saved_files = convert['saved_files']
-            lines.append(f"### 3.4 输出文件")
-            lines.append("")
             lines.append(f"- **总文件数**: {len(saved_files)}")
             lines.append("")
     else:
@@ -231,13 +341,13 @@ def generate_report(config: Dict) -> str:
         lines.append("")
 
     # ========================================
-    # 4. 质量指标
+    # 5. 质量指标
     # ========================================
-    lines.append("## 4. 质量指标")
+    lines.append("## 5. 质量指标")
     lines.append("")
 
     if metrics and 'splits' in metrics:
-        lines.append("### 4.1 指标概览")
+        lines.append("### 5.1 指标概览")
         lines.append("")
         lines.append(f"- **下采样倍数**: {metrics.get('config', {}).get('scale', 'N/A')}")
         lines.append("")
@@ -246,7 +356,7 @@ def generate_report(config: Dict) -> str:
             if not split_data:
                 continue
 
-            lines.append(f"### 4.2 {split_name.capitalize()} 数据集")
+            lines.append(f"### 5.2 {split_name.capitalize()} 数据集")
             lines.append("")
             lines.append("| 变量名 | SSIM ↑ | Relative L2 ↓ | MSE ↓ | RMSE ↓ |")
             lines.append("|--------|--------|----------------|-------|--------|")
@@ -273,45 +383,92 @@ def generate_report(config: Dict) -> str:
         lines.append("")
 
     # ========================================
-    # 5. 可视化对比
+    # 6. 可视化对比
     # ========================================
-    lines.append("## 5. 可视化对比")
+    lines.append("## 6. 可视化对比")
     lines.append("")
 
     vis_dir = os.path.join(dataset_root, 'visualisation_data_process')
     if os.path.exists(vis_dir):
+        # 6.0 全局统计汇总图
+        summary_path = os.path.join(vis_dir, 'statistics_summary.png')
+        if os.path.exists(summary_path):
+            rel_path = os.path.relpath(summary_path, dataset_root)
+            lines.append("### 6.0 全局统计汇总")
+            lines.append("")
+            lines.append("所有变量的均值和标准差对比（HR vs LR）：")
+            lines.append("")
+            lines.append(f"![全局统计汇总]({rel_path})")
+            lines.append("")
+
         for split in ['train', 'valid', 'test']:
             split_dir = os.path.join(vis_dir, split)
             if not os.path.exists(split_dir):
                 continue
 
-            png_files = sorted(glob.glob(os.path.join(split_dir, '*.png')))
-            if not png_files:
+            # 分类收集图片
+            compare_files = sorted(glob.glob(os.path.join(split_dir, '*_compare.png')))
+            stats_files = sorted(glob.glob(os.path.join(split_dir, '*_statistics.png')))
+
+            # 兼容旧格式（没有 _compare 后缀的图片）
+            if not compare_files and not stats_files:
+                old_files = sorted(glob.glob(os.path.join(split_dir, '*.png')))
+                compare_files = old_files
+
+            if not compare_files and not stats_files:
                 continue
 
-            lines.append(f"### 5.{['train', 'valid', 'test'].index(split) + 1} {split.capitalize()} 数据集")
+            split_idx = ['train', 'valid', 'test'].index(split) + 1
+            lines.append(f"### 6.{split_idx} {split.capitalize()} 数据集")
             lines.append("")
 
-            # 只显示前 6 张图片，避免报告过长
-            for png_file in png_files[:6]:
-                var_name = os.path.splitext(os.path.basename(png_file))[0]
-                rel_path = os.path.relpath(png_file, dataset_root)
+            # 获取变量列表
+            var_names = set()
+            for f in compare_files:
+                name = os.path.basename(f).replace('_compare.png', '').replace('.png', '')
+                var_names.add(name)
+            for f in stats_files:
+                name = os.path.basename(f).replace('_statistics.png', '')
+                var_names.add(name)
+
+            # 每个变量一个小节
+            for var_idx, var_name in enumerate(sorted(var_names)):
+                if var_idx >= 3:  # 每个 split 最多显示 3 个变量
+                    lines.append(f"*（共 {len(var_names)} 个变量，仅显示前 3 个）*")
+                    lines.append("")
+                    break
+
                 lines.append(f"#### {var_name}")
                 lines.append("")
-                lines.append(f"![{var_name}]({rel_path})")
-                lines.append("")
 
-            if len(png_files) > 6:
-                lines.append(f"*（共 {len(png_files)} 张图片，仅显示前 6 张）*")
-                lines.append("")
+                # 空间对比图
+                compare_path = os.path.join(split_dir, f'{var_name}_compare.png')
+                if not os.path.exists(compare_path):
+                    compare_path = os.path.join(split_dir, f'{var_name}.png')  # 兼容旧格式
+
+                if os.path.exists(compare_path):
+                    rel_path = os.path.relpath(compare_path, dataset_root)
+                    lines.append("**HR vs LR 空间对比**:")
+                    lines.append("")
+                    lines.append(f"![{var_name} 空间对比]({rel_path})")
+                    lines.append("")
+
+                # 统计分布图
+                stats_path = os.path.join(split_dir, f'{var_name}_statistics.png')
+                if os.path.exists(stats_path):
+                    rel_path = os.path.relpath(stats_path, dataset_root)
+                    lines.append("**统计分布（均值/方差时序 + 直方图）**:")
+                    lines.append("")
+                    lines.append(f"![{var_name} 统计分布]({rel_path})")
+                    lines.append("")
     else:
         lines.append("⚠️ 未找到可视化结果目录 (visualisation_data_process/)")
         lines.append("")
 
     # ========================================
-    # 6. 分析和建议
+    # 7. 分析和建议
     # ========================================
-    lines.append("## 6. 分析和建议")
+    lines.append("## 7. 分析和建议")
     lines.append("")
 
     analysis_placeholder = analyze_data_quality(metrics, inspect, validate)
@@ -319,9 +476,9 @@ def generate_report(config: Dict) -> str:
     lines.append("")
 
     # ========================================
-    # 7. 总结
+    # 8. 总结
     # ========================================
-    lines.append("## 7. 总结")
+    lines.append("## 8. 总结")
     lines.append("")
 
     # 统计信息
@@ -334,7 +491,7 @@ def generate_report(config: Dict) -> str:
     lines.append("")
 
     if metrics:
-        lines.append("数据质量指标已计算完成，详见第 4 节。")
+        lines.append("数据质量指标已计算完成，详见第 5 节。")
 
     lines.append("")
     lines.append("---")

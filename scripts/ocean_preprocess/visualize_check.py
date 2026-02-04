@@ -3,21 +3,22 @@
 visualize_check.py - 数据处理后的可视化检查脚本
 
 @author liuzhengyang
-@contributor leizheng
+@contributor leizheng, kongzhiquan
 @date 2026-02-04
-@version 2.0.0
+@version 3.0.0
 
 功能:
 - 对比 HR 和 LR 数据的可视化
 - 每个变量抽取 1 帧进行检查
 - 支持 2D/3D/4D 数据格式
 - 自动加载经纬度坐标显示真实地理范围
+- 【新增】统计分布图：均值、方差、直方图
 - 输出到 visualisation_data_process/ 目录
 
 用法:
     python visualize_check.py --dataset_root /path/to/dataset
 
-目录结构 (v2.0.0 新格式):
+目录结构 (v3.0.0 新格式):
     dataset_root/
     ├── train/
     │   ├── hr/
@@ -30,10 +31,18 @@ visualize_check.py - 数据处理后的可视化检查脚本
     │   └── lr/
     └── visualisation_data_process/   ← 图片输出到这里
         ├── train/
+        │   ├── {var}_compare.png      # HR vs LR 空间对比
+        │   └── {var}_statistics.png   # 统计分布图
         ├── valid/
-        └── test/
+        ├── test/
+        └── statistics_summary.png     # 全局统计汇总
 
 Changelog:
+    - 2026-02-04 kongzhiquan v3.0.0: 新增统计分布图
+        - 新增均值/方差时序图
+        - 新增 HR/LR 数据值直方图对比
+        - 新增全局统计汇总图
+        - 重命名原对比图为 {var}_compare.png
     - 2026-02-04 leizheng v2.0.0: 支持逐时间步文件格式
         - 适配 convert_npy.py v2.9.0 的新目录结构
         - 自动检测新格式（hr/uo/）或旧格式（hr/uo.npy）
@@ -221,6 +230,211 @@ def plot_and_save(
     print(f"[Saved] {save_path}")
 
 
+def plot_statistics(
+    hr_data_list: list,
+    lr_data_list: list,
+    save_path: str,
+    var_name: str
+):
+    """
+    绘制统计分布图：均值/方差时序 + 直方图
+
+    Args:
+        hr_data_list: HR 数据列表（每个时间步的 2D 数组）
+        lr_data_list: LR 数据列表（每个时间步的 2D 数组）
+        save_path: 保存路径
+        var_name: 变量名（用于标题）
+    """
+    # 计算每个时间步的统计量
+    hr_means = []
+    hr_stds = []
+    lr_means = []
+    lr_stds = []
+
+    for hr_data in hr_data_list:
+        valid_hr = hr_data[~np.isnan(hr_data)]
+        if len(valid_hr) > 0:
+            hr_means.append(np.mean(valid_hr))
+            hr_stds.append(np.std(valid_hr))
+        else:
+            hr_means.append(np.nan)
+            hr_stds.append(np.nan)
+
+    for lr_data in lr_data_list:
+        valid_lr = lr_data[~np.isnan(lr_data)]
+        if len(valid_lr) > 0:
+            lr_means.append(np.mean(valid_lr))
+            lr_stds.append(np.std(valid_lr))
+        else:
+            lr_means.append(np.nan)
+            lr_stds.append(np.nan)
+
+    hr_means = np.array(hr_means)
+    hr_stds = np.array(hr_stds)
+    lr_means = np.array(lr_means)
+    lr_stds = np.array(lr_stds)
+
+    # 收集所有有效值用于直方图
+    hr_all_values = np.concatenate([d[~np.isnan(d)].flatten() for d in hr_data_list if d.size > 0])
+    lr_all_values = np.concatenate([d[~np.isnan(d)].flatten() for d in lr_data_list if d.size > 0])
+
+    # 创建画布: 2行2列
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+
+    time_steps = np.arange(len(hr_means))
+
+    # 1. 均值时序图 (左上)
+    ax1 = axes[0, 0]
+    ax1.plot(time_steps, hr_means, 'b-', label='HR Mean', linewidth=1.5, alpha=0.8)
+    ax1.plot(time_steps, lr_means, 'r--', label='LR Mean', linewidth=1.5, alpha=0.8)
+    ax1.set_xlabel('Time Step')
+    ax1.set_ylabel('Mean Value')
+    ax1.set_title(f'{var_name} - Mean over Time')
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+
+    # 2. 方差/标准差时序图 (右上)
+    ax2 = axes[0, 1]
+    ax2.plot(time_steps, hr_stds, 'b-', label='HR Std', linewidth=1.5, alpha=0.8)
+    ax2.plot(time_steps, lr_stds, 'r--', label='LR Std', linewidth=1.5, alpha=0.8)
+    ax2.set_xlabel('Time Step')
+    ax2.set_ylabel('Standard Deviation')
+    ax2.set_title(f'{var_name} - Std Dev over Time')
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+
+    # 3. HR 直方图 (左下)
+    ax3 = axes[1, 0]
+    if len(hr_all_values) > 0:
+        # 计算合适的 bin 范围
+        hr_min, hr_max = np.percentile(hr_all_values, [1, 99])
+        bins = np.linspace(hr_min, hr_max, 50)
+        ax3.hist(hr_all_values, bins=bins, color='blue', alpha=0.7, edgecolor='black', linewidth=0.5)
+        ax3.axvline(np.mean(hr_all_values), color='red', linestyle='--', linewidth=2, label=f'Mean: {np.mean(hr_all_values):.4f}')
+        ax3.axvline(np.median(hr_all_values), color='green', linestyle=':', linewidth=2, label=f'Median: {np.median(hr_all_values):.4f}')
+        ax3.set_xlabel('Value')
+        ax3.set_ylabel('Frequency')
+        ax3.set_title(f'{var_name} HR - Value Distribution\nStd: {np.std(hr_all_values):.4f}')
+        ax3.legend(fontsize=8)
+    else:
+        ax3.text(0.5, 0.5, 'No valid HR data', ha='center', va='center', transform=ax3.transAxes)
+        ax3.set_title(f'{var_name} HR - Value Distribution')
+
+    # 4. LR 直方图 (右下)
+    ax4 = axes[1, 1]
+    if len(lr_all_values) > 0:
+        # 计算合适的 bin 范围
+        lr_min, lr_max = np.percentile(lr_all_values, [1, 99])
+        bins = np.linspace(lr_min, lr_max, 50)
+        ax4.hist(lr_all_values, bins=bins, color='orange', alpha=0.7, edgecolor='black', linewidth=0.5)
+        ax4.axvline(np.mean(lr_all_values), color='red', linestyle='--', linewidth=2, label=f'Mean: {np.mean(lr_all_values):.4f}')
+        ax4.axvline(np.median(lr_all_values), color='green', linestyle=':', linewidth=2, label=f'Median: {np.median(lr_all_values):.4f}')
+        ax4.set_xlabel('Value')
+        ax4.set_ylabel('Frequency')
+        ax4.set_title(f'{var_name} LR - Value Distribution\nStd: {np.std(lr_all_values):.4f}')
+        ax4.legend(fontsize=8)
+    else:
+        ax4.text(0.5, 0.5, 'No valid LR data', ha='center', va='center', transform=ax4.transAxes)
+        ax4.set_title(f'{var_name} LR - Value Distribution')
+
+    # 布局调整
+    plt.tight_layout()
+
+    # 保存图片
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+
+    print(f"[Saved] {save_path}")
+
+    # 返回统计信息用于汇总
+    return {
+        'var_name': var_name,
+        'hr_mean': np.nanmean(hr_means),
+        'hr_std': np.nanmean(hr_stds),
+        'lr_mean': np.nanmean(lr_means),
+        'lr_std': np.nanmean(lr_stds),
+        'n_timesteps': len(hr_means)
+    }
+
+
+def plot_summary_statistics(all_stats: list, save_path: str, dataset_name: str = ""):
+    """
+    绘制全局统计汇总图
+
+    Args:
+        all_stats: 所有变量的统计信息列表
+        save_path: 保存路径
+        dataset_name: 数据集名称
+    """
+    if not all_stats:
+        print("[Warning] 没有统计数据可汇总")
+        return
+
+    var_names = [s['var_name'] for s in all_stats]
+    hr_means = [s['hr_mean'] for s in all_stats]
+    hr_stds = [s['hr_std'] for s in all_stats]
+    lr_means = [s['lr_mean'] for s in all_stats]
+    lr_stds = [s['lr_std'] for s in all_stats]
+
+    x = np.arange(len(var_names))
+    width = 0.35
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+
+    # 1. 均值对比条形图
+    ax1 = axes[0]
+    bars1 = ax1.bar(x - width/2, hr_means, width, label='HR', color='steelblue', alpha=0.8)
+    bars2 = ax1.bar(x + width/2, lr_means, width, label='LR', color='coral', alpha=0.8)
+    ax1.set_xlabel('Variable')
+    ax1.set_ylabel('Mean Value')
+    ax1.set_title(f'{dataset_name} - Mean Comparison')
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(var_names, rotation=45, ha='right')
+    ax1.legend()
+    ax1.grid(True, alpha=0.3, axis='y')
+
+    # 在条形图上添加数值标签
+    for bar, val in zip(bars1, hr_means):
+        if not np.isnan(val):
+            ax1.text(bar.get_x() + bar.get_width()/2, bar.get_height(), f'{val:.2e}',
+                    ha='center', va='bottom', fontsize=7, rotation=90)
+    for bar, val in zip(bars2, lr_means):
+        if not np.isnan(val):
+            ax1.text(bar.get_x() + bar.get_width()/2, bar.get_height(), f'{val:.2e}',
+                    ha='center', va='bottom', fontsize=7, rotation=90)
+
+    # 2. 标准差对比条形图
+    ax2 = axes[1]
+    bars3 = ax2.bar(x - width/2, hr_stds, width, label='HR', color='steelblue', alpha=0.8)
+    bars4 = ax2.bar(x + width/2, lr_stds, width, label='LR', color='coral', alpha=0.8)
+    ax2.set_xlabel('Variable')
+    ax2.set_ylabel('Standard Deviation')
+    ax2.set_title(f'{dataset_name} - Std Dev Comparison')
+    ax2.set_xticks(x)
+    ax2.set_xticklabels(var_names, rotation=45, ha='right')
+    ax2.legend()
+    ax2.grid(True, alpha=0.3, axis='y')
+
+    # 在条形图上添加数值标签
+    for bar, val in zip(bars3, hr_stds):
+        if not np.isnan(val):
+            ax2.text(bar.get_x() + bar.get_width()/2, bar.get_height(), f'{val:.2e}',
+                    ha='center', va='bottom', fontsize=7, rotation=90)
+    for bar, val in zip(bars4, lr_stds):
+        if not np.isnan(val):
+            ax2.text(bar.get_x() + bar.get_width()/2, bar.get_height(), f'{val:.2e}',
+                    ha='center', va='bottom', fontsize=7, rotation=90)
+
+    plt.tight_layout()
+
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+
+    print(f"[Saved] {save_path}")
+
+
 def load_coordinates(dataset_root: str, subdir: str = None) -> tuple:
     """
     尝试加载经纬度坐标
@@ -311,17 +525,22 @@ def process_split(dataset_root: str, split: str, out_dir: str, hr_lat: np.ndarra
         hr_lon: HR 经度数组 (可选)
         lr_lat: LR 纬度数组 (可选)
         lr_lon: LR 经度数组 (可选)
+
+    Returns:
+        list: 该 split 的所有变量统计信息
     """
     hr_dir = os.path.join(dataset_root, split, 'hr')
     lr_dir = os.path.join(dataset_root, split, 'lr')
 
+    all_stats = []
+
     if not os.path.exists(hr_dir):
         print(f"[Warning] HR 目录不存在，跳过: {hr_dir}")
-        return
+        return all_stats
 
     if not os.path.exists(lr_dir):
         print(f"[Warning] LR 目录不存在，跳过: {lr_dir}")
-        return
+        return all_stats
 
     # v2.0.0: 检查是新格式（子目录）还是旧格式（直接 .npy 文件）
     var_dirs = [d for d in os.listdir(hr_dir) if os.path.isdir(os.path.join(hr_dir, d))]
@@ -338,7 +557,7 @@ def process_split(dataset_root: str, split: str, out_dir: str, hr_lat: np.ndarra
                 print(f"[Skip] LR 变量目录不存在: {var_lr_dir}")
                 continue
 
-            # 取第一个文件用于可视化
+            # 获取所有文件
             hr_files = sorted(glob.glob(os.path.join(var_hr_dir, '*.npy')))
             lr_files = sorted(glob.glob(os.path.join(var_lr_dir, '*.npy')))
 
@@ -347,13 +566,23 @@ def process_split(dataset_root: str, split: str, out_dir: str, hr_lat: np.ndarra
                 continue
 
             try:
-                hr_data = np.load(hr_files[0])
-                lr_data = np.load(lr_files[0])
+                # 1. 生成空间对比图（取中间时间步）
+                mid_idx = len(hr_files) // 2
+                hr_data = np.load(hr_files[mid_idx])
+                lr_data = np.load(lr_files[min(mid_idx, len(lr_files)-1)])
 
-                # 输出路径
-                save_path = os.path.join(out_dir, split, f"{var_name}.png")
+                compare_path = os.path.join(out_dir, split, f"{var_name}_compare.png")
+                plot_and_save(hr_data, lr_data, compare_path, var_name, hr_lat, hr_lon, lr_lat, lr_lon)
 
-                plot_and_save(hr_data, lr_data, save_path, var_name, hr_lat, hr_lon, lr_lat, lr_lon)
+                # 2. 生成统计分布图（加载所有时间步）
+                print(f"  计算 {var_name} 统计量 ({len(hr_files)} 个时间步)...")
+                hr_data_list = [np.load(f) for f in hr_files]
+                lr_data_list = [np.load(f) for f in lr_files]
+
+                stats_path = os.path.join(out_dir, split, f"{var_name}_statistics.png")
+                stats = plot_statistics(hr_data_list, lr_data_list, stats_path, var_name)
+                if stats:
+                    all_stats.append(stats)
 
             except Exception as e:
                 print(f"[Error] 处理 {var_name} 失败: {e}")
@@ -363,7 +592,7 @@ def process_split(dataset_root: str, split: str, out_dir: str, hr_lat: np.ndarra
 
         if not npy_files:
             print(f"[Warning] HR 目录为空: {hr_dir}")
-            return
+            return all_stats
 
         print(f"\n处理 {split} 数据集 [旧格式] ({len(npy_files)} 个变量)...")
 
@@ -381,13 +610,29 @@ def process_split(dataset_root: str, split: str, out_dir: str, hr_lat: np.ndarra
                 hr_data = np.load(hr_path)
                 lr_data = np.load(lr_path)
 
-                # 输出路径
-                save_path = os.path.join(out_dir, split, f"{var_name}.png")
+                # 1. 生成空间对比图
+                compare_path = os.path.join(out_dir, split, f"{var_name}_compare.png")
+                plot_and_save(hr_data, lr_data, compare_path, var_name, hr_lat, hr_lon, lr_lat, lr_lon)
 
-                plot_and_save(hr_data, lr_data, save_path, var_name, hr_lat, hr_lon, lr_lat, lr_lon)
+                # 2. 生成统计分布图（旧格式：整个数组作为时序）
+                # 假设旧格式是 (T, H, W)，将每个时间步作为一个数据
+                if hr_data.ndim >= 3:
+                    hr_data_list = [hr_data[t] for t in range(hr_data.shape[0])]
+                    lr_data_list = [lr_data[t] for t in range(lr_data.shape[0])]
+                else:
+                    # 2D 数据，作为单个时间步
+                    hr_data_list = [hr_data]
+                    lr_data_list = [lr_data]
+
+                stats_path = os.path.join(out_dir, split, f"{var_name}_statistics.png")
+                stats = plot_statistics(hr_data_list, lr_data_list, stats_path, var_name)
+                if stats:
+                    all_stats.append(stats)
 
             except Exception as e:
                 print(f"[Error] 处理 {var_name} 失败: {e}")
+
+    return all_stats
 
 
 def main():
@@ -465,13 +710,39 @@ def main():
 
     print("=" * 60)
 
-    # 处理各个划分
+    # 处理各个划分并收集统计信息
+    all_split_stats = {}
     for split in args.splits:
-        process_split(args.dataset_root, split, out_dir, hr_lat, hr_lon, lr_lat, lr_lon)
+        stats = process_split(args.dataset_root, split, out_dir, hr_lat, hr_lon, lr_lat, lr_lon)
+        if stats:
+            all_split_stats[split] = stats
+
+    # 生成全局统计汇总图（合并所有 split 的第一个变量统计）
+    if all_split_stats:
+        # 按变量合并统计
+        var_stats_combined = {}
+        for split, stats_list in all_split_stats.items():
+            for s in stats_list:
+                var_name = s['var_name']
+                if var_name not in var_stats_combined:
+                    var_stats_combined[var_name] = s
+                # 可以选择合并或只用第一个 split 的数据
+
+        if var_stats_combined:
+            summary_path = os.path.join(out_dir, 'statistics_summary.png')
+            plot_summary_statistics(
+                list(var_stats_combined.values()),
+                summary_path,
+                dataset_name=os.path.basename(args.dataset_root)
+            )
 
     print("\n" + "=" * 60)
     print("可视化检查完成！")
     print(f"图片保存在: {out_dir}")
+    print("\n生成的图片类型：")
+    print("  - {var}_compare.png    : HR vs LR 空间对比图")
+    print("  - {var}_statistics.png : 均值/方差时序 + 直方图")
+    print("  - statistics_summary.png : 全局统计汇总")
     print("=" * 60)
 
 

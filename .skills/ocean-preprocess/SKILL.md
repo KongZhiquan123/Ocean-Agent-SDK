@@ -1,7 +1,7 @@
 ---
 name: ocean-preprocess
 description: 海洋数据预处理技能 - 专用于超分辨率场景的NC到NPY数据格式转换
-version: 2.9.0
+version: 3.0.0
 author: kongzhiquan
 contributors: leizheng
 last_modified: 2026-02-04
@@ -9,6 +9,12 @@ last_modified: 2026-02-04
 
 <!--
 Changelog:
+  - 2026-02-04 kongzhiquan: v3.0.0
+    - 重写工具调用流程，完整实现 4 阶段强制确认
+    - 新增状态追踪机制，防止 Agent 失忆
+    - 报告工具新增 user_confirmation 参数
+    - 更新输出目录结构（逐时间步保存）
+    - 可视化工具新增统计分布图（均值/方差时序、直方图）
   - 2026-02-04 leizheng: v2.9.0
     - 工具层面实现4阶段强制停止点
     - 阶段1: awaiting_variable_selection - 研究变量选择
@@ -19,42 +25,15 @@ Changelog:
   - 2026-02-04 leizheng: v2.8.0
     - 强化变量选择流程，研究变量/静态变量/掩码变量必须由用户选择
     - 禁止行为清单分类整理（变量选择/参数决策/流程控制/错误处理）
-  - 2026-02-04 leizheng: v2.7.0
-    - 新增"错误处理原则"章节，明确禁止自动重试
-    - 修复 Agent 自动决策导致的问题
   - 2026-02-04 kongzhiquan: v2.6.0
     - 新增报告生成工具 ocean_generate_report
     - 报告分析部分由 Agent 自行填写（占位符机制）
-    - 更新 SKILL.md 添加报告生成流程说明
+  - 2026-02-04 leizheng: v2.6.0
+    - 支持粗网格模式（数值模型方式）
+    - 支持从动态文件中提取静态变量
   - 2026-02-03 leizheng: v2.5.0
     - ocean_preprocess_full 集成下采样和可视化
     - 完整流程变为 A→B→C→D→E 五步
-    - scale 参数变为必须
-  - 2026-02-03 leizheng: v2.4.0
-    - 新增裁剪功能（h_slice/w_slice/scale 参数）
-    - 新增下采样工具 ocean_downsample
-    - 新增可视化工具 ocean_visualize
-    - 新增指标检测工具 ocean_metrics
-    - 更新完整流程文档
-  - 2026-02-03 leizheng: v2.3.0
-    - 支持 nc_files 参数明确指定文件列表
-    - 支持单个文件路径自动转换为目录模式
-    - 逐文件检测时间维度，识别静态文件混入
-    - 更新禁止行为清单
-  - 2026-02-03 leizheng: v2.2.1
-    - 添加强制确认机制（必须同时提供 mask_vars 和 stat_vars）
-  - 2026-02-03 leizheng: v2.2.0
-    - 添加禁止自动决策原则
-    - 添加禁止行为清单
-    - 移除硬编码默认值要求
-  - 2026-02-02 leizheng: v2.1.0
-    - 添加警告优先原则
-    - 添加警告处理指南
-  - 2026-02-02 leizheng: v2.0.0
-    - 完整重写 SKILL.md
-    - 添加工具调用流程
-    - 添加错误解释指南
-    - 添加参数速查表
 -->
 
 # 海洋数据预处理技能
@@ -63,512 +42,477 @@ Changelog:
 
 1. **数据预处理定义**：不破坏原有数据结构的任何信息，不做标准化，只做格式转换
 
-2. **⚠️ 警告优先原则（重要）**：
-   - 在分析过程中如果有**任何不确定或异常**的地方，**必须先询问用户**再继续执行
-   - **绝不能**在有严重警告的情况下直接执行处理
-   - 即使工具返回 `pass` 状态，如果 `warnings` 中有内容，也要向用户展示并确认
+2. **⚠️ 4 阶段强制确认原则（v3.0 核心）**：
+   - 工具会在 4 个关键节点**强制停止**，等待用户确认
+   - Agent **禁止跳过任何阶段**，禁止猜测用户意图
+   - 每个阶段都有明确的输入输出，形成完整的状态链
 
-3. **⚠️ 禁止自动决策原则（v2.2 新增）**：
+3. **⚠️ 状态追踪原则（防止失忆）**：
+   - Agent 必须维护一个**会话状态对象**，记录每个阶段的用户选择
+   - 每次工具调用时，必须传入之前收集的所有参数
+   - 最终生成报告时，必须传入完整的 `user_confirmation` 对象
+
+4. **⚠️ 禁止自动决策原则**：
    - **不得代替用户做任何数据处理决策**
-   - 以下事项必须由用户明确确认：
-     - NaN/Inf 值如何处理（是否允许、如何填充）
-     - 掩码变量选择（哪些是掩码、哪个是主掩码）
-     - 静态变量选择（哪些需要保存）
-     - 坐标范围验证（是否需要、范围是多少）
-   - 禁止使用硬编码默认值（如 "lon_rho", "mask_rho"）
    - 所有变量名必须从数据中检测到或由用户明确指定
-
-4. **⚠️ 路径灵活处理原则（v2.3 新增）**：
-   - nc_folder 可以是目录路径，也可以是单个文件路径
-   - 如果提供单个文件路径，自动转换为目录 + 文件列表模式
-   - 支持 nc_files 参数明确指定要处理的文件
-   - **检测静态文件混入**：自动识别目录中没有时间维度的文件
-
-5. **需要暂停并询问用户的情况**：
-   - 形状不匹配（动态数据与静态数据维度不同）
-   - 缺少掩码变量
-   - NaN/Inf 值存在（即使 allow_nan=true）
-   - 掩码非二值
-   - 坐标范围异常
-   - 任何 warnings 数组中的内容
-   - 用户未明确指定 mask_vars 或 stat_vars 时
-   - **检测到静态文件混入动态数据目录时**
+   - 禁止使用硬编码默认值（如 "lon_rho", "mask_rho"）
 
 ---
 
 ## 可用工具
 
-| 工具名 | 用途 | 什么时候用 |
-|--------|------|-----------|
-| `ocean_preprocess_full` | 一键执行完整流程 A→B→C→D→E（含下采样+可视化） | **推荐**，信息完整时直接用这个 |
-| `ocean_generate_report` | 生成预处理报告（含占位符） | 预处理完成后生成报告，**必须由 Agent 填写分析** |
-| `ocean_downsample` | HR→LR 下采样 | 单独执行下采样（full 已集成） |
-| `ocean_visualize` | HR vs LR 可视化对比 | 单独生成可视化（full 已集成） |
-| `ocean_metrics` | 质量指标检测 | 计算 SSIM、Relative L2 等指标 |
-| `ocean_inspect_data` | 只查看数据，不处理 | 用户只想看看有什么变量时 |
-| `ocean_validate_tensor` | 只验证张量形状 | 一般不单独用 |
-| `ocean_convert_npy` | 只执行转换 | 一般不单独用 |
+| 工具名 | 用途 | 何时使用 |
+|--------|------|----------|
+| `ocean_preprocess_full` | 完整流程 A→B→C→D→E | **主工具**，4 阶段交互式执行 |
+| `ocean_generate_report` | 生成预处理报告 | 预处理完成后，**必须**生成报告 |
+| `ocean_inspect_data` | 只查看数据 | 用户只想看变量列表时 |
+| `ocean_downsample` | HR→LR 下采样 | 单独执行（full 已集成） |
+| `ocean_visualize` | 可视化对比+统计分布 | 单独执行（full 已集成） |
+| `ocean_metrics` | 质量指标 | 单独执行（full 已集成） |
 
 ---
 
-## 工具调用流程（重要）
+## ⭐ 完整工作流程（4 阶段 + 报告）
 
-### 第一步：收集必需信息
+### 流程总览
 
-在调用任何工具前，你必须确保用户提供了以下信息：
+```
+用户请求 → 阶段1 → 阶段2 → 阶段3 → 阶段4 → 执行 → 报告生成
+              ↓        ↓        ↓        ↓
+           研究变量  静态/掩码  处理参数  最终确认
+```
 
-| 信息 | 对应参数 | 必需 | 如果缺失，追问示例 |
-|------|----------|------|-------------------|
-| 数据目录 | `nc_folder` | ✅ 是 | "请提供 NC 数据文件所在的目录路径" |
-| 研究变量 | `dyn_vars` | ✅ 是 | "请指定您要研究的动态变量（如 uo, vo）" |
-| 输出目录 | `output_base` | ✅ 是 | "请指定处理结果的输出目录" |
-| 静态文件 | `static_file` | 否 | 可选，有则更完整 |
-| 文件匹配模式 | `dyn_file_pattern` | 否 | 默认 `*.nc` |
+### 状态追踪对象（Agent 必须维护）
 
-**追问规则**：缺少必需信息时，先追问，不要猜测。
+在整个流程中，Agent 必须在内部维护一个状态对象，记录每个阶段的用户选择：
 
----
+```
+会话状态 = {
+  // 基础信息（用户首次提供）
+  nc_folder: "/data/ocean",
+  output_base: "/output/dataset",
 
-### 第二步：调用 ocean_preprocess_full
+  // 阶段1 收集
+  dyn_vars: null,           // 用户选择后填入
 
-信息完整后，调用工具：
+  // 阶段2 收集
+  mask_vars: null,
+  stat_vars: null,
+  lon_var: null,
+  lat_var: null,
 
-```json
-{
-  "nc_folder": "/用户提供的数据目录",
-  "output_base": "/用户提供的输出目录",
-  "dyn_vars": ["uo", "vo"]
+  // 阶段3 收集
+  scale: null,
+  downsample_method: null,
+  train_ratio: null,
+  valid_ratio: null,
+  test_ratio: null,
+  h_slice: null,
+  w_slice: null,
+
+  // 阶段4 收集
+  user_confirmed: false
 }
 ```
 
-**⚠️ 重要**：第一次调用时**不要**提供 `mask_vars` 和 `stat_vars`！
-- 工具会分析数据并返回 `awaiting_confirmation` 状态
-- 然后你必须向用户展示检测到的变量，等待用户确认
-- 只有用户确认后，第二次调用时才能提供这些参数
-
 ---
 
-### 第三步：处理工具返回结果
+## 阶段 0：启动分析
 
-#### 情况 A：返回 `overall_status: "awaiting_confirmation"`
+### 触发条件
+用户请求预处理数据，提供了数据目录和输出目录。
 
-**含义**：工具检测到了疑似掩码变量或坐标变量，需要用户确认。
+### Agent 行为
 
-**返回结构**：
+1. **追问缺失的基础信息**（如果用户没提供）：
+   ```
+   请提供以下信息：
+   1. NC 数据文件所在目录是？
+   2. 处理结果输出到哪个目录？
+   ```
+
+2. **首次调用工具**（只传基础参数）：
+   ```json
+   {
+     "nc_folder": "/data/ocean",
+     "output_base": "/output/dataset"
+   }
+   ```
+
+   **⚠️ 注意**：首次调用时**不要传** `dyn_vars`，让工具分析数据后返回候选列表。
+
+### 工具返回
 ```json
 {
-  "overall_status": "awaiting_confirmation",
-  "message": "数据分析完成，请用户确认变量分类...",
+  "overall_status": "awaiting_variable_selection",
+  "message": "请选择研究变量",
   "step_a": {
-    "suspected_masks": ["mask_rho", "mask_u", "mask_v"],
-    "suspected_coordinates": ["lon_rho", "lat_rho", "h", "angle"],
-    "dynamic_vars_candidates": ["uo", "vo", "temp", "salt"]
+    "dynamic_vars_candidates": ["uo", "vo", "temp", "salt", "chl"],
+    "static_vars_found": ["lon", "lat", "h"],
+    "mask_vars_found": ["mask"]
   }
 }
 ```
 
-**你必须做的事**：
+---
 
-1. 向用户展示检测到的变量分类：
-```
-我已分析数据，检测到以下变量：
+## 阶段 1：研究变量选择
 
-【动态变量候选】（可作为研究目标）
-- uo, vo, temp, salt
+### 触发条件
+工具返回 `overall_status: "awaiting_variable_selection"`
 
-【疑似掩码变量】
-- mask_rho, mask_u, mask_v
+### Agent 必须做的事
 
-【疑似坐标/静态变量】
-- lon_rho, lat_rho, h, angle
+1. **向用户展示检测到的动态变量**：
+   ```
+   我已分析您的数据，检测到以下动态变量候选：
 
-请逐一确认：
-1. 您指定的研究变量 uo, vo 是否正确？
-2. 掩码变量应该使用哪些？（检测到: mask_rho, mask_u, mask_v）
-3. 需要保存哪些静态变量？（检测到: lon_rho, lat_rho, h, angle）
-4. NaN/Inf 值如何处理？
-   - 数据中是否可能有 NaN？
-   - 如果有，是否允许保留？
-```
+   【可选的研究变量】
+   - uo (东向流速)
+   - vo (北向流速)
+   - temp (温度)
+   - salt (盐度)
+   - chl (叶绿素)
 
-2. **必须等待用户逐一确认每个问题**，不得自动决定
+   请告诉我您要研究哪些变量？
+   ```
 
-3. **用户确认后，再次调用 ocean_preprocess_full，必须同时提供所有参数**：
+2. **等待用户回复**，记录选择：
+   ```
+   用户: 我要研究 uo 和 vo
 
-```json
-{
-  "nc_folder": "/data/ocean",
-  "output_base": "/output/processed",
-  "dyn_vars": ["uo", "vo"],
-  "static_file": "/data/ocean/grid.nc",
-  "mask_vars": ["mask_rho", "mask_u", "mask_v"],
-  "stat_vars": ["lon_rho", "lat_rho", "h", "angle", "mask_rho"],
-  "lon_var": "lon_rho",
-  "lat_var": "lat_rho",
-  "allow_nan": false
-}
-```
+   → 更新状态: dyn_vars = ["uo", "vo"]
+   ```
 
-**重要**：
-- 必须**同时**提供 `mask_vars` 和 `stat_vars`，否则工具会返回错误
-- `lon_var` 和 `lat_var` 必须是用户确认的或从数据中检测到的
-- **禁止使用硬编码默认值**
+3. **再次调用工具**，传入已收集的参数：
+   ```json
+   {
+     "nc_folder": "/data/ocean",
+     "output_base": "/output/dataset",
+     "dyn_vars": ["uo", "vo"]
+   }
+   ```
 
 ---
 
-#### 情况 B：返回 `overall_status: "pass"`
+## 阶段 2：静态/掩码变量选择
 
-**含义**：处理成功完成。
+### 触发条件
+工具返回 `overall_status: "awaiting_static_selection"`
 
-**⚠️ 重要：检查 warnings**
-
-即使状态是 `pass`，你也必须检查返回结果中的 `warnings` 数组。如果有警告，**必须向用户展示并确认是否接受**：
-
+### 工具返回内容
 ```json
 {
-  "overall_status": "pass",
-  "step_c": {
-    "warnings": ["形状不匹配: 动态数据 (2041, 4320) 与静态数据 (100, 200)"],
-    "errors": []
+  "overall_status": "awaiting_static_selection",
+  "message": "请确认静态变量和掩码变量",
+  "step_a": {
+    "static_vars_found": ["lon", "lat", "h", "angle"],
+    "mask_vars_found": ["mask", "mask_u", "mask_v"],
+    "coord_vars_detected": {
+      "lon_candidates": ["lon", "longitude"],
+      "lat_candidates": ["lat", "latitude"]
+    }
   }
 }
 ```
 
-**有警告时你必须做的**：
+### Agent 必须做的事
 
-1. **不要**直接说"处理完成"
-2. **必须**向用户展示所有警告
-3. **必须**询问用户是否接受这些警告继续
-4. 等用户确认后才能报告处理完成
+1. **向用户展示检测结果并逐一询问**：
+   ```
+   检测到以下变量，请逐一确认：
 
-示例回复：
-```
-处理已完成，但检测到以下警告：
+   【1. 静态变量】（会保存到 static_variables/ 目录）
+   检测到: lon, lat, h, angle
+   → 您需要保存哪些？
 
-⚠️ 警告信息：
-1. 形状不匹配: 动态数据 (2041×4320) 与静态数据 (100×200) 形状不同
-2. 缺少掩码: 未找到 mask_u 掩码变量
+   【2. 掩码变量】（用于区分海洋/陆地）
+   检测到: mask, mask_u, mask_v
+   → 使用哪些作为掩码？
 
-这些警告可能影响后续使用。请确认：
-- 形状不匹配是否是预期的？（动态和静态数据来自不同分辨率？）
-- 缺少 mask_u 是否会影响您的分析？
+   【3. 坐标变量】（用于可视化）
+   经度候选: lon, longitude
+   纬度候选: lat, latitude
+   → 使用哪个作为经度？哪个作为纬度？
+   ```
 
-请回复"确认接受"继续，或告诉我需要如何处理。
-```
+2. **等待用户逐一回复**：
+   ```
+   用户: 静态变量保存 lon, lat；掩码用 mask；坐标就用 lon 和 lat
 
-**无警告时**：
-```
-预处理完成！
+   → 更新状态:
+     stat_vars = ["lon", "lat"]
+     mask_vars = ["mask"]
+     lon_var = "lon"
+     lat_var = "lat"
+   ```
 
-输出目录结构：
-/output/processed/
-├── target_variables/
-│   ├── uo.npy
-│   └── vo.npy
-└── static_variables/
-    ├── 00_lon_rho.npy
-    ├── 10_lat_rho.npy
-    └── 90_mask_rho.npy
-
-所有验证检查已通过，无警告。
-```
+3. **再次调用工具**：
+   ```json
+   {
+     "nc_folder": "/data/ocean",
+     "output_base": "/output/dataset",
+     "dyn_vars": ["uo", "vo"],
+     "stat_vars": ["lon", "lat"],
+     "mask_vars": ["mask"],
+     "lon_var": "lon",
+     "lat_var": "lat"
+   }
+   ```
 
 ---
 
-#### 情况 C：返回 `overall_status: "error"`
+## 阶段 3：处理参数确认
 
-**含义**：处理过程中出错。
+### 触发条件
+工具返回 `overall_status: "awaiting_parameters"`
 
-**返回结构**：
+### 工具返回内容
 ```json
 {
-  "overall_status": "error",
-  "message": "Step C 失败",
-  "step_c": {
-    "errors": ["动态变量 'uo' 含有非法值: NaN=1234, Inf=0"],
-    "warnings": [...]
+  "overall_status": "awaiting_parameters",
+  "message": "请确认处理参数",
+  "data_info": {
+    "time_steps": 365,
+    "height": 681,
+    "width": 1440
+  },
+  "crop_recommendation": {
+    "needs_crop": true,
+    "reason": "H=681 不能被 4 整除",
+    "suggested_h_slice": "0:680",
+    "suggested_w_slice": null
   }
 }
 ```
 
-**你必须做的**：从 `errors` 数组中提取错误信息，向用户清晰解释。
+### Agent 必须做的事
+
+1. **向用户展示数据信息和推荐参数**：
+   ```
+   数据信息：
+   - 时间步数: 365
+   - 空间尺寸: 681 × 1440
+
+   请确认以下处理参数：
+
+   【1. 下采样设置】
+   - scale (下采样倍数): ? (如 4 表示缩小为 1/4)
+   - method (插值方法): ? (推荐 area)
+     可选: area(推荐), cubic, linear, nearest, lanczos
+
+   【2. 数据集划分】
+   - 训练集比例: ? (如 0.7 = 70%)
+   - 验证集比例: ? (如 0.15 = 15%)
+   - 测试集比例: ? (如 0.15 = 15%)
+
+   【3. 裁剪设置】
+   ⚠️ 系统检测: H=681 不能被 4 整除
+   → 推荐裁剪: h_slice="0:680"
+
+   请告诉我您的选择，或接受推荐值。
+   ```
+
+2. **等待用户回复**：
+   ```
+   用户: scale=4，用 area 方法，train 70% valid 15% test 15%，裁剪用推荐的
+
+   → 更新状态:
+     scale = 4
+     downsample_method = "area"
+     train_ratio = 0.7
+     valid_ratio = 0.15
+     test_ratio = 0.15
+     h_slice = "0:680"
+   ```
+
+3. **再次调用工具**：
+   ```json
+   {
+     "nc_folder": "/data/ocean",
+     "output_base": "/output/dataset",
+     "dyn_vars": ["uo", "vo"],
+     "stat_vars": ["lon", "lat"],
+     "mask_vars": ["mask"],
+     "lon_var": "lon",
+     "lat_var": "lat",
+     "scale": 4,
+     "downsample_method": "area",
+     "train_ratio": 0.7,
+     "valid_ratio": 0.15,
+     "test_ratio": 0.15,
+     "h_slice": "0:680"
+   }
+   ```
 
 ---
 
-## 错误解释指南
+## 阶段 4：执行确认
 
-当工具返回错误时，按以下方式向用户解释：
+### 触发条件
+工具返回 `overall_status: "awaiting_execution"`
 
-### 路径/文件错误（最常见）
-
-| 错误关键词 | 向用户解释 |
-|-----------|-----------|
-| `没有找到任何动态变量` | "您提供的数据文件中没有找到带时间维度的变量。**这很可能是因为您把静态文件路径填到了动态数据目录**。动态数据文件应该包含如 uo, vo, temp 等随时间变化的变量。" |
-| `研究变量不在动态变量候选列表中` | "您指定的研究变量在数据文件的动态变量中不存在。请检查变量名是否拼写正确，或者查看工具返回的可用动态变量列表。" |
-| `未找到匹配的动态数据文件` | "在指定目录下没有找到 NC 文件。请检查：1) 目录路径是否正确；2) 文件匹配模式是否匹配您的文件名。" |
-
-### 数据质量错误
-
-| 错误关键词 | 向用户解释 |
-|-----------|-----------|
-| `含有非法值: NaN=xxx` | "检测到变量中存在 NaN（缺失值），共 xxx 个。这可能是数据源问题。如果这是预期的（如陆地区域填充），可以设置 allow_nan=true 跳过检查。" |
-| `含有非法值: Inf=xxx` | "检测到变量中存在 Inf（无穷大），共 xxx 个。这通常是数值计算溢出导致，请检查数据源。" |
-| `坐标变量 'xxx' 包含 NaN` | "坐标变量中存在 NaN，这是严重错误。坐标不允许有缺失值，请检查静态文件是否损坏。" |
-
-### 维度错误
-
-| 错误关键词 | 向用户解释 |
-|-----------|-----------|
-| `有零长度维度` | "变量的某个维度长度为 0，数据是空的。请检查文件是否完整，或文件匹配模式是否正确。" |
-| `维度数量错误: 实际 2D` | "该变量是 2D，但动态变量应该是 3D [时间,高度,宽度] 或 4D [时间,深度,高度,宽度]。请确认这是否是动态变量。" |
-| `维度数量错误: 实际 5D` | "该变量是 5D，超出支持范围（最多 4D）。可能需要先降维处理。" |
-
-### 静态文件错误
-
-| 错误关键词 | 向用户解释 |
-|-----------|-----------|
-| `静态文件不存在` | "指定的静态文件路径不存在，请检查路径是否正确。" |
-| `掩码形状不匹配` | "掩码变量的形状与动态数据的空间维度不一致，无法正确应用掩码。请检查静态文件是否与动态数据匹配。" |
-
----
-
-## ⚠️ 警告处理指南（必读）
-
-**核心原则**：有警告时必须暂停并询问用户，不能直接继续。
-
-### 需要暂停并询问的警告类型
-
-| 警告类型 | 警告关键词 | 必须询问用户 |
-|----------|-----------|-------------|
-| 形状不匹配 | `形状不匹配`、`shape mismatch` | ✅ 是 |
-| 缺少掩码 | `未找到掩码`、`缺少 mask` | ✅ 是 |
-| NaN 值存在 | `含有 NaN`、`NaN=` | ✅ 是（即使 allow_nan=true） |
-| 掩码非二值 | `掩码不是二值`、`not binary` | ✅ 是 |
-| 坐标范围异常 | `超出范围`、`out of range` | ✅ 是 |
-| 时间不单调 | `时间不单调`、`not monotonic` | ✅ 是 |
-| 启发式验证失败 | `陆地零值比例`、`海洋零值比例` | ✅ 是 |
-
-### 如何向用户展示警告
-
-```
-⚠️ 处理过程中发现以下警告：
-
-1. **形状不匹配**: 动态数据 (2041×4320) 与静态数据 (100×200) 形状不同
-   - 这意味着动态数据和静态数据来自不同分辨率的网格
-   - 可能导致掩码无法正确对应到数据点
-
-2. **缺少掩码**: 未找到 mask_u 掩码变量
-   - u 方向的流速数据将没有陆地掩码保护
-   - 可能影响后续的超分辨率训练
-
-这些警告需要您确认是否继续：
-- 如果这是预期的情况，请回复"确认继续"
-- 如果需要更正，请告诉我正确的文件路径或配置
-```
-
-### 用户可能的回复及处理
-
-| 用户回复 | 你应该做的 |
-|----------|-----------|
-| "确认继续"/"没关系"/"可以" | 记录用户已确认，报告最终结果 |
-| "不对，应该是..."/"重新处理" | 根据用户新提供的信息重新调用工具 |
-| "这是什么意思？" | 详细解释该警告的含义和可能影响 |
-
----
-
-## 单独使用 ocean_inspect_data
-
-当用户只想查看数据有什么变量时：
-
+### 工具返回内容
 ```json
 {
-  "nc_folder": "/data/ocean",
-  "static_file": "/data/ocean/grid.nc"
+  "overall_status": "awaiting_execution",
+  "message": "所有参数已确认，请确认执行",
+  "execution_preview": {
+    "input": "/data/ocean (365 files)",
+    "output": "/output/dataset",
+    "research_vars": ["uo", "vo"],
+    "static_vars": ["lon", "lat"],
+    "mask_vars": ["mask"],
+    "scale": 4,
+    "split": "70% / 15% / 15%",
+    "crop": "H: 0:680, W: 全部"
+  }
 }
 ```
 
-**返回**：
-```json
-{
-  "status": "success",
-  "file_count": 365,
-  "dynamic_vars_candidates": ["uo", "vo", "temp", "salt"],
-  "suspected_masks": ["mask_rho", "mask_u"],
-  "suspected_coordinates": ["lon_rho", "lat_rho", "h"]
-}
-```
+### Agent 必须做的事
 
-**你应该做的**：向用户展示变量列表和分类建议。
+1. **向用户展示执行预览**：
+   ```
+   ═══════════════════════════════════════
+   ✓ 所有参数已确认，准备执行预处理
+   ═══════════════════════════════════════
 
----
+   【执行预览】
+   • 输入: /data/ocean (365 个文件)
+   • 输出: /output/dataset
+   • 研究变量: uo, vo
+   • 静态变量: lon, lat
+   • 掩码变量: mask
+   • 下采样: 4× (area 方法)
+   • 数据集划分: train 70% / valid 15% / test 15%
+   • 裁剪: H 方向 0:680
 
-## 常见用户问法处理
+   确认执行吗？(回复"确认"开始处理)
+   ```
 
-| 用户说 | 缺什么 | 你的回应 |
-|--------|--------|---------|
-| "帮我预处理海洋数据" | 全缺 | 追问数据目录、研究变量、输出目录 |
-| "处理 /data/ocean 目录" | 变量、输出 | 追问研究变量、输出目录 |
-| "预处理 uo vo 变量" | 目录、输出 | 追问数据目录、输出目录 |
-| "把 /data 的 uo vo 输出到 /out" | 无 | 信息完整，调用工具 |
-| "看看 /data/ocean 有什么变量" | - | 调用 ocean_inspect_data |
+2. **等待用户确认**：
+   ```
+   用户: 确认
 
----
+   → 更新状态: user_confirmed = true
+   ```
 
-## 参数速查表
-
-### ocean_preprocess_full
-
-| 参数 | 类型 | 必需 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| nc_folder | string | ✅ | - | NC 文件目录（也可以是单个文件路径，会自动转换） |
-| nc_files | string[] | 否 | - | 明确指定要处理的文件列表（支持通配符如 `ocean_*.nc`） |
-| output_base | string | ✅ | - | 输出目录 |
-| dyn_vars | string[] | ✅ | - | 研究变量 |
-| static_file | string | 否 | - | 静态文件路径 |
-| dyn_file_pattern | string | 否 | "*.nc" | 文件匹配模式（当 nc_files 未指定时使用） |
-| mask_vars | string[] | ⚠️ 推荐 | 从数据检测 | 掩码变量（必须用户确认） |
-| stat_vars | string[] | ⚠️ 推荐 | 从数据检测 | 静态变量（必须用户确认） |
-| lon_var | string | ⚠️ 推荐 | 从数据检测 | 经度变量名（禁止硬编码默认值） |
-| lat_var | string | ⚠️ 推荐 | 从数据检测 | 纬度变量名（禁止硬编码默认值） |
-| allow_nan | boolean | 否 | false | 允许 NaN/Inf（必须用户确认） |
-| lon_range | [min,max] | 否 | - | 经度范围验证 |
-| lat_range | [min,max] | 否 | - | 纬度范围验证 |
-
-**⚠️ 注意**：标注为"推荐"的参数，如果未从数据中检测到，必须由用户明确提供。禁止使用硬编码默认值！
-
-### nc_files 参数使用示例
-
-```json
-// 处理目录中所有 NC 文件
-{ "nc_folder": "/data/ocean" }
-
-// 只处理特定文件
-{ "nc_folder": "/data/ocean", "nc_files": ["ocean_avg_001.nc", "ocean_avg_002.nc"] }
-
-// 使用通配符
-{ "nc_folder": "/data/ocean", "nc_files": ["ocean_avg_*.nc"] }
-
-// 排除静态文件（只处理动态文件）
-{ "nc_folder": "/data/ocean", "nc_files": ["ocean_avg_*.nc"], "static_file": "/data/ocean/grid.nc" }
-```
-
-### ocean_inspect_data
-
-| 参数 | 类型 | 必需 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| nc_folder | string | ✅ | - | NC 文件目录 |
-| static_file | string | 否 | - | 静态文件路径 |
-| dyn_file_pattern | string | 否 | "*.nc" | 文件匹配模式 |
+3. **最终调用工具**，传入所有参数 + `user_confirmed: true`：
+   ```json
+   {
+     "nc_folder": "/data/ocean",
+     "output_base": "/output/dataset",
+     "dyn_vars": ["uo", "vo"],
+     "stat_vars": ["lon", "lat"],
+     "mask_vars": ["mask"],
+     "lon_var": "lon",
+     "lat_var": "lat",
+     "scale": 4,
+     "downsample_method": "area",
+     "train_ratio": 0.7,
+     "valid_ratio": 0.15,
+     "test_ratio": 0.15,
+     "h_slice": "0:680",
+     "user_confirmed": true
+   }
+   ```
 
 ---
 
-## 检查清单
+## 阶段 5：执行完成 → 生成报告
 
-执行预处理前确认：
-- [ ] 用户提供了数据**目录**路径（不是文件路径！）
-- [ ] 用户明确指定了研究变量（不要猜测）
-- [ ] 用户提供了输出目录路径
-- [ ] 如果有静态文件，已获取路径
+### 触发条件
+工具返回 `overall_status: "pass"`
 
-收到 awaiting_confirmation 后确认：
-- [ ] 已向用户展示疑似变量
-- [ ] 用户已确认掩码变量和静态变量
-- [ ] 用户已确认 NaN 处理方式
-- [ ] 第二次调用时**同时**提供了所有必要参数
+### Agent 必须做的事
+
+1. **检查警告**：
+   - 如果返回结果中有 `warnings`，必须向用户展示
+   - 等待用户确认后再继续
+
+2. **调用报告生成工具**，传入 `user_confirmation` 对象：
+   ```json
+   {
+     "dataset_root": "/output/dataset",
+     "user_confirmation": {
+       "stage1_research_vars": {
+         "selected": ["uo", "vo"],
+         "confirmed_at": "2026-02-04 10:30:00"
+       },
+       "stage2_static_mask": {
+         "static_vars": ["lon", "lat"],
+         "mask_vars": ["mask"],
+         "coord_vars": { "lon": "lon", "lat": "lat" },
+         "confirmed_at": "2026-02-04 10:31:00"
+       },
+       "stage3_parameters": {
+         "scale": 4,
+         "downsample_method": "area",
+         "train_ratio": 0.7,
+         "valid_ratio": 0.15,
+         "test_ratio": 0.15,
+         "h_slice": "0:680",
+         "crop_recommendation": "H=681 不能被 4 整除，建议 0:680",
+         "confirmed_at": "2026-02-04 10:32:00"
+       },
+       "stage4_execution": {
+         "confirmed": true,
+         "confirmed_at": "2026-02-04 10:33:00",
+         "execution_started_at": "2026-02-04 10:33:05"
+       }
+     }
+   }
+   ```
+
+3. **读取生成的报告**，找到占位符：
+   ```markdown
+   ## 7. 分析和建议
+
+   <!-- AGENT_ANALYSIS_PLACEHOLDER ... -->
+   ```
+
+4. **分析数据并填写专业分析**（参考报告中的指标数据）
+
+5. **替换占位符**，保存报告
+
+6. **向用户展示报告摘要**：
+   ```
+   ✅ 预处理完成！
+
+   【输出目录】
+   /output/dataset/
+   ├── train/hr/uo/, vo/  (255 个时间步)
+   ├── train/lr/...
+   ├── valid/...
+   ├── test/...
+   ├── static_variables/
+   └── preprocessing_report.md  ← 报告已生成
+
+   【质量指标摘要】
+   • uo: SSIM=0.9234, Relative L2=3.45%
+   • vo: SSIM=0.9187, Relative L2=4.89%
+
+   详细分析请查看报告文件。
+   ```
 
 ---
 
-## ⛔ 禁止行为清单（v2.3 更新）
+## 输出目录结构（v3.0 新格式）
 
-以下行为是**严格禁止**的：
-
-| 禁止行为 | 原因 | 正确做法 |
-|----------|------|----------|
-| 使用硬编码变量名（如 lon_rho, mask_rho） | 不同数据集变量名不同 | 从数据检测或让用户指定 |
-| 自动决定 NaN 处理方式 | 用户对数据质量有不同要求 | 询问用户是否允许 NaN |
-| 自动选择主掩码变量 | 不同场景需要不同掩码 | 让用户确认或告知选择 |
-| 在有警告时继续处理 | 可能产生错误结果 | 展示警告并等待确认 |
-| 自动推导 mask_u/mask_v | 推导方式可能不适合所有情况 | 让用户明确指定 |
-| **收到 awaiting_confirmation 后直接继续处理** | 用户尚未确认变量配置 | **必须等待用户逐一确认** |
-| **猜测用户要研究的变量** | 用户意图不明确 | 询问用户要研究哪些动态变量 |
-| **第一次调用就提供 mask_vars/stat_vars** | 跳过了用户确认流程 | 第一次不提供，等用户确认后第二次再提供 |
-| **检测到静态文件混入时不告知用户** | 可能导致处理错误 | 展示混入的文件列表，询问如何处理 |
-
----
-
-## ⚠️ 强制确认机制（v2.2.1 新增）
-
-**工具行为**：
-- 如果调用 `ocean_preprocess_full` 时**没有同时提供** `mask_vars` 和 `stat_vars`
-- 工具会**强制返回** `awaiting_confirmation` 状态
-- 即使数据分析完全成功，也不会继续处理
-
-**Agent 必须做的事**：
-1. 第一次调用只提供 `nc_folder`, `output_base`, `dyn_vars`
-2. 收到 `awaiting_confirmation` 后，向用户展示：
-   - 检测到的动态变量候选
-   - 检测到的疑似掩码变量
-   - 检测到的疑似坐标变量
-3. **逐一询问用户**：
-   - "您要研究的变量是 xxx 吗？"
-   - "掩码变量使用 xxx 吗？"
-   - "需要保存哪些静态变量？"
-   - "是否允许数据中有 NaN 值？"
-   - "数据集划分比例是多少？（train/valid/test）"
-   - "需要裁剪数据吗？如果需要，请指定 h_slice 和 w_slice"
-4. **等待用户逐一确认**
-5. 用户确认后，第二次调用时提供所有确认的参数
-
----
-
-## 完整超分预处理流程（v2.5 更新）
-
-### 流程概览
-
-`ocean_preprocess_full` 现在已集成完整的 5 步流程：
-
-```
-NC 文件 → [Step A: 数据检查]
-              ↓
-         [Step B: 张量验证]
-              ↓
-         [Step C: 转换+裁剪+划分] → HR 数据
-              ↓
-         [Step D: 下采样] → LR 数据
-              ↓
-         [Step E: 可视化检查] → 对比图
-```
-
-### 一键执行完整流程
-
-使用 `ocean_preprocess_full` 工具，提供必要参数后自动完成所有步骤：
-
-```json
-{
-  "nc_folder": "/data/ocean",
-  "output_base": "/output/dataset",
-  "dyn_vars": ["chl", "no3"],
-  "user_confirmed": true,
-  "train_ratio": 0.7,
-  "valid_ratio": 0.15,
-  "test_ratio": 0.15,
-  "h_slice": "0:680",
-  "w_slice": "0:1440",
-  "scale": 4,
-  "downsample_method": "area"
-}
-```
-
-**输出目录结构**：
 ```
 /output/dataset/
 ├── train/
 │   ├── hr/
-│   │   ├── chl.npy
-│   │   └── no3.npy
+│   │   ├── uo/               # 每个变量一个目录
+│   │   │   ├── 000000.npy    # 时间步0, 形状 [H, W]
+│   │   │   ├── 000001.npy    # 时间步1
+│   │   │   └── ...
+│   │   └── vo/
+│   │       └── ...
 │   └── lr/
-│       ├── chl.npy
-│       └── no3.npy
+│       ├── uo/
+│       └── vo/
 ├── valid/
 │   ├── hr/
 │   └── lr/
@@ -576,292 +520,91 @@ NC 文件 → [Step A: 数据检查]
 │   ├── hr/
 │   └── lr/
 ├── static_variables/
-└── visualisation_data_process/
-    ├── train/*.png
-    ├── valid/*.png
-    └── test/*.png
+│   ├── 00_lon.npy
+│   ├── 10_lat.npy
+│   └── 90_mask.npy
+├── visualisation_data_process/
+│   ├── train/
+│   │   ├── uo_compare.png       # HR vs LR 空间对比图
+│   │   ├── uo_statistics.png    # 均值/方差时序 + 直方图
+│   │   └── ...
+│   ├── valid/*.png
+│   ├── test/*.png
+│   └── statistics_summary.png   # 全局统计汇总
+├── preprocess_manifest.json
+├── metrics_result.json
+└── preprocessing_report.md
 ```
-
-### 新增参数
-
-| 参数 | 类型 | 必需 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| scale | number | ✅ 是 | - | 下采样倍数（必须由用户指定） |
-| downsample_method | string | ✅ 是 | - | 下采样插值方法：area/cubic/linear/nearest/lanczos |
-| skip_downsample | boolean | 否 | false | 跳过下采样步骤 |
-| skip_visualize | boolean | 否 | false | 跳过可视化步骤 |
-
-**插值方法说明**：
-- `area`（推荐）：区域平均，最接近真实低分辨率采样
-- `cubic`：三次插值，较平滑
-- `linear`：双线性插值
-- `nearest`：最近邻插值，保留原始值
-- `lanczos`：Lanczos 插值，高质量但计算较慢
-
-### 单独执行各步骤（可选）
-
-如果需要单独控制某个步骤，可以使用独立工具：
-
-#### Step 1: NC → NPY 转换（含裁剪和划分）
-
-使用 `ocean_downsample` 工具：
-
-```json
-{
-  "dataset_root": "/output/dataset",
-  "scale": 4,
-  "method": "area"
-}
-```
-
-**参数说明**：
-- `scale`: 下采样倍数（如 4 表示尺寸缩小为 1/4）
-- `method`: 插值方法
-  - `area`（推荐）：区域平均，最接近真实低分辨率
-  - `bicubic`：双三次插值
-  - `nearest`：最近邻插值
-  - `linear`：双线性插值
-  - `lanczos`：Lanczos 插值
-
-**输出**：
-```
-/output/dataset/
-├── train/
-│   ├── hr/  (已有)
-│   └── lr/  ← 新生成
-│       ├── chl.npy
-│       └── no3.npy
-├── valid/
-│   ├── hr/
-│   └── lr/  ← 新生成
-└── test/
-    ├── hr/
-    └── lr/  ← 新生成
-```
-
-### Step 3: 可视化检查
-
-使用 `ocean_visualize` 工具：
-
-```json
-{
-  "dataset_root": "/output/dataset"
-}
-```
-
-**输出**：
-```
-/output/dataset/
-└── visualisation_data_process/
-    ├── train/
-    │   ├── chl.png
-    │   └── no3.png
-    ├── valid/
-    └── test/
-```
-
-### Step 4: 质量指标检测
-
-使用 `ocean_metrics` 工具：
-
-```json
-{
-  "dataset_root": "/output/dataset",
-  "scale": 4
-}
-```
-
-**输出**：
-```
-/output/dataset/
-└── metrics_result.json
-```
-
-**指标说明**：
-- `SSIM`: 结构相似性 (0~1, 越接近 1 越好)
-- `Relative L2`: 相对 L2 误差 (越小越好, HR 作为分母)
-- `MSE`: 均方误差
-- `RMSE`: 均方根误差
 
 ---
 
-## 报告生成流程（重要）
+## ⛔ 禁止行为清单
 
-### 何时生成报告
+### 变量选择阶段
+| 禁止行为 | 正确做法 |
+|----------|----------|
+| ❌ 猜测用户要研究哪些变量 | ✅ 展示候选列表，等用户选择 |
+| ❌ 使用硬编码变量名 (lon_rho, mask_rho) | ✅ 从数据检测或让用户指定 |
+| ❌ 自动选择掩码变量 | ✅ 展示检测到的掩码，让用户确认 |
 
-在完整预处理流程（A→B→C→D→E）完成后，**必须**生成报告并填写分析。
+### 参数决策阶段
+| 禁止行为 | 正确做法 |
+|----------|----------|
+| ❌ 自动设置 scale/train_ratio 等 | ✅ 询问用户具体数值 |
+| ❌ 自动决定裁剪参数 | ✅ 展示推荐值，让用户确认 |
+| ❌ 自动决定 NaN 处理方式 | ✅ 询问用户是否允许 NaN |
 
-### 报告生成步骤
+### 流程控制阶段
+| 禁止行为 | 正确做法 |
+|----------|----------|
+| ❌ 跳过任何确认阶段 | ✅ 每个阶段都必须等用户确认 |
+| ❌ 收到 awaiting_* 后直接继续 | ✅ 展示信息，等待用户回复 |
+| ❌ 忘记之前阶段收集的参数 | ✅ 维护状态对象，累积传参 |
 
-#### 第一步：调用报告生成工具
-
-```json
-{
-  "dataset_root": "/output/dataset"
-}
-```
-
-工具会自动查找以下文件：
-- `ocean_preprocess_temp/inspect_result.json`
-- `ocean_preprocess_temp/validate_result.json`
-- `preprocess_manifest.json`
-- `metrics_result.json`
-- `visualisation_data_process/*.png`
-
-#### 第二步：读取生成的报告
-
-报告会保存在 `dataset_root/preprocessing_report.md`。
-
-**重要**：报告的第 6 节"分析和建议"包含一个占位符注释：
-```markdown
-## 6. 分析和建议
-
-<!-- AGENT_ANALYSIS_PLACEHOLDER
-...
--->
-```
-
-#### 第三步：Agent 必须填写分析
-
-**你必须做的事**：
-
-1. **仔细阅读报告中的所有数据**：
-   - 数据集概览（文件数、变量分类）
-   - 验证结果（是否通过、有无警告）
-   - 质量指标（SSIM、Relative L2 等）
-   - 可视化图片（如果可以查看）
-
-2. **分析数据质量**，包括但不限于：
-   - **SSIM 指标分析**: 哪些变量的结构相似性好/差？为什么？
-   - **Relative L2 误差分析**: 误差分布是否合理？是否有异常值？
-   - **数据量评估**: 数据量是否充足？训练集/验证集/测试集划分是否合理？
-   - **变量选择建议**: 是否所有变量都需要？是否有冗余？
-   - **验证结果解读**: 所有验证规则是否通过？如果有警告，如何处理？
-   - **下采样质量评估**: 下采样方法是否合适？是否需要调整？
-   - **潜在问题识别**: 数据中是否存在异常、缺失值、不一致等问题？
-   - **改进建议**: 如何提升数据质量？如何优化预处理流程？
-
-3. **编写专业的分析**：
-   - 使用清晰、专业的语言
-   - 提供具体的数值和例子
-   - 避免模板化的内容
-   - 给出可操作的建议
-
-4. **替换占位符**：
-   - 读取报告文件
-   - 找到占位符注释
-   - 用你的分析替换整个注释块
-   - 保存报告
-
-#### 第四步：向用户展示报告
-
-告知用户报告已生成，并简要总结关键发现。
-
-### 分析示例
-
-**好的分析**：
-```markdown
-## 6. 分析和建议
-
-### 6.1 数据质量评估
-
-本次预处理的数据质量整体良好，所有验证规则均通过。以下是详细分析：
-
-**SSIM 指标分析**：
-- `uo` 和 `vo` 变量的 SSIM 值分别为 0.9234 和 0.9187，表明下采样后保持了良好的结构相似性
-- `temp` 变量的 SSIM 最高（0.9512），说明温度场的空间结构在下采样过程中保留得最好
-- 所有变量的 SSIM 均 > 0.91，符合超分辨率训练的质量要求
-
-**Relative L2 误差分析**：
-- 所有变量的相对误差均 < 5%，其中 `temp` 最低（2.34%）
-- `vo` 变量的误差略高（4.89%），可能是因为 v 方向流速的空间变化更剧烈
-- 建议在训练时对 `vo` 变量给予更多关注
-
-### 6.2 数据集划分评估
-
-- 训练集 255 个时间步（70%），验证集 55 个（15%），测试集 55 个（15%）
-- 数据量充足，足以支持深度学习模型训练
-- 按时间顺序划分，符合时间序列数据的最佳实践
-
-### 6.3 改进建议
-
-1. **下采样方法优化**: 当前使用 `area` 方法，如需进一步提升质量，可尝试 `bicubic` 方法
-2. **变量权重**: 建议在训练时对 `vo` 变量使用更高的损失权重
-3. **数据增强**: 可考虑添加旋转、翻转等数据增强策略
-```
-
-**不好的分析**（避免）：
-```markdown
-## 6. 分析和建议
-
-数据质量良好，所有指标正常，可以用于训练。
-```
-
-### ⚠️ 禁止行为
-
-- ❌ 不读取报告就直接说"报告已生成"
-- ❌ 不分析数据就使用模板化的内容
-- ❌ 只说"数据质量良好"而不提供具体分析
-- ❌ 忽略占位符，不填写分析部分
-- ❌ 复制粘贴示例分析而不根据实际数据调整
+### 报告生成阶段
+| 禁止行为 | 正确做法 |
+|----------|----------|
+| ❌ 不生成报告就说"完成" | ✅ 必须调用 ocean_generate_report |
+| ❌ 不传 user_confirmation | ✅ 传入完整的 4 阶段确认记录 |
+| ❌ 不填写分析就说"报告已生成" | ✅ 读取报告，替换占位符，写入分析 |
+| ❌ 使用模板化分析 | ✅ 根据实际数据指标编写专业分析 |
 
 ---
 
-## 新工具参数速查表
+## 参数速查表
 
-### ocean_downsample
+### ocean_preprocess_full 参数分阶段
 
-| 参数 | 类型 | 必需 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| dataset_root | string | ✅ | - | 数据集根目录 |
-| scale | number | ✅ | - | 下采样倍数 |
-| method | string | 否 | "area" | 插值方法 |
-| splits | string[] | 否 | ["train","valid","test"] | 要处理的划分 |
-| include_static | boolean | 否 | false | 是否处理静态变量 |
+| 阶段 | 参数 | 类型 | 说明 |
+|------|------|------|------|
+| **阶段0** | `nc_folder` | string | NC 文件目录 |
+| | `output_base` | string | 输出目录 |
+| | `static_file` | string? | 静态文件（可选） |
+| | `dyn_file_pattern` | string? | 文件匹配模式，默认 `*.nc` |
+| **阶段1** | `dyn_vars` | string[] | 研究变量列表 |
+| **阶段2** | `mask_vars` | string[] | 掩码变量列表 |
+| | `stat_vars` | string[] | 静态变量列表 |
+| | `lon_var` | string | 经度变量名 |
+| | `lat_var` | string | 纬度变量名 |
+| **阶段3** | `scale` | number | 下采样倍数 |
+| | `downsample_method` | string | 插值方法 (area/cubic/linear/nearest) |
+| | `train_ratio` | number | 训练集比例 (如 0.7) |
+| | `valid_ratio` | number | 验证集比例 (如 0.15) |
+| | `test_ratio` | number | 测试集比例 (如 0.15) |
+| | `h_slice` | string? | H 方向裁剪 (如 "0:680") |
+| | `w_slice` | string? | W 方向裁剪 |
+| **阶段4** | `user_confirmed` | boolean | 用户最终确认 (必须为 true) |
 
-### ocean_visualize
+### ocean_generate_report 参数
 
-| 参数 | 类型 | 必需 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| dataset_root | string | ✅ | - | 数据集根目录 |
-| splits | string[] | 否 | ["train","valid","test"] | 要检查的划分 |
-| out_dir | string | 否 | dataset_root/visualisation_data_process | 输出目录 |
-
-### ocean_metrics
-
-| 参数 | 类型 | 必需 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| dataset_root | string | ✅ | - | 数据集根目录 |
-| scale | number | ✅ | - | 下采样倍数 |
-| splits | string[] | 否 | ["train","valid","test"] | 要检查的划分 |
-| output | string | 否 | dataset_root/metrics_result.json | 输出文件路径 |
+| 参数 | 类型 | 必需 | 说明 |
+|------|------|------|------|
+| `dataset_root` | string | ✅ | 数据集根目录 |
+| `user_confirmation` | object | ✅ 推荐 | 4 阶段用户确认记录 |
+| `inspect_result_path` | string | 否 | 自动查找 |
+| `validate_result_path` | string | 否 | 自动查找 |
+| `convert_result_path` | string | 否 | 自动查找 |
+| `metrics_result_path` | string | 否 | 自动查找 |
 
 ---
-
-## 裁剪参数说明（v2.4 新增）
-
-### 为什么需要裁剪？
-
-超分辨率训练要求 HR 尺寸能被 scale 整除：
-```
-HR: (680, 1440)  ← 能被 4 整除
-LR: (170, 360)   ← 680÷4=170, 1440÷4=360
-
-❌ HR: (681, 1440)  ← 681 不能被 4 整除
-```
-
-### 裁剪参数格式
-
-| 格式 | 含义 | 示例 |
-|------|------|------|
-| `"0:680"` | 取 [0, 680) | `data[..., 0:680, :]` |
-| `":680"` | 取 [0, 680) | 同上 |
-| `"1:"` | 从 1 开始到末尾 | `data[..., 1:, :]` |
-| `"1:-1"` | 去掉首尾各 1 行 | `data[..., 1:-1, :]` |
-
-### 裁剪验证
-
-如果提供了 `scale` 参数，工具会自动验证裁剪后的尺寸能否被整除：
-- 能整除 → 继续处理
-- 不能整除 → 报错并提示建议值
 

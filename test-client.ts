@@ -4,10 +4,15 @@
  * Description: 测试 kode-agent-service 的交互式客户端
  *              支持多轮对话、海洋数据预处理完整流程测试
  * Author: leizheng
+ * Contributors: kongzhiquan
  * Time: 2026-02-02
- * Version: 2.2.0
+ * Version: 3.0.0
  *
  * Changelog:
+ *   - 2026-02-04 kongzhiquan: v3.0.0 适配 4 阶段强制确认流程
+ *     - 新增 4 阶段交互式测试流程引导
+ *     - 新增阶段状态显示和流程提示
+ *     - 更新测试说明，对应 SKILL.md v3.0.0
  *   - 2026-02-04 leizheng: v2.2.0 改为自然语言交互模式
  *     - 用户输入自然语言 prompt，Agent 引导对话
  *     - 符合 SKILL.md 中的交互流程设计
@@ -224,16 +229,44 @@ async function interactiveMode() {
   rl.close()
 }
 
-// 测试海洋数据预处理的完整流程
+// 测试海洋数据预处理的完整流程（v3.0 四阶段）
 async function testOceanPreprocess() {
   console.log('\n' + '='.repeat(60))
-  console.log('海洋数据预处理测试 v2.2')
+  console.log('海洋数据预处理测试 v3.0（4 阶段强制确认流程）')
   console.log('='.repeat(60))
-  console.log('\n请用自然语言描述您的预处理需求，例如：')
+
+  console.log(`
+┌─────────────────────────────────────────────────────────────┐
+│  v3.0 工作流程（4 阶段强制确认）                            │
+├─────────────────────────────────────────────────────────────┤
+│  阶段 0: 启动分析                                           │
+│    → 提供 NC 数据目录和输出目录                             │
+│                                                             │
+│  阶段 1: 研究变量选择 (awaiting_variable_selection)         │
+│    → Agent 展示检测到的动态变量候选                         │
+│    → 你选择要研究的变量（如 uo, vo）                        │
+│                                                             │
+│  阶段 2: 静态/掩码变量选择 (awaiting_static_selection)      │
+│    → Agent 展示静态变量、掩码变量、坐标变量候选             │
+│    → 你逐一确认：静态变量、掩码变量、经纬度变量             │
+│                                                             │
+│  阶段 3: 处理参数确认 (awaiting_parameters)                 │
+│    → Agent 展示数据尺寸和推荐裁剪                           │
+│    → 你确认：scale、插值方法、数据集划分、裁剪参数          │
+│                                                             │
+│  阶段 4: 执行确认 (awaiting_execution)                      │
+│    → Agent 展示完整执行预览                                 │
+│    → 你回复"确认"开始执行                                   │
+│                                                             │
+│  完成后: Agent 自动生成预处理报告                           │
+└─────────────────────────────────────────────────────────────┘
+`)
+
+  console.log('请用自然语言描述您的预处理需求，例如：')
   console.log('  - "我的数据在 /data/ocean，输出到 /output，帮我做超分预处理"')
   console.log('  - "HR 数据在 /data/hr，LR 在 /data/lr，转成超分训练格式"')
   console.log('  - "/data/cmems 里有 chl 和 no3，4 倍下采样到 /output"')
-  console.log('\nAgent 会分析您的数据并引导您完成参数确认。')
+  console.log('\nAgent 会引导您完成 4 个阶段的参数确认。')
   console.log('-'.repeat(60))
 
   // 重置会话
@@ -253,9 +286,16 @@ async function testOceanPreprocess() {
 
   // 进入交互式对话循环
   console.log('\n' + '-'.repeat(60))
-  console.log('继续与 Agent 对话，根据提示确认参数')
-  console.log('输入 "done" 结束测试，"reset" 重置会话')
+  console.log('继续与 Agent 对话，按阶段确认参数：')
+  console.log('  - 阶段 1: 选择研究变量（如"uo, vo"）')
+  console.log('  - 阶段 2: 确认静态/掩码/坐标变量')
+  console.log('  - 阶段 3: 确认 scale、插值方法、划分比例、裁剪')
+  console.log('  - 阶段 4: 回复"确认"执行')
+  console.log('')
+  console.log('命令: "done" 结束测试, "reset" 重置会话, "status" 查看当前阶段')
   console.log('-'.repeat(60))
+
+  let currentStage = 0
 
   while (true) {
     const userInput = await prompt('\n你: ')
@@ -267,11 +307,24 @@ async function testOceanPreprocess() {
 
     if (userInput.toLowerCase() === 'reset') {
       agentId = null
+      currentStage = 0
       console.log('会话已重置，请重新描述您的需求')
       const newPrompt = await prompt('\n你: ')
       if (newPrompt.trim()) {
         await chat(newPrompt, 'edit')
       }
+      continue
+    }
+
+    if (userInput.toLowerCase() === 'status') {
+      console.log(`\n当前阶段: ${currentStage}`)
+      console.log('阶段说明:')
+      console.log('  0 = 等待启动（提供数据目录）')
+      console.log('  1 = awaiting_variable_selection（选择研究变量）')
+      console.log('  2 = awaiting_static_selection（选择静态/掩码变量）')
+      console.log('  3 = awaiting_parameters（确认处理参数）')
+      console.log('  4 = awaiting_execution（确认执行）')
+      console.log('  5 = 执行完成，生成报告')
       continue
     }
 
@@ -356,7 +409,7 @@ async function runAutomatedTests() {
 
 // 主程序
 async function main() {
-  console.log('KODE Agent Service 交互式测试客户端 v2.2')
+  console.log('KODE Agent Service 交互式测试客户端 v3.0')
   console.log(`API URL: ${API_URL}`)
   console.log(`API Key: ${API_KEY.slice(0, 10)}...`)
 
@@ -371,7 +424,7 @@ async function main() {
   console.log('\n服务正常！')
   console.log('\n选择测试模式:')
   console.log('  1. 交互式对话')
-  console.log('  2. 海洋数据预处理测试（自然语言交互）')
+  console.log('  2. 海洋数据预处理测试（v3.0 四阶段流程）')
   console.log('  3. 海洋预处理工具快速测试（自动化）')
   console.log('  4. 单条消息测试')
   console.log('  5. 自动化测试套件（原测试）')

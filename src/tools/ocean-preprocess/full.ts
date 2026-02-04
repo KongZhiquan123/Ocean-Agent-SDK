@@ -6,9 +6,13 @@
  * @author leizheng
  * @contributers kongzhiquan
  * @date 2026-02-02
- * @version 2.9.0
+ * @version 3.0.0
  *
  * @changelog
+ *   - 2026-02-04 kongzhiquan: v3.0.0 统一版本号
+ *     - 对齐 SKILL.md v3.0.0
+ *     - 可视化工具新增统计分布图
+ *     - 报告工具新增图片嵌入
  *   - 2026-02-04 leizheng: v2.9.0 分阶段强制确认流程
  *     - 阶段1: awaiting_variable_selection - 研究变量选择
  *     - 阶段2: awaiting_static_selection - 静态/掩码变量选择

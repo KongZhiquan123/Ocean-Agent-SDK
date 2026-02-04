@@ -124,6 +124,10 @@ function createToolRegistry() {
   return registry
 }
 
+function loadTools(): string[] {
+  return [...builtin.fs(), ...builtin.bash(), ...builtin.todo(), ...oceanPreprocessTools].map(tool => tool.name)
+}
+
 function createTemplateRegistry() {
   const registry = new AgentTemplateRegistry()
 
@@ -163,21 +167,7 @@ function createTemplateRegistry() {
 3. **用户确认后**：使用用户确认的变量列表重新调用 ocean_preprocess_full，这次提供 mask_vars 和 static_vars 参数
 4. **如果用户不确定**：建议使用默认的 ROMS 配置（工具会自动使用默认值）
 5. **第二次调用时**：工具会跳过确认步骤，直接执行完整的 A→B→C 流程`,
-    tools: [
-      'fs_read',
-      'fs_write',
-      'fs_edit',
-      'fs_glob',
-      'fs_grep',
-      'bash_run',
-      'todo_read',
-      'todo_write',
-      'skills',
-      'ocean_inspect_data',
-      'ocean_validate_tensor',
-      'ocean_convert_npy',
-      'ocean_preprocess_full',
-    ],
+    tools: loadTools(),
   })
 
   // 问答助手模板（ask 模式）
