@@ -5,7 +5,7 @@ generate_report.py - 海洋数据预处理报告生成脚本
 @author kongzhiquan
 @contributors leizheng
 @date 2026-02-04
-@version 3.1.0
+@version 3.1.2
 
 功能:
 - 整合预处理流程中的所有关键信息
@@ -20,6 +20,12 @@ generate_report.py - 海洋数据预处理报告生成脚本
     dataset_root/preprocessing_report.md
 
 Changelog:
+    - 2026-02-04 kongzhiquan v3.1.2: 支持显示多个静态变量的不同形状
+        - 静态变量可能有不同维度（如一维的纬度经度就不同）
+        - 改为列表形式显示每个静态变量的形状
+    - 2026-02-04 kongzhiquan v3.1.1: 修复静态变量形状显示 N/A 的问题
+        - 在查找静态变量形状时，也检查 coordinate 类别
+        - 用户可能选择坐标变量（如 latitude, longitude）作为静态变量
     - 2026-02-04 kongzhiquan v3.1.0: 合并两个版本的功能
         - 同时读取 convert_result.json 和 preprocess_manifest.json
         - convert_result.json: 完整的转换结果、后置验证、warnings、errors
@@ -276,17 +282,29 @@ def generate_report(config: Dict) -> str:
                             dynamic_shape = f"{format_shape(shape)} {interpretation}"
                             break
 
-            if not static_shape:
-                for var_name, var_info in tc.items():
-                    if isinstance(var_info, dict) and var_info.get('category') == 'static':
-                        shape = var_info.get('original_shape', [])
-                        interpretation = var_info.get('interpretation', '')
-                        if shape:
-                            static_shape = f"{format_shape(shape)} {interpretation}"
-                            break
+            # 收集所有静态变量的形状（静态变量可能有不同维度，如纬度 4330，经度 2000）
+            static_shapes = []
+            for var_name, var_info in tc.items():
+                if isinstance(var_info, dict) and var_info.get('category') in ['static', 'coordinate']:
+                    shape = var_info.get('original_shape', [])
+                    interpretation = var_info.get('interpretation', '')
+                    if shape:
+                        static_shapes.append((var_name, shape, interpretation))
 
             lines.append(f"- 动态变量形状: `{dynamic_shape or 'N/A'}`")
-            lines.append(f"- 静态变量形状: `{static_shape or 'N/A'}`")
+
+            if static_shapes:
+                if len(static_shapes) == 1:
+                    # 只有一个静态变量，保持原有格式
+                    var_name, shape, interpretation = static_shapes[0]
+                    lines.append(f"- 静态变量形状: `{format_shape(shape)} {interpretation}`")
+                else:
+                    # 多个静态变量，分别显示每个变量的形状
+                    lines.append("- 静态变量形状:")
+                    for var_name, shape, interpretation in sorted(static_shapes, key=lambda x: x[0]):
+                        lines.append(f"  - `{var_name}`: `{format_shape(shape)}` {interpretation}")
+            else:
+                lines.append(f"- 静态变量形状: `{static_shape or 'N/A'}`")
             lines.append("")
 
         if validate.get('warnings'):
@@ -414,23 +432,26 @@ def generate_report(config: Dict) -> str:
                     lines.append("*后置验证信息未包含在转换结果中*")
                     lines.append("")
 
+            subsection_idx = 4
             # 显示 warnings 和 errors（从 convert_result.json 根级别）
             if convert.get('warnings'):
-                lines.append("### 4.4 转换警告")
+                lines.append(f"### 4.{subsection_idx} 转换警告")
                 lines.append("")
                 for warning in convert['warnings']:
                     lines.append(f"- ⚠️ {warning}")
                 lines.append("")
+                subsection_idx += 1
 
             if convert.get('errors'):
-                lines.append("### 4.5 转换错误")
+                lines.append(f"### 4.{subsection_idx} 转换错误")
                 lines.append("")
                 for error in convert['errors']:
                     lines.append(f"- ❌ {error}")
                 lines.append("")
-
+                subsection_idx += 1
+                
         # 输出文件统计
-        lines.append("### 4.6 输出文件结构")
+        lines.append(f"### 4.{subsection_idx} 输出文件结构")
         lines.append("")
         lines.append("**v3.0.0 新格式**：每个时间步单独保存为一个文件")
         lines.append("")

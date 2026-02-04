@@ -1,7 +1,7 @@
 ---
 name: ocean-preprocess
 description: 海洋数据预处理技能 - 专用于超分辨率场景的NC到NPY数据格式转换
-version: 3.0.1
+version: 3.0.2
 author: kongzhiquan
 contributors: leizheng
 last_modified: 2026-02-04
@@ -9,6 +9,11 @@ last_modified: 2026-02-04
 
 <!--
 Changelog:
+  - 2026-02-04 kongzhiquan: v3.0.2
+    - 明确 ocean_generate_report 工具的 user_confirmation 参数要求
+    - 添加完整的 user_confirmation 参数结构示例
+    - 强调即使用户接受推荐配置也必须记录到 user_confirmation
+    - 在禁止行为清单中添加"将 user_confirmation 置为空对象"
   - 2026-02-04 kongzhiquan: v3.0.1
     - 明确说明 ocean_metrics 是独立工具，不包含在 ocean_preprocess_full 中
     - 更新报告生成流程，添加"第零步：计算质量指标"
@@ -795,11 +800,65 @@ Agent: [开始执行完整流程...]
 
 #### 第一步：调用报告生成工具
 
+**⚠️ 重要**：必须传入 `user_confirmation` 参数，记录用户在 4 个阶段的确认信息。
+
+**即使用户接受了 Agent 推荐的配置，也必须将这些配置写入 `user_confirmation`**。这是为了：
+1. 在报告中完整记录用户的决策过程
+2. 便于后续审计和复现
+3. 确保报告的完整性
+
 ```json
 {
-  "dataset_root": "/output/dataset"
+  "dataset_root": "/output/dataset",
+  "user_confirmation": {
+    "stage1_research_vars": {
+      "selected": ["chl", "no3"],
+      "confirmed_at": "2026-02-04T10:30:00Z"
+    },
+    "stage2_static_mask": {
+      "static_vars": ["lon", "lat", "mask"],
+      "mask_vars": ["mask"],
+      "coord_vars": {
+        "lon": "lon",
+        "lat": "lat"
+      },
+      "confirmed_at": "2026-02-04T10:31:00Z"
+    },
+    "stage3_parameters": {
+      "scale": 4,
+      "downsample_method": "area",
+      "train_ratio": 0.7,
+      "valid_ratio": 0.15,
+      "test_ratio": 0.15,
+      "h_slice": "0:680",
+      "w_slice": "0:1440",
+      "confirmed_at": "2026-02-04T10:32:00Z"
+    },
+    "stage4_execution": {
+      "confirmed": true,
+      "confirmed_at": "2026-02-04T10:33:00Z"
+    }
+  }
 }
 ```
+
+**user_confirmation 参数结构说明**：
+
+| 阶段 | 字段 | 必填内容 |
+|------|------|----------|
+| stage1_research_vars | selected | 用户选择的研究变量列表 |
+| stage2_static_mask | static_vars, mask_vars | 用户确认的静态变量和掩码变量 |
+| stage2_static_mask | coord_vars | 用户确认的坐标变量（lon/lat） |
+| stage3_parameters | scale, downsample_method | 下采样参数（下采样模式必填） |
+| stage3_parameters | train/valid/test_ratio | 数据集划分比例 |
+| stage3_parameters | h_slice, w_slice | 裁剪参数（如果有裁剪） |
+| stage4_execution | confirmed | 必须为 true（表示用户已确认执行） |
+
+**⚠️ Agent 禁止行为**：
+- ❌ 将 `user_confirmation` 置为空对象 `{}`
+- ❌ 省略 `user_confirmation` 参数不传
+- ❌ 只填写部分阶段，遗漏其他阶段的确认信息
+- ❌ 不记录用户接受推荐配置的情况
 
 工具会自动查找以下文件：
 - `ocean_preprocess_temp/inspect_result.json` - Step A 数据检查结果
@@ -1145,6 +1204,7 @@ Agent: [开始执行完整流程...]
 | **⚠️ 跳过 Step 6 执行前确认** | 用户可能想修改参数 | 必须完整展示所有参数，等用户说"确认执行" |
 | **⚠️ 预处理完成后跳过质量指标计算** | 报告分析必须基于指标数据 | **必须调用 ocean_metrics 工具** |
 | **⚠️ 未计算指标就生成报告** | 报告将缺少核心数据 | 先调用 ocean_metrics，再调用 ocean_generate_report |
+| **⚠️ 生成报告时 user_confirmation 为空** | 报告将缺少用户决策记录 | **必须传入完整的 user_confirmation 参数** |
 | 在有警告时继续处理 | 可能产生错误结果 | 展示警告并等待确认 |
 
 ### 错误处理（禁止自动重试）

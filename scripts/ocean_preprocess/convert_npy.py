@@ -5,7 +5,7 @@ convert_npy.py - Step C: NC 转 NPY 转换（含后置验证）
 @author leizheng
 @contributors kongzhiquan
 @date 2026-02-02
-@version 2.9.1
+@version 2.9.2
 
 功能:
 - 将 NC 文件中的变量转换为 NPY 格式
@@ -43,6 +43,11 @@ convert_npy.py - Step C: NC 转 NPY 转换（含后置验证）
 }
 
 Changelog:
+    - 2026-02-04 kongzhiquan v2.9.2: 修复 Rule1 对 1D 坐标数组的验证逻辑
+        - 支持 1D 坐标数组（如 Copernicus 数据的 latitude/longitude）
+        - 1D 坐标：lat.shape[0] 对应 H 维度，lon.shape[0] 对应 W 维度
+        - 2D 坐标：lat 和 lon 应该有相同的形状
+        - 修复误报"网格形状不一致"的问题
     - 2026-02-04 kongzhiquan v2.9.1: 修复 Rule1 验证逻辑
         - Rule1 现在检查新的目录结构 train/hr/, valid/hr/, test/hr/
         - 移除对旧版 target_variables 目录的硬编码检查
@@ -1269,20 +1274,35 @@ def validate_rule1(
         if not found:
             validation["warnings"].append(f"缺少静态变量文件: *_{var}.npy")
 
-    # 1.3 检查网格形状
-    grid_shape = None
-    for var in [lon_var, lat_var]:
-        if var in saved_files:
-            shape = tuple(saved_files[var]["shape"])
-            if grid_shape is None:
-                grid_shape = shape
-            elif shape != grid_shape:
-                validation["errors"].append(
-                    f"网格形状不一致: {var} shape={shape} != 预期 {grid_shape}"
-                )
-                validation["passed"] = False
+    # 1.3 检查网格形状（支持 1D 和 2D 坐标）
+    lon_shape = None
+    lat_shape = None
 
-    validation["details"]["grid_shape"] = list(grid_shape) if grid_shape else None
+    if lon_var in saved_files:
+        lon_shape = tuple(saved_files[lon_var]["shape"])
+    if lat_var in saved_files:
+        lat_shape = tuple(saved_files[lat_var]["shape"])
+
+    validation["details"]["lon_shape"] = list(lon_shape) if lon_shape else None
+    validation["details"]["lat_shape"] = list(lat_shape) if lat_shape else None
+
+    # 判断坐标类型（1D 或 2D）
+    is_1d_coords = (lon_shape and len(lon_shape) == 1) or (lat_shape and len(lat_shape) == 1)
+
+    if is_1d_coords:
+        # 1D 坐标：lon 对应 W 维度，lat 对应 H 维度，它们的长度本来就不同
+        grid_shape = None  # 对于 1D 坐标，不设置统一的 grid_shape
+        validation["details"]["coord_type"] = "1D"
+    else:
+        # 2D 坐标：lon 和 lat 应该有相同的形状
+        if lon_shape and lat_shape and lon_shape != lat_shape:
+            validation["errors"].append(
+                f"2D 网格坐标形状不一致: {lon_var} shape={lon_shape} != {lat_var} shape={lat_shape}"
+            )
+            validation["passed"] = False
+        grid_shape = lon_shape or lat_shape
+        validation["details"]["coord_type"] = "2D"
+        validation["details"]["grid_shape"] = list(grid_shape) if grid_shape else None
 
     # 1.4 检查掩码文件排最后
     if sta_files:
@@ -1327,13 +1347,40 @@ def validate_rule1(
             validation["details"]["dyn_spatial_shape"] = list(list(unique_spatial)[0]) if unique_spatial else None
 
     # 1.7 检查动态变量与网格坐标的空间形状匹配
-    if grid_shape and dyn_spatial_shapes:
-        for var, spatial in dyn_spatial_shapes.items():
-            if spatial != grid_shape:
-                validation["warnings"].append(
-                    f"动态变量 '{var}' 空间形状 {spatial} 与网格形状 {grid_shape} 不匹配"
+    if dyn_spatial_shapes:
+        # 获取动态变量的空间形状（假设所有动态变量空间形状一致，已在 1.6 验证）
+        dyn_spatial = list(dyn_spatial_shapes.values())[0] if dyn_spatial_shapes else None
+
+        if is_1d_coords and dyn_spatial:
+            # 1D 坐标：检查 lat.shape[0] == H, lon.shape[0] == W
+            expected_h = dyn_spatial[0] if len(dyn_spatial) >= 1 else None
+            expected_w = dyn_spatial[1] if len(dyn_spatial) >= 2 else None
+
+            if lat_shape and expected_h and lat_shape[0] != expected_h:
+                validation["errors"].append(
+                    f"纬度坐标长度 {lat_shape[0]} 与动态变量 H 维度 {expected_h} 不匹配"
                 )
-            validation["details"]["time_length"] = list(unique_lens)[0]
+                validation["passed"] = False
+
+            if lon_shape and expected_w and lon_shape[0] != expected_w:
+                validation["errors"].append(
+                    f"经度坐标长度 {lon_shape[0]} 与动态变量 W 维度 {expected_w} 不匹配"
+                )
+                validation["passed"] = False
+
+            # 如果匹配，记录到 details
+            if lat_shape and lon_shape and expected_h and expected_w:
+                if lat_shape[0] == expected_h and lon_shape[0] == expected_w:
+                    validation["details"]["coord_match"] = True
+                    validation["details"]["expected_grid"] = f"H={expected_h}, W={expected_w}"
+        elif grid_shape and dyn_spatial:
+            # 2D 坐标：检查 grid_shape == dyn_spatial
+            if tuple(grid_shape) != tuple(dyn_spatial):
+                for var, spatial in dyn_spatial_shapes.items():
+                    if spatial != grid_shape:
+                        validation["warnings"].append(
+                            f"动态变量 '{var}' 空间形状 {spatial} 与网格形状 {grid_shape} 不匹配"
+                        )
 
     return validation
 
