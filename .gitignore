@@ -197,6 +197,7 @@ cli.mjs.map
 source-maps/
 __pycache__/
 node_modules/
+work_ocean/
 
 # Datasets files
 /datasets/

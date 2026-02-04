@@ -226,15 +226,15 @@ To customize, modify the `DANGEROUS_PATTERNS` array or add custom logic in `setu
 When generating or modifying code files, always add/update a standardized header comment at the top following this format:
 ```typescript
 /**
- * filename.ext
+ * @file filename.ext
  *
- * Description: [Brief description]
- * Author: kongzhiquan
- * Time: YYYY-MM-DD
- * Version: x.x.x
+ * @description [Brief description]
+ * @author kongzhiquan
+ * @date YYYY-MM-DD
+ * @version x.x.x
  *
- * Changelog:
+ * @changelog
  *   - YYYY-MM-DD kongzhiquan: version description
  */
 ```
-If the file already has a header, update the "Changelog" section and append `kongzhiquan` to the "Contributors" list if not already present.
+If the file already has a header, update the "Changelog" section and append `kongzhiquan`(your name should be here) to the "@contributors" list if not already present.

@@ -4,6 +4,7 @@
  *              串联 Step A -> B -> C -> (C2) -> D -> E 步骤
  *
  * @author leizheng
+ * @contributers kongzhiquan
  * @date 2026-02-02
  * @version 2.9.0
  *
@@ -87,6 +88,11 @@ export const oceanPreprocessFullTool = defineTool({
 
 **注意**：研究变量、数据集划分比例必须由用户明确指定
 
+**⚠️ 完成后必须生成报告**：
+- 预处理完成后，Agent 必须调用 ocean_generate_report 工具生成报告
+- 报告会包含一个分析占位符，Agent 必须读取报告并填写专业分析
+- 分析应基于质量指标、验证结果等数据，提供具体的、有针对性的建议
+
 **输出目录结构**：
 - output_base/train/hr/*.npy - 训练集高分辨率数据
 - output_base/train/lr/*.npy - 训练集低分辨率数据
@@ -95,6 +101,7 @@ export const oceanPreprocessFullTool = defineTool({
 - output_base/static_variables/*.npy - 静态变量
 - output_base/visualisation_data_process/*.png - 可视化对比图
 - output_base/preprocess_manifest.json - 数据溯源清单
+- output_base/preprocessing_report.md - 预处理报告（需 Agent 填写分析）
 
 **后置验证**：
 - Rule 1: 输出完整性与形状约定
