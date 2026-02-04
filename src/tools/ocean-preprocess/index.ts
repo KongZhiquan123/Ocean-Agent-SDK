@@ -4,10 +4,13 @@
  *
  * @author leizheng
  * @date 2026-02-03
- * @version 2.4.0
+ * @version 2.9.0
  *
  * @changelog
- *   - 2026-02-03 leizheng: v2.4.0 新增下采样、可视化、指标检测工具
+ *   - 2026-02-04 leizheng: v2.9.0 分阶段强制确认流程
+ *     - full.ts 实现4阶段强制停止点
+ *     - 研究变量/静态变量/参数/执行 分别确认
+ *   - 2026-02-04 leizheng: v2.8.0 配合 SKILL.md v2.8.0
  */
 
 import { oceanInspectDataTool } from './inspect'

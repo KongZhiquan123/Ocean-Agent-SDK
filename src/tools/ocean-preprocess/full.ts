@@ -1,13 +1,23 @@
 /**
  * @file full.ts
  * @description 完整的海洋数据预处理流程工具
- *              串联 Step A -> B -> C -> D -> E 五个步骤
+ *              串联 Step A -> B -> C -> (C2) -> D -> E 步骤
  *
  * @author leizheng
  * @date 2026-02-02
- * @version 2.5.0
+ * @version 2.9.0
  *
  * @changelog
+ *   - 2026-02-04 leizheng: v2.9.0 分阶段强制确认流程
+ *     - 阶段1: awaiting_variable_selection - 研究变量选择
+ *     - 阶段2: awaiting_static_selection - 静态/掩码变量选择
+ *     - 阶段3: awaiting_parameters - 处理参数确认
+ *     - 阶段4: awaiting_execution - 执行前最终确认
+ *     - 每个阶段都必须等用户确认后才能继续
+ *   - 2026-02-04 leizheng: v2.8.1 研究变量选择强制化
+ *     - 新增 lr_nc_folder/lr_static_file/lr_dyn_file_pattern 参数
+ *     - 新增 Step C2: 粗网格数据转换到 lr/ 目录
+ *     - 粗网格模式下自动跳过下采样（Step D）
  *   - 2026-02-03 leizheng: v2.5.0 集成下采样和可视化
  *     - 新增 Step D: HR → LR 下采样
  *     - 新增 Step E: 可视化检查
@@ -49,18 +59,33 @@ import { oceanVisualizeTool } from './visualize'
 
 export const oceanPreprocessFullTool = defineTool({
   name: 'ocean_preprocess_full',
-  description: `运行完整的超分辨率数据预处理流程 (A -> B -> C -> D -> E)
+  description: `运行完整的超分辨率数据预处理流程 (A -> B -> C -> (C2) -> D -> E)
 
-自动执行所有五个步骤：
+**支持两种模式**：
+
+1. **下采样模式**（默认）：
+   - 用户提供高分辨率 (HR) 数据
+   - 自动下采样生成低分辨率 (LR) 数据
+   - 需要指定 scale 和 downsample_method
+
+2. **粗网格模式**（数值模型）：
+   - 用户分别提供 HR 和 LR 数据（来自不同精度的数值模型）
+   - HR 数据来自细网格模型运行
+   - LR 数据来自粗网格模型运行
+   - 通过 lr_nc_folder 参数启用此模式
+   - 此模式下自动跳过下采样步骤
+
+自动执行所有步骤：
 1. Step A: 查看数据并定义变量
 2. Step B: 进行张量约定验证
-3. Step C: 转换为NPY格式存储（含后置验证 Rule 1/2/3）
-4. Step D: HR → LR 下采样
-5. Step E: 可视化检查（生成 HR vs LR 对比图）
+3. Step C: 转换 HR 数据为 NPY 格式（含后置验证 Rule 1/2/3）
+4. Step C2: [粗网格模式] 转换 LR 数据为 NPY 格式
+5. Step D: [下采样模式] HR → LR 下采样
+6. Step E: 可视化检查（生成 HR vs LR 对比图）
 
 **重要**：如果 Step A 检测到疑似变量但未提供 mask_vars/stat_vars，会返回 awaiting_confirmation 状态，此时需要用户确认后重新调用。
 
-**注意**：研究变量、数据集划分比例、下采样倍数必须由用户明确指定
+**注意**：研究变量、数据集划分比例必须由用户明确指定
 
 **输出目录结构**：
 - output_base/train/hr/*.npy - 训练集高分辨率数据
@@ -96,7 +121,8 @@ export const oceanPreprocessFullTool = defineTool({
     dyn_vars: {
       type: 'array',
       items: { type: 'string' },
-      description: '动态研究变量列表（必须由用户指定）'
+      description: '动态研究变量列表。【重要】如果不提供，工具会先分析数据并返回 awaiting_variable_selection 状态，要求用户选择。Agent 禁止猜测！',
+      required: false
     },
     static_file: {
       type: 'string',
@@ -219,6 +245,22 @@ export const oceanPreprocessFullTool = defineTool({
       description: '是否跳过可视化步骤（默认 false，即生成可视化）',
       required: false,
       default: false
+    },
+    // ========== 粗网格模式参数 ==========
+    lr_nc_folder: {
+      type: 'string',
+      description: '【粗网格模式】低分辨率 NC 文件所在目录。提供此参数将启用粗网格模式，自动跳过下采样步骤。',
+      required: false
+    },
+    lr_static_file: {
+      type: 'string',
+      description: '【粗网格模式】低分辨率静态 NC 文件路径（可选）',
+      required: false
+    },
+    lr_dyn_file_pattern: {
+      type: 'string',
+      description: '【粗网格模式】低分辨率动态文件的 glob 匹配模式（默认与 dyn_file_pattern 相同）',
+      required: false
     }
   },
 
@@ -253,8 +295,15 @@ export const oceanPreprocessFullTool = defineTool({
       workers = 32,  // 并行线程数
       downsample_method,   // 下采样插值方法，无默认值
       skip_downsample = false,     // 是否跳过下采样
-      skip_visualize = false       // 是否跳过可视化
+      skip_visualize = false,      // 是否跳过可视化
+      // 粗网格模式参数
+      lr_nc_folder,         // 低分辨率数据目录
+      lr_static_file,       // 低分辨率静态文件
+      lr_dyn_file_pattern   // 低分辨率文件匹配模式
     } = args
+
+    // 检测是否为粗网格模式（数值模型模式）
+    const isNumericalModelMode = !!lr_nc_folder
 
     // 智能路径处理：支持目录或单个文件
     let actualNcFolder = nc_folder.trim()
@@ -294,11 +343,13 @@ export const oceanPreprocessFullTool = defineTool({
       step_a: null as any,
       step_b: null as any,
       step_c: null as any,
+      step_c2: null as any, // 粗网格模式下的 LR 数据转换
       step_d: null as any,  // 下采样结果
       step_e: null as any,  // 可视化结果
       overall_status: 'pending' as string,
       message: '',
-      validation_summary: null as any
+      validation_summary: null as any,
+      mode: isNumericalModelMode ? 'numerical_model' : 'downsample'
     }
 
     // Step A
@@ -358,6 +409,80 @@ ${Object.keys(stepAResult.variables || {}).slice(0, 10).join(', ')}${Object.keys
       return result
     }
 
+    // ========== v2.8.0 新增：如果用户未指定研究变量，强制返回选择状态 ==========
+    // 这是第一个强制停止点：用户必须选择研究变量
+    if (!dyn_vars || dyn_vars.length === 0) {
+      // 格式化变量信息
+      const formatVarInfo = (vars: Record<string, any>) => {
+        const lines: string[] = []
+        for (const [name, info] of Object.entries(vars)) {
+          const dims = info.dims?.join(',') || '?'
+          const shape = info.shape?.join('×') || '?'
+          const dtype = info.dtype || '?'
+          lines.push(`  - ${name}: 形状 (${shape}), 维度 [${dims}], ${dtype}`)
+        }
+        return lines.join('\n')
+      }
+
+      // 筛选动态变量的详细信息
+      const dynVarDetails: Record<string, any> = {}
+      for (const varName of dynCandidates) {
+        if (stepAResult.variables?.[varName]) {
+          dynVarDetails[varName] = stepAResult.variables[varName]
+        }
+      }
+
+      result.step_a = {
+        status: stepAResult.status,
+        nc_folder: stepAResult.nc_folder,
+        file_count: stepAResult.file_count,
+        dynamic_vars_candidates: dynCandidates,
+        suspected_masks: stepAResult.suspected_masks,
+        suspected_coordinates: stepAResult.suspected_coordinates
+      }
+      result.overall_status = 'awaiting_variable_selection'
+      result.message = `数据分析完成！
+
+================================================================================
+                         ⚠️ 请选择研究变量（必须）
+================================================================================
+
+【数据概况】
+- 数据目录: ${actualNcFolder}
+- 文件数量: ${stepAResult.file_count} 个
+- 静态文件: ${static_file || '未指定'}
+
+【动态变量候选】（有时间维度，可作为研究目标）
+${formatVarInfo(dynVarDetails)}
+
+【疑似静态/坐标变量】
+${(stepAResult.suspected_coordinates || []).map((v: string) => `  - ${v}`).join('\n') || '  无'}
+
+【疑似掩码变量】
+${(stepAResult.suspected_masks || []).map((v: string) => `  - ${v}`).join('\n') || '  无'}
+
+================================================================================
+
+**请回答以下问题：**
+
+1️⃣ **您要研究哪些变量？**
+   可选: ${dynCandidates.join(', ')}
+   （请从上面的动态变量候选中选择）
+
+================================================================================
+
+⚠️ Agent 注意：**禁止自动推断研究变量！**
+必须等待用户明确指定后，再使用 dyn_vars 参数重新调用。`
+
+      ctx.emit('awaiting_variable_selection', {
+        requires_selection: true,
+        dynamic_vars_candidates: dynCandidates,
+        suspected_coordinates: stepAResult.suspected_coordinates,
+        suspected_masks: stepAResult.suspected_masks
+      })
+      return result
+    }
+
     // 检查用户指定的研究变量是否存在于动态变量候选中
     const missingVars = dyn_vars.filter((v: string) => !dynCandidates.includes(v))
     if (missingVars.length > 0) {
@@ -388,224 +513,251 @@ ${allVarNames.slice(0, 15).join(', ')}${allVarNames.length > 15 ? '...' : ''}
       return result
     }
 
-    // P0 修复 v2.3.2：必须等待用户显式确认后才能继续处理
-    // 使用 user_confirmed 参数而非依赖 mask_vars/stat_vars 的存在
-    // 这样即使数据集没有 mask/static 变量，用户也能明确确认继续
+    // ========== v2.8.1 阶段2：静态变量/掩码变量选择 ==========
+    // 如果用户提供了 dyn_vars 但没有提供 stat_vars 和 mask_vars，强制询问
+    const hasStat = stat_vars !== undefined  // 允许空数组 []
+    const hasMask = mask_vars !== undefined  // 允许空数组 []
 
-    // 如果用户未显式确认，必须返回 awaiting_confirmation
-    if (!user_confirmed) {
-      // 格式化变量信息表格
-      const formatVarInfo = (vars: Record<string, any>) => {
-        const lines: string[] = []
-        for (const [name, info] of Object.entries(vars)) {
-          const dims = info.dims?.join(',') || '?'
-          const dtype = info.dtype || '?'
-          const suspected = info.suspected_type || '?'
-          lines.push(`  ${name.padEnd(20)} | ${dims.padEnd(25)} | ${dtype.padEnd(10)} | ${suspected}`)
-        }
-        return lines.join('\n')
-      }
-
-      // 简化返回结果
-      const simplifiedStepA = {
+    if (!hasStat || !hasMask) {
+      result.step_a = {
         status: stepAResult.status,
         nc_folder: stepAResult.nc_folder,
         file_count: stepAResult.file_count,
-        file_list: stepAResult.file_list?.slice(0, 5),
-        dynamic_vars_candidates: stepAResult.dynamic_vars_candidates,
+        dynamic_vars_candidates: dynCandidates,
         suspected_masks: stepAResult.suspected_masks,
-        suspected_coordinates: stepAResult.suspected_coordinates,
-        static_vars_found: stepAResult.static_vars_found,
-        dynamic_files: stepAResult.dynamic_files,
-        suspected_static_files: stepAResult.suspected_static_files,
-        message: stepAResult.message
+        suspected_coordinates: stepAResult.suspected_coordinates
       }
-
-      // 检测静态文件混入的警告
-      const suspectedStaticFiles = stepAResult.suspected_static_files || []
-      const dynamicFiles = stepAResult.dynamic_files || []
-      const hasStaticFileMixedIn = suspectedStaticFiles.length > 0
-
-      result.step_a = simplifiedStepA
-      result.overall_status = 'awaiting_confirmation'
-      result.message = `数据分析完成，**必须等待用户确认**后才能继续处理：
+      result.overall_status = 'awaiting_static_selection'
+      result.message = `研究变量已确认：${dyn_vars.join(', ')}
 
 ================================================================================
-                              NC 文件分析结果
+                    ⚠️ 请选择静态变量和掩码变量
 ================================================================================
 
-【文件信息】
-- 动态数据目录: ${actualNcFolder}
-- 找到文件数量: ${stepAResult.file_count} 个
-- 静态文件: ${static_file || '无'}
-${hasStaticFileMixedIn ? `
-⚠️ **警告：检测到目录中混入了疑似静态文件！**
-- 动态文件（有时间维度）: ${dynamicFiles.length} 个
-  ${dynamicFiles.slice(0, 3).join(', ')}${dynamicFiles.length > 3 ? '...' : ''}
-- 疑似静态文件（无时间维度）: ${suspectedStaticFiles.length} 个
-  ${suspectedStaticFiles.join(', ')}
+【疑似静态/坐标变量】（建议保存用于可视化和后处理）
+${(stepAResult.suspected_coordinates || []).map((v: string) => `  - ${v}`).join('\n') || '  无检测到'}
 
-请确认这些文件是否应该：
-1. 排除出处理列表？
-2. 作为 static_file 使用？
-` : ''}
-【变量详情】
-  变量名               | 维度                      | 数据类型   | 疑似类型
-  -------------------- | ------------------------- | ---------- | ----------
-${formatVarInfo(stepAResult.variables || {})}
+【疑似掩码变量】（用于区分海洋/陆地区域）
+${(stepAResult.suspected_masks || []).map((v: string) => `  - ${v}`).join('\n') || '  无检测到'}
 
 ================================================================================
 
-【分类汇总】
+**请回答以下问题：**
 
-1. 动态变量候选（有时间维度，可作为研究目标）:
-${stepAResult.dynamic_vars_candidates?.map((v: string) => `   - ${v}`).join('\n') || '   无'}
+2️⃣ **需要保存哪些静态变量？**
+   可选: ${(stepAResult.suspected_coordinates || []).join(', ') || '无'}
+   （如果不需要，请回复"不需要"或指定 stat_vars: []）
 
-2. 疑似掩码变量（mask/land 等关键字）:
-${stepAResult.suspected_masks?.map((v: string) => `   - ${v}`).join('\n') || '   无'}
-
-3. 疑似静态/坐标变量（lat/lon/depth/angle 等关键字）:
-${stepAResult.suspected_coordinates?.map((v: string) => `   - ${v}`).join('\n') || '   无'}
+3️⃣ **使用哪些掩码变量？**
+   可选: ${(stepAResult.suspected_masks || []).join(', ') || '无'}
+   （如果数据没有掩码，请回复"无掩码"或指定 mask_vars: []）
 
 ================================================================================
 
-【⚠️ 必须由用户确认的信息】
+⚠️ Agent 注意：**禁止自动决定静态变量和掩码变量！**
+必须等待用户明确指定后，再使用 stat_vars 和 mask_vars 参数重新调用。`
 
-当前指定的研究变量: ${dyn_vars.join(', ')}
+      ctx.emit('awaiting_static_selection', {
+        requires_selection: true,
+        dyn_vars_confirmed: dyn_vars,
+        suspected_coordinates: stepAResult.suspected_coordinates,
+        suspected_masks: stepAResult.suspected_masks
+      })
+      return result
+    }
 
-请用户逐一确认以下问题（Agent 不得代替用户决定）：
+    // ========== v2.9.0 阶段3：处理参数确认 ==========
+    // 检查下采样参数（非粗网格模式下必须）
+    // 注意：isNumericalModelMode 已在前面定义
+    const hasDownsampleParams = isNumericalModelMode || (scale && scale > 1 && downsample_method)
+    const hasSplitRatios = train_ratio !== undefined && valid_ratio !== undefined && test_ratio !== undefined
 
-1. **研究变量**：您要研究的动态变量是 ${dyn_vars.join(', ')} 吗？
-   - 可选动态变量: ${dynCandidates.join(', ')}
-${hasStaticFileMixedIn ? `
-2. **文件筛选**：目录中有 ${suspectedStaticFiles.length} 个疑似静态文件，如何处理？
-   - 排除这些文件？
-   - 将某个文件作为 static_file？
-` : ''}
-${hasStaticFileMixedIn ? '3' : '2'}. **掩码变量**：使用哪些掩码变量？
-   - 检测到的疑似掩码: ${(stepAResult.suspected_masks || []).join(', ') || '无'}
-   - 如果数据中没有掩码变量，可以跳过（设置 mask_vars: []）
+    // 计算数据形状
+    const firstVar = dyn_vars[0]
+    const varInfo = stepAResult.variables?.[firstVar]
+    const dataShape = varInfo?.shape || []
+    const H = typeof dataShape[dataShape.length - 2] === 'number' ? dataShape[dataShape.length - 2] : 0
+    const W = typeof dataShape[dataShape.length - 1] === 'number' ? dataShape[dataShape.length - 1] : 0
 
-${hasStaticFileMixedIn ? '4' : '3'}. **静态变量**：需要保存哪些静态变量？
-   - 检测到的疑似坐标: ${(stepAResult.suspected_coordinates || []).join(', ') || '无'}
-   - 如果数据中没有静态变量，可以跳过（设置 stat_vars: []）
+    // 计算推荐裁剪值（基于 scale）
+    let cropRecommendation = ''
+    let needsCrop = false
+    if (scale && scale > 1 && H > 0 && W > 0) {
+      const hRemainder = H % scale
+      const wRemainder = W % scale
+      needsCrop = hRemainder !== 0 || wRemainder !== 0
 
-${hasStaticFileMixedIn ? '5' : '4'}. **NaN/Inf 处理**：数据中是否允许 NaN/Inf 值存在？
-   - 当前设置: allow_nan = ${allow_nan}
+      if (needsCrop) {
+        const recommendedH = Math.floor(H / scale) * scale
+        const recommendedW = Math.floor(W / scale) * scale
+        cropRecommendation = `
+   ⚠️ **当前尺寸 ${H}×${W} 不能被 ${scale} 整除！**
+   - H 余数: ${hRemainder} (${H} % ${scale} = ${hRemainder})
+   - W 余数: ${wRemainder} (${W} % ${scale} = ${wRemainder})
 
-${hasStaticFileMixedIn ? '6' : '5'}. **数据集划分**【必须由用户决定】：
-   - 请指定 train_ratio, valid_ratio, test_ratio（三者之和应为 1.0）
-   - 示例: train_ratio=0.7, valid_ratio=0.15, test_ratio=0.15
-   - 数据将按时间顺序划分（不随机），保存到 train/hr/, valid/hr/, test/hr/
-   ⚠️ Agent 不得自动决定划分比例！
+   **建议裁剪参数：**
+   - h_slice: "0:${recommendedH}" (裁剪后 H=${recommendedH})
+   - w_slice: "0:${recommendedW}" (裁剪后 W=${recommendedW})
+   - 或指定其他能被 ${scale} 整除的尺寸`
+      } else {
+        cropRecommendation = `
+   ✅ 当前尺寸 ${H}×${W} 可以被 ${scale} 整除，无需裁剪
+   - 如果不裁剪，请回复"不裁剪"
+   - 如果需要裁剪，请指定 h_slice 和 w_slice`
+      }
+    }
 
-${hasStaticFileMixedIn ? '7' : '6'}. **下采样参数**【必须由用户决定】：
-   - scale: 下采样倍数（如 4 表示尺寸缩小为 1/4）
-   - downsample_method: 插值方法，可选：
+    if (!hasDownsampleParams || !hasSplitRatios) {
+      result.step_a = {
+        status: stepAResult.status,
+        nc_folder: stepAResult.nc_folder,
+        file_count: stepAResult.file_count,
+        dyn_vars_confirmed: dyn_vars,
+        stat_vars_confirmed: stat_vars,
+        mask_vars_confirmed: mask_vars
+      }
+      result.overall_status = 'awaiting_parameters'
+      result.message = `变量选择已确认：
+- 研究变量: ${dyn_vars.join(', ')}
+- 静态变量: ${stat_vars?.length ? stat_vars.join(', ') : '无'}
+- 掩码变量: ${mask_vars?.length ? mask_vars.join(', ') : '无'}
+
+================================================================================
+                    ⚠️ 请确认处理参数
+================================================================================
+
+【当前数据形状】
+- 空间尺寸: H=${H || '?'}, W=${W || '?'}
+- 文件数量: ${stepAResult.file_count} 个
+
+================================================================================
+
+**请回答以下问题：**
+
+4️⃣ **超分数据来源方式？**
+   - **下采样模式**：从 HR 数据下采样生成 LR 数据
+   - **粗网格模式**：HR 和 LR 数据来自不同精度的数值模型
+
+${!isNumericalModelMode ? `5️⃣ **下采样参数？**（下采样模式必须）
+   - scale: 下采样倍数（如 4 表示缩小到 1/4）
+   - downsample_method: 插值方法
      • area（推荐）：区域平均，最接近真实低分辨率
      • cubic：三次插值，较平滑
      • linear：双线性插值
      • nearest：最近邻插值，保留原始值
      • lanczos：Lanczos 插值，高质量
-   ⚠️ Agent 不得自动决定下采样参数！
+` : ''}
+6️⃣ **数据集划分比例？**（三者之和必须为 1.0）
+   - train_ratio: 训练集比例（如 0.7）
+   - valid_ratio: 验证集比例（如 0.15）
+   - test_ratio: 测试集比例（如 0.15）
 
-**用户确认后**，请 Agent 使用以下参数重新调用工具：
-- user_confirmed: true  ← 【必须】表示用户已确认
-- train_ratio: 用户指定的训练集比例  ← 【必须】
-- valid_ratio: 用户指定的验证集比例  ← 【必须】
-- test_ratio: 用户指定的测试集比例   ← 【必须】
-- scale: 用户指定的下采样倍数  ← 【必须，如 4】
-- downsample_method: 用户指定的插值方法  ← 【必须，如 area】
-- mask_vars: [用户确认的掩码变量列表]（无则传空数组 []）
-- stat_vars: [用户确认的静态变量列表]（无则传空数组 []）
-- nc_files: [要处理的文件列表]（如果需要排除某些文件）
+7️⃣ **数据裁剪？**【必须确认】
+   - 当前尺寸: ${H || '?'} × ${W || '?'}
+${cropRecommendation || `   - 请指定 h_slice 和 w_slice，或回复"不裁剪"`}
+
+================================================================================
+
+⚠️ Agent 注意：**禁止自动决定处理参数！**
+必须等待用户明确指定后，再传入相应参数重新调用。`
+
+      ctx.emit('awaiting_parameters', {
+        requires_parameters: true,
+        dyn_vars_confirmed: dyn_vars,
+        stat_vars_confirmed: stat_vars,
+        mask_vars_confirmed: mask_vars,
+        data_shape: { H, W },
+        file_count: stepAResult.file_count
+      })
+      return result
+    }
+
+    // ========== v2.8.1 阶段4：执行前最终确认 ==========
+    // 所有变量和参数都已确认，等待用户最终确认执行
+    if (!user_confirmed) {
+      // 计算裁剪后的尺寸
+      const firstVar = dyn_vars[0]
+      const varInfo = stepAResult.variables?.[firstVar]
+      const dataShape = varInfo?.shape || []
+      const originalH = dataShape.length >= 2 ? dataShape[dataShape.length - 2] : '?'
+      const originalW = dataShape.length >= 1 ? dataShape[dataShape.length - 1] : '?'
+
+      // 解析裁剪后尺寸
+      let finalH = originalH
+      let finalW = originalW
+      if (h_slice && typeof originalH === 'number') {
+        const parts = h_slice.split(':').map(Number)
+        finalH = parts[1] - parts[0]
+      }
+      if (w_slice && typeof originalW === 'number') {
+        const parts = w_slice.split(':').map(Number)
+        finalW = parts[1] - parts[0]
+      }
+
+      result.step_a = {
+        status: 'ready',
+        all_parameters_confirmed: true
+      }
+      result.overall_status = 'awaiting_execution'
+      result.message = `所有参数已确认，请检查后确认执行：
+
+================================================================================
+                         📋 处理参数汇总
+================================================================================
+
+【数据信息】
+- 数据目录: ${actualNcFolder}
+- 文件数量: ${stepAResult.file_count} 个
+- 输出目录: ${output_base}
+
+【变量配置】
+- 研究变量: ${dyn_vars.join(', ')}
+- 静态变量: ${stat_vars?.length ? stat_vars.join(', ') : '无'}
+- 掩码变量: ${mask_vars?.length ? mask_vars.join(', ') : '无'}
+
+【处理参数】
+- 模式: ${isNumericalModelMode ? '粗网格模式（数值模型）' : '下采样模式'}
+${!isNumericalModelMode ? `- 下采样倍数: ${scale}x
+- 插值方法: ${downsample_method}` : `- LR 数据目录: ${lr_nc_folder}`}
+
+【数据裁剪】
+- 原始尺寸: ${originalH} × ${originalW}
+${h_slice || w_slice ? `- 裁剪后尺寸: ${finalH} × ${finalW}
+- H 裁剪: ${h_slice || '不裁剪'}
+- W 裁剪: ${w_slice || '不裁剪'}` : '- 不裁剪'}
+
+【数据集划分】
+- 训练集: ${(train_ratio * 100).toFixed(0)}%
+- 验证集: ${(valid_ratio * 100).toFixed(0)}%
+- 测试集: ${(test_ratio * 100).toFixed(0)}%
+
+【其他设置】
+- 允许 NaN: ${allow_nan ? '是' : '否'}
+- 并行线程: ${workers}
+
+================================================================================
+
+⚠️ **请确认以上参数无误后，回复"确认执行"**
+
+如需修改任何参数，请直接告诉我要修改的内容。
+
 ================================================================================`
 
-      ctx.emit('awaiting_user_confirmation', {
+      ctx.emit('awaiting_execution', {
         requires_confirmation: true,
-        user_confirmed: false,
-        requires_split_ratio: true,
-        suspected_masks: stepAResult.suspected_masks,
-        suspected_coordinates: stepAResult.suspected_coordinates,
-        dynamic_vars_candidates: stepAResult.dynamic_vars_candidates
-      })
-      return result
-    }
-
-    // 检查用户是否提供了数据集划分比例（必须由用户决定，Agent 不能自动设置）
-    const userProvidedSplitRatio = train_ratio !== undefined && valid_ratio !== undefined && test_ratio !== undefined
-    if (!userProvidedSplitRatio) {
-      result.step_a = stepAResult
-      result.overall_status = 'error'
-      result.message = `数据集划分比例必须由用户指定！
-
-【错误】Agent 不能自动决定划分比例。
-
-请用户明确指定以下参数：
-- train_ratio: 训练集比例（如 0.7）
-- valid_ratio: 验证集比例（如 0.15）
-- test_ratio: 测试集比例（如 0.15）
-
-注意：三者之和应为 1.0
-
-示例：
-train_ratio: 0.7
-valid_ratio: 0.15
-test_ratio: 0.15`
-
-      ctx.emit('error', {
-        type: 'missing_split_ratio',
-        message: '用户未指定数据集划分比例',
-        required: ['train_ratio', 'valid_ratio', 'test_ratio']
-      })
-      return result
-    }
-
-    // 检查用户是否提供了下采样倍数（必须由用户决定）
-    if (!scale || scale <= 1) {
-      result.step_a = stepAResult
-      result.overall_status = 'error'
-      result.message = `下采样倍数必须由用户指定！
-
-【错误】Agent 不能自动决定下采样倍数。
-
-请用户明确指定 scale 参数（如 scale=4 表示尺寸缩小为 1/4）。
-
-示例：
-scale: 4`
-
-      ctx.emit('error', {
-        type: 'missing_scale',
-        message: '用户未指定下采样倍数',
-        required: ['scale']
-      })
-      return result
-    }
-
-    // 检查用户是否提供了下采样方法（必须由用户决定）
-    const validMethods = ['nearest', 'linear', 'cubic', 'area', 'lanczos']
-    if (!downsample_method || !validMethods.includes(downsample_method)) {
-      result.step_a = stepAResult
-      result.overall_status = 'error'
-      result.message = `下采样插值方法必须由用户指定！
-
-【错误】Agent 不能自动决定下采样方法。
-
-请用户从以下方法中选择一个：
-- area（推荐）：区域平均，最接近真实低分辨率
-- cubic：三次插值，较平滑
-- linear：双线性插值
-- nearest：最近邻插值，保留原始值
-- lanczos：Lanczos 插值，高质量
-
-示例：
-downsample_method: area`
-
-      ctx.emit('error', {
-        type: 'missing_downsample_method',
-        message: '用户未指定下采样方法',
-        required: ['downsample_method'],
-        valid_options: validMethods
+        all_parameters_set: true,
+        summary: {
+          dyn_vars,
+          stat_vars,
+          mask_vars,
+          scale,
+          downsample_method,
+          train_ratio,
+          valid_ratio,
+          test_ratio,
+          h_slice,
+          w_slice
+        }
       })
       return result
     }
@@ -765,8 +917,87 @@ downsample_method: area`
       return result
     }
 
-    // Step D: 下采样
-    if (!skip_downsample) {
+    // Step C2: 粗网格模式下转换 LR 数据
+    if (isNumericalModelMode) {
+      ctx.emit('step_started', { step: 'C2', description: '转换粗网格 LR 数据为 NPY 格式' })
+
+      // 智能路径处理：支持目录或单个文件
+      let actualLrNcFolder = lr_nc_folder!.trim()
+      let actualLrFilePattern = lr_dyn_file_pattern || actualFilePattern  // 默认使用与 HR 相同的模式
+
+      // 检测是否为单个 NC 文件路径
+      if (actualLrNcFolder.endsWith('.nc') || actualLrNcFolder.endsWith('.NC')) {
+        const filePath = actualLrNcFolder
+        const lastSlash = filePath.lastIndexOf('/')
+        if (lastSlash === -1) {
+          actualLrNcFolder = '.'
+          actualLrFilePattern = filePath
+        } else {
+          actualLrNcFolder = filePath.substring(0, lastSlash)
+          actualLrFilePattern = filePath.substring(lastSlash + 1)
+        }
+
+        ctx.emit('info', {
+          type: 'single_file_mode_lr',
+          message: `检测到单个 LR 文件路径，自动转换为目录模式`,
+          original_path: filePath,
+          lr_nc_folder: actualLrNcFolder,
+          lr_dyn_file_pattern: actualLrFilePattern
+        })
+      }
+
+      const stepC2Result = await oceanConvertNpyTool.exec({
+        nc_folder: actualLrNcFolder,
+        output_base,
+        dyn_vars,
+        static_file: lr_static_file || static_file,  // 优先使用 LR 静态文件，否则用 HR 的
+        dyn_file_pattern: actualLrFilePattern,
+        stat_vars: finalStaticVars,
+        mask_vars: finalMaskVars,
+        lon_var: finalLonVar,
+        lat_var: finalLatVar,
+        run_validation,
+        allow_nan,
+        lon_range,
+        lat_range,
+        mask_src_var: primaryMaskVar,
+        mask_derive_op: 'identity',
+        heuristic_check_var: dyn_vars?.[0],
+        land_threshold_abs: 1e-12,
+        heuristic_sample_size: 2000,
+        require_sorted: true,
+        train_ratio,
+        valid_ratio,
+        test_ratio,
+        h_slice,
+        w_slice,
+        // 注意：LR 数据不需要验证 scale 整除
+        workers,
+        // 关键：输出到 lr/ 子目录而非 hr/
+        output_subdir: 'lr'
+      }, ctx)
+
+      result.step_c2 = stepC2Result
+
+      if (stepC2Result.status !== 'pass') {
+        result.overall_status = 'error'
+        result.message = 'Step C2 (LR 数据转换) 失败'
+        ctx.emit('pipeline_failed', { step: 'C2', result })
+        return result
+      }
+
+      ctx.emit('step_completed', { step: 'C2', result: stepC2Result })
+    }
+
+    // Step D: 下采样（仅在下采样模式下执行）
+    if (isNumericalModelMode) {
+      // 粗网格模式下跳过下采样
+      result.step_d = { status: 'skipped', reason: '粗网格模式（数值模型）下自动跳过下采样' }
+      ctx.emit('info', {
+        type: 'downsample_skipped',
+        message: '粗网格模式：LR 数据已在 Step C2 中转换，跳过下采样步骤'
+      })
+    } else if (!skip_downsample) {
       ctx.emit('step_started', { step: 'D', description: 'HR → LR 下采样' })
 
       const stepDResult = await oceanDownsampleTool.exec({

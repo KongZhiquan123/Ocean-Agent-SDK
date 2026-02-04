@@ -4,12 +4,13 @@
  *
  * @author leizheng
  * @date 2026-02-03
- * @version 1.0.0
+ * @version 1.0.1
  *
  * @changelog
+ *   - 2026-02-04 leizheng: v1.0.1 修复插值方法描述（bicubic → cubic）
  *   - 2026-02-03 leizheng: v1.0.0 初始版本
  *     - 调用 downsample.py 执行下采样
- *     - 支持多种插值方法（area, bicubic, nearest 等）
+ *     - 支持多种插值方法（area, cubic, nearest 等）
  *     - 支持 NaN 处理
  */
 
@@ -37,7 +38,7 @@ export const oceanDownsampleTool = defineTool({
 下采样后保存到对应的 train/lr/, valid/lr/, test/lr/ 目录。
 
 **特性**：
-- 支持多种插值方法：area（推荐）、bicubic、nearest、linear、lanczos
+- 支持多种插值方法：area（推荐）、cubic、nearest、linear、lanczos
 - 自动处理 NaN 值（先填 0，下采样后恢复 NaN）
 - 支持 2D/3D/4D 数据格式
 
@@ -62,7 +63,7 @@ export const oceanDownsampleTool = defineTool({
     },
     method: {
       type: 'string',
-      description: '插值方法：area（推荐）、bicubic、nearest、linear、lanczos',
+      description: '插值方法：area（推荐）、cubic、nearest、linear、lanczos',
       required: false,
       default: 'area'
     },
