@@ -3,15 +3,16 @@
 metrics.py - 下采样数据质量指标检测
 
 @author liuzhengyang
-@contributor leizheng
-@date 2026-02-03
-@version 1.1.0
+@contributor leizheng, kongzhiquan
+@date 2026-02-04
+@version 1.2.0
 
 功能:
 - 计算 HR 与 LR 之间的质量指标
 - LR 临时上采样到 HR 尺寸进行比较（不保存）
 - HR 作为基准数据（Relative L2 的分母）
 - 支持 2D/3D/4D 数据格式
+- 支持分时间步保存的目录结构（逐时间步计算，内存友好）
 
 指标:
 - SSIM: 结构相似性 (越接近 1 越好)
@@ -26,6 +27,14 @@ metrics.py - 下采样数据质量指标检测
     dataset_root/metrics_result.json
 
 Changelog:
+    - 2026-02-04 kongzhiquan v1.2.0: 支持分时间步保存的目录结构
+        - 新增 process_variable_timesteps() 函数处理 hr/var/timestep.npy 结构
+        - 新增 compute_metrics_per_timestep() 函数逐时间步计算指标
+        - 逐时间步读取并计算，避免内存占用过大（单时间步 ~68MB）
+        - SSIM/MSE 逐时间步计算后取平均
+        - Relative L2 累积 norm 值后全局计算
+        - 自动检测目录结构（分时间步 vs 传统单文件）
+        - 兼容原有的单文件结构
     - 2026-02-03 leizheng v1.1.0: 鲁棒性修复
         - 修复 HR/LR 维度不一致导致的错误
         - 修复 HR/LR 时间步不同导致的错误（只比较共同时间步）
@@ -319,9 +328,163 @@ def compute_metrics(hr_data: np.ndarray, lr_upsampled: np.ndarray) -> Optional[D
     }
 
 
+def compute_metrics_per_timestep(hr_slice: np.ndarray, lr_slice: np.ndarray) -> Optional[Dict]:
+    """
+    计算单个时间步的指标（用于逐时间步累积）
+
+    Args:
+        hr_slice: HR 单个时间步数据 (2D)
+        lr_slice: LR 单个时间步数据 (2D, 已上采样)
+
+    Returns:
+        该时间步的指标字典，包含 SSIM 和用于累积的 norm 值
+    """
+    # 检查 Shape
+    if hr_slice.shape != lr_slice.shape:
+        return None
+
+    # 获取共同的有效数据掩码
+    valid_mask = np.isfinite(hr_slice) & np.isfinite(lr_slice)
+
+    # 如果完全没有有效像素
+    if np.sum(valid_mask) == 0:
+        return {
+            "ssim": 0.0,
+            "mse": 0.0,
+            "diff_norm_sq": 0.0,
+            "hr_norm_sq": 0.0,
+            "valid_pixels": 0
+        }
+
+    hr_valid = hr_slice[valid_mask]
+    lr_valid = lr_slice[valid_mask]
+
+    # --- MSE ---
+    mse = np.mean((hr_valid - lr_valid) ** 2)
+
+    # --- Norm 值（用于累积计算 Relative L2）---
+    diff = hr_valid - lr_valid
+    diff_norm_sq = np.sum(diff ** 2)
+    hr_norm_sq = np.sum(hr_valid ** 2)
+
+    # --- SSIM ---
+    d_max = np.nanmax(hr_slice)
+    d_min = np.nanmin(hr_slice)
+    data_range = d_max - d_min
+    if data_range == 0:
+        data_range = 1.0
+
+    ssim_score = calculate_ssim_masked(hr_slice, lr_slice, data_range)
+
+    return {
+        "ssim": float(ssim_score),
+        "mse": float(mse),
+        "diff_norm_sq": float(diff_norm_sq),
+        "hr_norm_sq": float(hr_norm_sq),
+        "valid_pixels": int(np.sum(valid_mask))
+    }
+
+
+def process_variable_timesteps(hr_var_dir: str, lr_var_dir: str, var_name: str) -> Optional[Dict]:
+    """
+    处理分时间步保存的变量数据（逐时间步计算后平均）
+
+    Args:
+        hr_var_dir: HR 变量目录（包含 000000.npy, 000001.npy, ...）
+        lr_var_dir: LR 变量目录
+        var_name: 变量名
+
+    Returns:
+        该变量的平均指标
+    """
+    # 扫描时间步文件
+    hr_files = sorted(glob.glob(os.path.join(hr_var_dir, '*.npy')))
+    lr_files = sorted(glob.glob(os.path.join(lr_var_dir, '*.npy')))
+
+    if not hr_files:
+        print(f"    [Skip] HR 时间步文件为空")
+        return None
+
+    if not lr_files:
+        print(f"    [Skip] LR 时间步文件为空")
+        return None
+
+    # 取共同的时间步数量
+    num_timesteps = min(len(hr_files), len(lr_files))
+    if num_timesteps == 0:
+        return None
+
+    print(f"    [Info] 共 {num_timesteps} 个时间步")
+
+    # 累积变量
+    ssim_list = []
+    mse_list = []
+    total_diff_norm_sq = 0.0
+    total_hr_norm_sq = 0.0
+    total_valid_pixels = 0
+
+    # 逐时间步处理
+    for i in range(num_timesteps):
+        try:
+            # 读取单个时间步
+            hr_slice = np.load(hr_files[i])
+            lr_slice = np.load(lr_files[i])
+
+            # 验证维度（应该是 2D）
+            if hr_slice.ndim != 2 or lr_slice.ndim != 2:
+                print(f"    [Warning] 时间步 {i} 维度不是 2D，跳过")
+                continue
+
+            # 检查空数据
+            if hr_slice.size == 0 or lr_slice.size == 0:
+                print(f"    [Warning] 时间步 {i} 数据为空，跳过")
+                continue
+
+            # 上采样 LR 到 HR 尺寸
+            lr_upsampled = upsample_slice(lr_slice, (hr_slice.shape[1], hr_slice.shape[0]))
+
+            # 计算该时间步的指标
+            metrics = compute_metrics_per_timestep(hr_slice, lr_upsampled)
+
+            if metrics and metrics['valid_pixels'] > 0:
+                ssim_list.append(metrics['ssim'])
+                mse_list.append(metrics['mse'])
+                total_diff_norm_sq += metrics['diff_norm_sq']
+                total_hr_norm_sq += metrics['hr_norm_sq']
+                total_valid_pixels += metrics['valid_pixels']
+
+        except Exception as e:
+            print(f"    [Warning] 时间步 {i} 处理失败: {e}")
+            continue
+
+    # 检查是否有有效数据
+    if not ssim_list or total_valid_pixels == 0:
+        print(f"    [Skip] 没有有效的时间步数据")
+        return None
+
+    # 计算平均指标
+    avg_ssim = np.mean(ssim_list)
+    avg_mse = np.mean(mse_list)
+    avg_rmse = np.sqrt(avg_mse)
+
+    # 计算全局 Relative L2
+    if total_hr_norm_sq > 0:
+        relative_l2 = np.sqrt(total_diff_norm_sq) / np.sqrt(total_hr_norm_sq)
+    else:
+        relative_l2 = 0.0
+
+    return {
+        "ssim": float(avg_ssim),
+        "relative_l2": float(relative_l2),
+        "mse": float(avg_mse),
+        "rmse": float(avg_rmse),
+        "num_timesteps": len(ssim_list)
+    }
+
+
 def process_split(dataset_root: str, split: str, scale: int) -> Dict:
     """
-    处理单个数据集划分
+    处理单个数据集划分（支持分时间步保存的目录结构）
 
     Args:
         dataset_root: 数据集根目录
@@ -342,51 +505,79 @@ def process_split(dataset_root: str, split: str, scale: int) -> Dict:
         print(f"[Warning] LR 目录不存在，跳过: {lr_dir}")
         return {}
 
-    # 扫描 HR 目录
-    npy_files = glob.glob(os.path.join(hr_dir, '*.npy'))
-
-    if not npy_files:
-        print(f"[Warning] HR 目录为空: {hr_dir}")
-        return {}
-
-    print(f"\n处理 {split} 数据集 ({len(npy_files)} 个变量)...")
+    # 检查目录结构：是否是分时间步保存（子目录结构）
+    hr_subdirs = [d for d in os.listdir(hr_dir) if os.path.isdir(os.path.join(hr_dir, d))]
 
     results = {}
 
-    for hr_path in sorted(npy_files):
-        filename = os.path.basename(hr_path)
-        var_name = os.path.splitext(filename)[0]
-        lr_path = os.path.join(lr_dir, filename)
+    if hr_subdirs:
+        # 分时间步保存的结构: hr/variable/timestep.npy
+        print(f"\n处理 {split} 数据集 ({len(hr_subdirs)} 个变量，分时间步保存)...")
 
-        if not os.path.exists(lr_path):
-            print(f"  [Skip] LR 文件不存在: {filename}")
-            continue
+        for var_name in sorted(hr_subdirs):
+            hr_var_dir = os.path.join(hr_dir, var_name)
+            lr_var_dir = os.path.join(lr_dir, var_name)
 
-        try:
-            # 读取数据
-            hr_data = np.load(hr_path)
-            lr_data = np.load(lr_path)
-
-            # 验证数据对
-            is_valid, msg, aligned = validate_data_pair(hr_data, lr_data, var_name)
-            if not is_valid:
-                print(f"  [Skip] {var_name}: {msg}")
+            if not os.path.exists(lr_var_dir):
+                print(f"  [Skip] {var_name}: LR 目录不存在")
                 continue
 
-            hr_data, lr_data = aligned
+            print(f"  [Processing] {var_name}...")
 
-            # 上采样 LR 到 HR 尺寸（临时，不保存）
-            lr_upsampled = upsample_to_hr_shape(lr_data, hr_data.shape)
+            try:
+                metrics = process_variable_timesteps(hr_var_dir, lr_var_dir, var_name)
 
-            # 计算指标
-            metrics = compute_metrics(hr_data, lr_upsampled)
+                if metrics:
+                    results[var_name] = metrics
+                    print(f"  [OK] {var_name}: SSIM={metrics['ssim']:.4f}, RelL2={metrics['relative_l2']:.4f}, Timesteps={metrics['num_timesteps']}")
 
-            if metrics:
-                results[var_name] = metrics
-                print(f"  [OK] {var_name}: SSIM={metrics['ssim']:.4f}, RelL2={metrics['relative_l2']:.4f}")
+            except Exception as e:
+                print(f"  [Error] {var_name}: {e}")
 
-        except Exception as e:
-            print(f"  [Error] {var_name}: {e}")
+    else:
+        # 传统结构: hr/variable.npy
+        npy_files = glob.glob(os.path.join(hr_dir, '*.npy'))
+
+        if not npy_files:
+            print(f"[Warning] HR 目录为空: {hr_dir}")
+            return {}
+
+        print(f"\n处理 {split} 数据集 ({len(npy_files)} 个变量)...")
+
+        for hr_path in sorted(npy_files):
+            filename = os.path.basename(hr_path)
+            var_name = os.path.splitext(filename)[0]
+            lr_path = os.path.join(lr_dir, filename)
+
+            if not os.path.exists(lr_path):
+                print(f"  [Skip] LR 文件不存在: {filename}")
+                continue
+
+            try:
+                # 读取数据
+                hr_data = np.load(hr_path)
+                lr_data = np.load(lr_path)
+
+                # 验证数据对
+                is_valid, msg, aligned = validate_data_pair(hr_data, lr_data, var_name)
+                if not is_valid:
+                    print(f"  [Skip] {var_name}: {msg}")
+                    continue
+
+                hr_data, lr_data = aligned
+
+                # 上采样 LR 到 HR 尺寸（临时，不保存）
+                lr_upsampled = upsample_to_hr_shape(lr_data, hr_data.shape)
+
+                # 计算指标
+                metrics = compute_metrics(hr_data, lr_upsampled)
+
+                if metrics:
+                    results[var_name] = metrics
+                    print(f"  [OK] {var_name}: SSIM={metrics['ssim']:.4f}, RelL2={metrics['relative_l2']:.4f}")
+
+            except Exception as e:
+                print(f"  [Error] {var_name}: {e}")
 
     return results
 

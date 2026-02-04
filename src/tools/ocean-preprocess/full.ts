@@ -4,7 +4,7 @@
  *              串联 Step A -> B -> C -> (C2) -> D -> E 步骤
  *
  * @author leizheng
- * @contributers kongzhiquan
+ * @contributors kongzhiquan
  * @date 2026-02-02
  * @version 2.9.0
  *
@@ -1012,7 +1012,7 @@ ${h_slice || w_slice ? `- 裁剪后尺寸: ${finalH} × ${finalW}
         scale: scale,
         method: downsample_method,
         splits: ['train', 'valid', 'test'],
-        include_static: false
+        include_static: true
       }, ctx)
 
       result.step_d = stepDResult

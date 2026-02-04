@@ -3,8 +3,9 @@
 convert_npy.py - Step C: NC 转 NPY 转换（含后置验证）
 
 @author leizheng
+@contributors kongzhiquan
 @date 2026-02-02
-@version 2.9.0
+@version 2.9.1
 
 功能:
 - 将 NC 文件中的变量转换为 NPY 格式
@@ -42,6 +43,10 @@ convert_npy.py - Step C: NC 转 NPY 转换（含后置验证）
 }
 
 Changelog:
+    - 2026-02-04 kongzhiquan v2.9.1: 修复 Rule1 验证逻辑
+        - Rule1 现在检查新的目录结构 train/hr/, valid/hr/, test/hr/
+        - 移除对旧版 target_variables 目录的硬编码检查
+        - 根据 output_subdir 参数动态检查目录结构
     - 2026-02-04 leizheng v2.9.0: 逐时间步保存文件
         - 每个时间步单独保存为一个文件（000000.npy, 000001.npy, ...）
         - 目录结构改为: train/hr/uo/, train/hr/vo/ 等
@@ -111,8 +116,8 @@ except ImportError:
 # 20-89: 其他静态变量
 # 90-99: 掩码变量（排最后）
 
-LON_VARS = ['lon_rho', 'lon_u', 'lon_v', 'lon_psi']
-LAT_VARS = ['lat_rho', 'lat_u', 'lat_v', 'lat_psi']
+LON_VARS = ['lon_rho', 'lon_u', 'lon_v', 'lon_psi', 'longitude', 'lon']
+LAT_VARS = ['lat_rho', 'lat_u', 'lat_v', 'lat_psi', 'latitude', 'lat']
 MASK_VARS_DEFAULT = ['mask_rho', 'mask_u', 'mask_v', 'mask_psi']
 
 # 时间坐标候选
@@ -1202,6 +1207,8 @@ def validate_rule1(
     - 1.3 网格形状一致
     - 1.4 掩码文件排最后（字典序）
     - 1.5 动态变量时间长度一致
+
+    注意: v2.9.0+ 使用新的目录结构 train/hr/, valid/hr/, test/hr/
     """
     validation = {
         "rule": "Rule1",
@@ -1212,13 +1219,24 @@ def validate_rule1(
         "details": {}
     }
 
-    dyn_out = os.path.join(output_dir, 'target_variables')
+    # 获取 output_subdir（默认 'hr'）
+    output_subdir = result.get('config', {}).get('output_subdir', 'hr')
+
+    # v2.9.0+ 使用新的目录结构: train/hr/, valid/hr/, test/hr/
     sta_out = os.path.join(output_dir, 'static_variables')
 
-    # 1.1 检查目录存在
-    if not os.path.isdir(dyn_out):
-        validation["errors"].append(f"目录不存在: {dyn_out}")
+    # 1.1 检查目录结构存在
+    splits = ['train', 'valid', 'test']
+    missing_splits = []
+    for split in splits:
+        split_dir = os.path.join(output_dir, split, output_subdir)
+        if not os.path.isdir(split_dir):
+            missing_splits.append(f"{split}/{output_subdir}")
+
+    if missing_splits:
+        validation["errors"].append(f"目录不存在: {', '.join(missing_splits)}")
         validation["passed"] = False
+
     if not os.path.isdir(sta_out):
         validation["errors"].append(f"目录不存在: {sta_out}")
         validation["passed"] = False
@@ -1227,12 +1245,19 @@ def validate_rule1(
         return validation
 
     # 1.2 检查预期文件完整
-    # 动态变量
+    # 动态变量 - 检查每个 split 下的变量目录
     for var in dyn_vars:
-        expected = os.path.join(dyn_out, f"{var}.npy")
-        if not os.path.exists(expected):
-            validation["errors"].append(f"缺少动态变量文件: {var}.npy")
-            validation["passed"] = False
+        for split in splits:
+            var_dir = os.path.join(output_dir, split, output_subdir, var)
+            if not os.path.isdir(var_dir):
+                validation["errors"].append(f"缺少动态变量目录: {split}/{output_subdir}/{var}/")
+                validation["passed"] = False
+            else:
+                # 检查目录下是否有 .npy 文件
+                npy_files = [f for f in os.listdir(var_dir) if f.endswith('.npy')]
+                if not npy_files:
+                    validation["errors"].append(f"动态变量目录为空: {split}/{output_subdir}/{var}/")
+                    validation["passed"] = False
 
     # 静态变量（需要匹配带前缀的文件名）
     sta_files = sorted(os.listdir(sta_out)) if os.path.isdir(sta_out) else []

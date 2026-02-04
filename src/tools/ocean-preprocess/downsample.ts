@@ -78,7 +78,7 @@ export const oceanDownsampleTool = defineTool({
       type: 'boolean',
       description: '是否同时处理静态变量',
       required: false,
-      default: false
+      default: true
     }
   },
 

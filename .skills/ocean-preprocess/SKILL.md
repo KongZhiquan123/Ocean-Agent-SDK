@@ -1,7 +1,7 @@
 ---
 name: ocean-preprocess
 description: 海洋数据预处理技能 - 专用于超分辨率场景的NC到NPY数据格式转换
-version: 2.9.0
+version: 3.0.1
 author: kongzhiquan
 contributors: leizheng
 last_modified: 2026-02-04
@@ -9,6 +9,12 @@ last_modified: 2026-02-04
 
 <!--
 Changelog:
+  - 2026-02-04 kongzhiquan: v3.0.1
+    - 明确说明 ocean_metrics 是独立工具，不包含在 ocean_preprocess_full 中
+    - 更新报告生成流程，添加"第零步：计算质量指标"
+    - 更新工具表格，强调 ocean_metrics 必须在预处理完成后手动调用
+    - 更新流程图，显示 ocean_metrics 和 ocean_generate_report 是独立步骤
+    - 推荐的完整工作流程：full → metrics → report → 填写分析
   - 2026-02-04 kongzhiquan: v3.0.0
     - 修正 ocean_preprocess_full 工具调用示例中的错误参数名
     - 补充报告生成流程中的分析步骤细节
@@ -110,10 +116,10 @@ Changelog:
 | 工具名 | 用途 | 什么时候用 |
 |--------|------|-----------|
 | `ocean_preprocess_full` | 一键执行完整流程 A→B→C→D→E（含下采样+可视化） | **推荐**，信息完整时直接用这个 |
-| `ocean_generate_report` | 生成预处理报告（含占位符） | 预处理完成后生成报告，**必须由 Agent 填写分析** |
+| `ocean_metrics` | 质量指标检测 | **预处理完成后必须调用**，计算 SSIM、Relative L2 等指标 |
+| `ocean_generate_report` | 生成预处理报告（含占位符） | 指标计算完成后生成报告，**必须由 Agent 填写分析** |
 | `ocean_downsample` | HR→LR 下采样 | 单独执行下采样（full 已集成） |
 | `ocean_visualize` | HR vs LR 可视化对比 | 单独生成可视化（full 已集成） |
-| `ocean_metrics` | 质量指标检测 | 计算 SSIM、Relative L2 等指标 |
 | `ocean_inspect_data` | 只查看数据，不处理 | 用户只想看看有什么变量时 |
 | `ocean_validate_tensor` | 只验证张量形状 | 一般不单独用 |
 | `ocean_convert_npy` | 只执行转换 | 一般不单独用 |
@@ -763,6 +769,30 @@ Agent: [开始执行完整流程...]
 
 ### 报告生成步骤
 
+#### 第零步：计算质量指标（必须）
+
+**⚠️ 强制要求**：`ocean_preprocess_full` 不会自动计算质量指标（SSIM、Relative L2等）。**必须**在生成报告前调用 `ocean_metrics` 工具。
+
+```json
+{
+  "dataset_root": "/output/dataset",
+  "scale": 4
+}
+```
+
+**为什么必须执行这一步**：
+- 质量指标是评估下采样质量的**核心数据**，没有指标就无法进行专业分析
+- 报告的"分析和建议"部分**必须**基于这些指标进行分析
+- 如果跳过此步骤，报告将缺少关键信息，无法完成分析任务
+
+**输出**：
+- 指定的路径，若未指定则默认为 `dataset_root/metrics_result.json` - 包含所有变量的 SSIM、Relative L2、MSE、RMSE 指标
+
+**⚠️ Agent 禁止行为**：
+- ❌ 跳过质量指标计算直接生成报告
+- ❌ 在报告中说"质量指标未计算"或"建议手动计算指标"
+- ❌ 使用模板化的分析内容而不基于实际指标数据
+
 #### 第一步：调用报告生成工具
 
 ```json
@@ -772,11 +802,12 @@ Agent: [开始执行完整流程...]
 ```
 
 工具会自动查找以下文件：
-- `ocean_preprocess_temp/inspect_result.json`
-- `ocean_preprocess_temp/validate_result.json`
-- `preprocess_manifest.json`
-- `metrics_result.json`
-- `visualisation_data_process/*.png`
+- `ocean_preprocess_temp/inspect_result.json` - Step A 数据检查结果
+- `ocean_preprocess_temp/validate_result.json` - Step B 张量验证结果
+- `ocean_preprocess_temp/convert_result.json` - Step C 完整转换结果（包含后置验证、warnings、errors）
+- `preprocess_manifest.json` - 输入配置清单（dyn_vars, stat_vars等）
+- `metrics_result.json` - 质量指标结果（如果执行了第零步）
+- `visualisation_data_process/*.png` - 可视化对比图
 
 #### 第二步：读取生成的报告
 
@@ -1057,8 +1088,11 @@ Agent: [开始执行完整流程...]
 | 参数 | 类型 | 必需 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | nc_folder | string | ✅ | - | NC 文件目录 |
+| nc_files | string[] | 否 | - | 明确指定要处理的文件列表（支持通配符） |
 | static_file | string | 否 | - | 静态文件路径 |
-| dyn_file_pattern | string | 否 | "*.nc" | 文件匹配模式 |
+| dyn_file_pattern | string | 否 | "*.nc" | 文件匹配模式（当 nc_files 未指定时使用） |
+| mask_vars | string[] | 否 | - | 明确指定掩码变量列表，用于变量分类 |
+| static_vars | string[] | 否 | - | 明确指定静态变量列表，用于变量分类 |
 
 ---
 
@@ -1109,6 +1143,8 @@ Agent: [开始执行完整流程...]
 | **第一次调用就提供 mask_vars/stat_vars** | 跳过了用户确认流程 | 第一次不提供，等用户确认后第二次再提供 |
 | **检测到静态文件混入时不告知用户** | 可能导致处理错误 | 展示混入的文件列表，询问如何处理 |
 | **⚠️ 跳过 Step 6 执行前确认** | 用户可能想修改参数 | 必须完整展示所有参数，等用户说"确认执行" |
+| **⚠️ 预处理完成后跳过质量指标计算** | 报告分析必须基于指标数据 | **必须调用 ocean_metrics 工具** |
+| **⚠️ 未计算指标就生成报告** | 报告将缺少核心数据 | 先调用 ocean_metrics，再调用 ocean_generate_report |
 | 在有警告时继续处理 | 可能产生错误结果 | 展示警告并等待确认 |
 
 ### 错误处理（禁止自动重试）
@@ -1198,7 +1234,7 @@ Agent: [开始执行完整流程...]
 
 ### 流程概览
 
-`ocean_preprocess_full` 现在支持两种模式：
+`ocean_preprocess_full` 执行 A→B→C→D→E 五个步骤，支持两种模式：
 
 **下采样模式**：
 ```
@@ -1211,6 +1247,10 @@ NC 文件 → [Step A: 数据检查]
          [Step D: 下采样] → LR 数据
               ↓
          [Step E: 可视化检查] → 对比图
+              ↓
+         [独立步骤] ocean_metrics → 质量指标
+              ↓
+         [独立步骤] ocean_generate_report → 预处理报告
 ```
 
 **粗网格模式（v2.6 新增）**：
@@ -1223,6 +1263,21 @@ HR NC 文件 → [Step A: 数据检查]
                 ↓
 LR NC 文件 → [Step C2: LR 转换+裁剪+划分] → LR 数据
                 ↓
+            [Step E: 可视化检查] → 对比图
+                ↓
+            [独立步骤] ocean_metrics → 质量指标
+                ↓
+            [独立步骤] ocean_generate_report → 预处理报告
+```
+
+**重要说明**：
+- `ocean_preprocess_full` 只执行 A→B→C→(C2)→D→E 步骤
+- **质量指标计算**和**报告生成**是独立工具，必须手动调用
+- **强制工作流程**（不可跳过任何步骤）：
+  1. `ocean_preprocess_full` - 数据预处理
+  2. `ocean_metrics` - 计算质量指标（**必须执行**）
+  3. `ocean_generate_report` - 生成报告
+  4. Agent 读取报告并填写专业分析
             [Step E: 可视化检查] → 对比图
 ```
 

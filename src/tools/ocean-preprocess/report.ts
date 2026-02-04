@@ -4,9 +4,13 @@
  *
  * @author kongzhiquan
  * @date 2026-02-04
- * @version 1.0.0
+ * @version 1.1.0
  *
  * @changelog
+ *   - 2026-02-04 kongzhiquan: v1.1.0 同时读取两个JSON文件
+ *     - 新增 manifest_path 参数，用于读取 preprocess_manifest.json
+ *     - convert_result_path 现在读取 convert_result.json（完整结果）
+ *     - Python脚本同时使用两个文件的数据生成更完整的报告
  *   - 2026-02-04 kongzhiquan: v1.0.0 初始版本
  *     - 整合预处理流程中的所有关键信息
  *     - 生成包含可视化图片的 Markdown 报告
@@ -72,7 +76,12 @@ export const oceanReportTool = defineTool({
     },
     convert_result_path: {
       type: 'string',
-      description: 'Step C 的转换结果路径（preprocess_manifest.json）',
+      description: 'Step C 的完整转换结果路径（convert_result.json，包含验证、warnings、errors）',
+      required: false
+    },
+    manifest_path: {
+      type: 'string',
+      description: '预处理清单路径（preprocess_manifest.json，包含输入配置）',
       required: false
     },
     metrics_result_path: {
@@ -98,6 +107,7 @@ export const oceanReportTool = defineTool({
       inspect_result_path,
       validate_result_path,
       convert_result_path,
+      manifest_path,
       metrics_result_path,
       output_path
     } = args
@@ -129,7 +139,8 @@ export const oceanReportTool = defineTool({
       dataset_root,
       inspect_result_path: inspect_result_path || path.join(tempDir, 'inspect_result.json'),
       validate_result_path: validate_result_path || path.join(tempDir, 'validate_result.json'),
-      convert_result_path: convert_result_path || path.join(dataset_root, 'preprocess_manifest.json'),
+      convert_result_path: convert_result_path || path.join(tempDir, 'convert_result.json'),
+      manifest_path: manifest_path || path.join(dataset_root, 'preprocess_manifest.json'),
       metrics_result_path: metrics_result_path || path.join(dataset_root, 'metrics_result.json'),
       output_path: reportPath
     }

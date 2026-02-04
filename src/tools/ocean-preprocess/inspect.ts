@@ -5,9 +5,12 @@
  *
  * @author leizheng
  * @date 2026-02-04
- * @version 2.3.0
+ * @version 2.4.0
  *
  * @changelog
+ *   - 2026-02-04 kongzhiquan: v2.4.0 添加 mask_vars 和 static_vars 参数支持
+ *     - 支持通过参数传入掩码变量列表和静态变量列表
+ *     - 用于精确控制变量分类逻辑
  *   - 2026-02-04 leizheng: v2.3.0 检测维度坐标
  *     - 同时检查 ds.data_vars 和 ds.coords
  *     - 自动检测 latitude, longitude, depth 等维度坐标
@@ -111,6 +114,18 @@ export const oceanInspectDataTool = defineTool({
       description: '动态文件的 glob 匹配模式，如 "*.nc"（当 nc_files 未指定时使用）',
       required: false,
       default: '*.nc'
+    },
+    mask_vars: {
+      type: 'array',
+      items: { type: 'string' },
+      description: '可选：明确指定掩码变量列表（如 ["mask_rho", "mask_u"]），用于变量分类',
+      required: false
+    },
+    static_vars: {
+      type: 'array',
+      items: { type: 'string' },
+      description: '可选：明确指定静态变量列表（如 ["h", "angle", "pm", "pn"]），用于变量分类',
+      required: false
     }
   },
 
@@ -125,7 +140,9 @@ export const oceanInspectDataTool = defineTool({
       nc_files,
       static_file,
       file_filter = '',
-      dyn_file_pattern = '*.nc'
+      dyn_file_pattern = '*.nc',
+      mask_vars,
+      static_vars
     } = args
 
     ctx.emit('step_started', { step: 'A', description: '查看数据并定义变量' })
@@ -162,6 +179,16 @@ export const oceanInspectDataTool = defineTool({
     // 如果指定了 nc_files，添加到配置
     if (nc_files && nc_files.length > 0) {
       config.nc_files = nc_files
+    }
+
+    // 如果指定了 mask_vars，添加到配置
+    if (mask_vars && mask_vars.length > 0) {
+      config.mask_vars = mask_vars
+    }
+
+    // 如果指定了 static_vars，添加到配置
+    if (static_vars && static_vars.length > 0) {
+      config.static_vars = static_vars
     }
 
     try {

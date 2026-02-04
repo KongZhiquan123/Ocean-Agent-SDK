@@ -92,40 +92,17 @@ function createStore() {
 // 创建 SkillsManager
 const skillsManager = new SkillsManager(config.skillsDir, skillsWhiteList)
 
-function createToolRegistry() {
-  const registry = new ToolRegistry()
-
-  // 注册文件系统工具
-  for (const tool of builtin.fs()) {
-    registry.register(tool.name, () => tool)
-  }
-
-  // 注册 Bash 工具
-  for (const tool of builtin.bash()) {
-    registry.register(tool.name, () => tool)
-  }
-
-  // 注册 Todo 工具
-  for (const tool of builtin.todo()) {
-    registry.register(tool.name, () => tool)
-  }
-
-  // 注册海洋数据预处理工具
-  for (const tool of oceanPreprocessTools) {
-    registry.register(tool.name, () => tool)
-  }
-
-  // 注册 Skills 工具
-  const skillsTool = createSkillsTool(skillsManager)
-  registry.register('skills', () => skillsTool)
-
-  console.log('[config] 已注册工具:', registry.list())
-
-  return registry
+function loadAllTools() {
+  return [...builtin.fs(), ...builtin.bash(), ...builtin.todo(), ...oceanPreprocessTools, createSkillsTool(skillsManager)]
 }
 
-function loadTools(): string[] {
-  return [...builtin.fs(), ...builtin.bash(), ...builtin.todo(), ...oceanPreprocessTools].map(tool => tool.name)
+function createToolRegistry() {
+  const registry = new ToolRegistry()
+  // 注册所有工具
+  const tools = loadAllTools()
+  tools.forEach(tool => registry.register(tool.name, () => tool))
+  console.log('[config] 已注册工具:', registry.list())
+  return registry
 }
 
 function createTemplateRegistry() {
@@ -150,6 +127,11 @@ function createTemplateRegistry() {
 3. 调用适当的工具写入文件/执行代码。
 4. 向用户确认哪些文件已更新/创建。
 
+# Bash 工具使用注意事项
+- 仅在必要时使用 bash_run 工具执行命令。
+- 避免使用危险命令（如 rm -rf）。
+- 如果需要python命令，优先使用${process.env.PYTHON3}这个可执行文件路径。
+
 # Skills 使用
 - 查看可用技能：skills 工具，参数 {"action": "list"}
 - 加载特定技能：skills 工具，参数 {"action": "load", "skill_name": "ocean-preprocess"}
@@ -167,7 +149,7 @@ function createTemplateRegistry() {
 3. **用户确认后**：使用用户确认的变量列表重新调用 ocean_preprocess_full，这次提供 mask_vars 和 static_vars 参数
 4. **如果用户不确定**：建议使用默认的 ROMS 配置（工具会自动使用默认值）
 5. **第二次调用时**：工具会跳过确认步骤，直接执行完整的 A→B→C 流程`,
-    tools: loadTools(),
+    tools: loadAllTools().map(t => t.name),
   })
 
   // 问答助手模板（ask 模式）

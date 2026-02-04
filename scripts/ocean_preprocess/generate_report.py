@@ -4,7 +4,7 @@ generate_report.py - 海洋数据预处理报告生成脚本
 
 @author kongzhiquan
 @date 2026-02-04
-@version 1.0.0
+@version 1.1.0
 
 功能:
 - 整合预处理流程中的所有关键信息
@@ -18,6 +18,11 @@ generate_report.py - 海洋数据预处理报告生成脚本
     dataset_root/preprocessing_report.md
 
 Changelog:
+    - 2026-02-04 kongzhiquan v1.1.0: 同时读取 convert_result.json 和 preprocess_manifest.json
+        - convert_result.json: 完整的转换结果、后置验证、warnings、errors
+        - preprocess_manifest.json: 输入配置信息（dyn_vars, stat_vars等）
+        - 新增"转换警告"和"转换错误"小节
+        - 改进数据提取逻辑，优先级：convert.config > convert根级别 > manifest
     - 2026-02-04 kongzhiquan v1.0.0: 初始版本
         - 整合 inspect/validate/convert/metrics 结果
         - 嵌入可视化图片
@@ -50,7 +55,7 @@ def format_shape(shape: List[int]) -> str:
     return f"[{', '.join(map(str, shape))}]"
 
 
-def analyze_data_quality(metrics: Dict, inspect: Dict, validate: Dict) -> str:
+def analyze_data_quality() -> str:
     """
     生成数据质量分析占位符
 
@@ -87,7 +92,8 @@ def generate_report(config: Dict) -> str:
     # 加载各个步骤的结果
     inspect = load_json_safe(config.get('inspect_result_path', ''))
     validate = load_json_safe(config.get('validate_result_path', ''))
-    convert = load_json_safe(config.get('convert_result_path', ''))
+    convert = load_json_safe(config.get('convert_result_path', ''))  # convert_result.json (完整结果)
+    manifest = load_json_safe(config.get('manifest_path', ''))  # preprocess_manifest.json (输入配置)
     metrics = load_json_safe(config.get('metrics_result_path', ''))
 
     dataset_root = config['dataset_root']
@@ -164,8 +170,32 @@ def generate_report(config: Dict) -> str:
             tc = validate['tensor_convention']
             lines.append("**张量约定**:")
             lines.append("")
-            lines.append(f"- 动态变量形状: `{tc.get('dynamic_shape', 'N/A')}`")
-            lines.append(f"- 静态变量形状: `{tc.get('static_shape', 'N/A')}`")
+
+            # 从 tensor_convention 中提取动态变量形状
+            dynamic_shape = tc.get('dynamic_shape', None)
+            static_shape = tc.get('static_shape', None)
+
+            # 如果没有汇总形状，从各个变量中提取
+            if not dynamic_shape:
+                for var_name, var_info in tc.items():
+                    if isinstance(var_info, dict) and var_info.get('category') == 'dynamic':
+                        shape = var_info.get('original_shape', [])
+                        interpretation = var_info.get('interpretation', '')
+                        if shape:
+                            dynamic_shape = f"{format_shape(shape)} {interpretation}"
+                            break
+
+            if not static_shape:
+                for var_name, var_info in tc.items():
+                    if isinstance(var_info, dict) and var_info.get('category') == 'static':
+                        shape = var_info.get('original_shape', [])
+                        interpretation = var_info.get('interpretation', '')
+                        if shape:
+                            static_shape = f"{format_shape(shape)} {interpretation}"
+                            break
+
+            lines.append(f"- 动态变量形状: `{dynamic_shape or 'N/A'}`")
+            lines.append(f"- 静态变量形状: `{static_shape or 'N/A'}`")
             lines.append("")
 
         if validate.get('warnings'):
@@ -192,42 +222,116 @@ def generate_report(config: Dict) -> str:
     lines.append("")
 
     if convert:
+
         lines.append(f"### 3.1 数据集划分")
         lines.append("")
 
-        config_info = convert.get('config', {})
-        lines.append(f"- **训练集比例**: {config_info.get('train_ratio', 'N/A')}")
-        lines.append(f"- **验证集比例**: {config_info.get('valid_ratio', 'N/A')}")
-        lines.append(f"- **测试集比例**: {config_info.get('test_ratio', 'N/A')}")
+        # 优先从 convert 的 config 字段读取，其次从 convert 根级别，最后从 manifest
+        config_info = convert.get('config', {}) if convert else {}
+
+        if config_info:
+            train_ratio = config_info.get('train_ratio', 'N/A')
+            valid_ratio = config_info.get('valid_ratio', 'N/A')
+            test_ratio = config_info.get('test_ratio', 'N/A')
+        elif convert:
+            train_ratio = convert.get('train_ratio', 'N/A')
+            valid_ratio = convert.get('valid_ratio', 'N/A')
+            test_ratio = convert.get('test_ratio', 'N/A')
+        else:
+            train_ratio = valid_ratio = test_ratio = 'N/A'
+
+        lines.append(f"- **训练集比例**: {train_ratio}")
+        lines.append(f"- **验证集比例**: {valid_ratio}")
+        lines.append(f"- **测试集比例**: {test_ratio}")
         lines.append("")
 
-        if 'h_slice' in config_info or 'w_slice' in config_info:
+        # 检查裁剪信息
+        h_slice = config_info.get('h_slice') if config_info else (convert.get('h_slice') if convert else None)
+        w_slice = config_info.get('w_slice') if config_info else (convert.get('w_slice') if convert else None)
+        scale = config_info.get('scale') if config_info else (convert.get('scale') if convert else None)
+
+        if h_slice or w_slice:
             lines.append(f"### 3.2 裁剪信息")
             lines.append("")
-            lines.append(f"- **H 方向裁剪**: `{config_info.get('h_slice', '无')}`")
-            lines.append(f"- **W 方向裁剪**: `{config_info.get('w_slice', '无')}`")
-            lines.append(f"- **下采样倍数**: {config_info.get('scale', 'N/A')}")
+            lines.append(f"- **H 方向裁剪**: `{h_slice or '无'}`")
+            lines.append(f"- **W 方向裁剪**: `{w_slice or '无'}`")
+            lines.append(f"- **下采样倍数**: {scale or 'N/A'}")
             lines.append("")
 
-        lines.append(f"### 3.3 后置验证")
-        lines.append("")
-
-        validation = convert.get('validation', {})
-        if validation:
-            lines.append(f"- **Rule 1 (输出完整性)**: `{validation.get('rule1_status', 'N/A')}`")
-            lines.append(f"- **Rule 2 (掩码不可变性)**: `{validation.get('rule2_status', 'N/A')}`")
-            lines.append(f"- **Rule 3 (排序确定性)**: `{validation.get('rule3_status', 'N/A')}`")
+        # 后置验证（只在 convert_result.json 中）
+        if convert:
+            lines.append(f"### 3.3 后置验证")
             lines.append("")
 
-        # 输出文件统计
-        if 'saved_files' in convert:
-            saved_files = convert['saved_files']
-            lines.append(f"### 3.4 输出文件")
-            lines.append("")
-            lines.append(f"- **总文件数**: {len(saved_files)}")
-            lines.append("")
+            # 读取 validation_rule1, validation_rule2, validation_rule3 字段
+            rule1 = convert.get('validation_rule1', {})
+            rule2 = convert.get('validation_rule2', {})
+            rule3 = convert.get('validation_rule3', {})
+
+            if rule1 or rule2 or rule3:
+                # Rule 1
+                if rule1:
+                    status = "✅ 通过" if rule1.get('passed') else "❌ 失败"
+                    lines.append(f"- **Rule 1 (输出完整性)**: {status}")
+                    if rule1.get('errors'):
+                        for error in rule1['errors']:
+                            lines.append(f"  - ❌ {error}")
+                    if rule1.get('warnings'):
+                        for warning in rule1['warnings']:
+                            lines.append(f"  - ⚠️ {warning}")
+
+                # Rule 2
+                if rule2:
+                    status = "✅ 通过" if rule2.get('passed') else "❌ 失败"
+                    lines.append(f"- **Rule 2 (掩码不可变性)**: {status}")
+                    if rule2.get('errors'):
+                        for error in rule2['errors']:
+                            lines.append(f"  - ❌ {error}")
+                    if rule2.get('warnings'):
+                        for warning in rule2['warnings']:
+                            lines.append(f"  - ⚠️ {warning}")
+
+                # Rule 3
+                if rule3:
+                    status = "✅ 通过" if rule3.get('passed') else "❌ 失败"
+                    lines.append(f"- **Rule 3 (排序确定性)**: {status}")
+                    if rule3.get('errors'):
+                        for error in rule3['errors']:
+                            lines.append(f"  - ❌ {error}")
+                    if rule3.get('warnings'):
+                        for warning in rule3['warnings']:
+                            lines.append(f"  - ⚠️ {warning}")
+
+                lines.append("")
+
+                # 添加后置验证汇总
+                post_validation = convert.get('post_validation', {})
+                if post_validation:
+                    all_passed = post_validation.get('all_passed', False)
+                    total_errors = post_validation.get('total_errors', 0)
+                    total_warnings = post_validation.get('total_warnings', 0)
+                    lines.append(f"**验证汇总**: {'✅ 全部通过' if all_passed else f'❌ {total_errors} 个错误, ⚠️ {total_warnings} 个警告'}")
+                    lines.append("")
+            else:
+                lines.append("*后置验证信息未包含在转换结果中*")
+                lines.append("")
+
+            # 显示 warnings 和 errors（从 convert_result.json 根级别）
+            if convert.get('warnings'):
+                lines.append(f"### 3.4 转换警告")
+                lines.append("")
+                for warning in convert['warnings']:
+                    lines.append(f"- ⚠️ {warning}")
+                lines.append("")
+
+            if convert.get('errors'):
+                lines.append(f"### 3.5 转换错误")
+                lines.append("")
+                for error in convert['errors']:
+                    lines.append(f"- ❌ {error}")
+                lines.append("")
     else:
-        lines.append("⚠️ 未找到转换结果 (preprocess_manifest.json)")
+        lines.append("⚠️ 未找到转换结果 (convert_result.json 或 preprocess_manifest.json)")
         lines.append("")
 
     # ========================================
@@ -314,7 +418,7 @@ def generate_report(config: Dict) -> str:
     lines.append("## 6. 分析和建议")
     lines.append("")
 
-    analysis_placeholder = analyze_data_quality(metrics, inspect, validate)
+    analysis_placeholder = analyze_data_quality()
     lines.append(analysis_placeholder)
     lines.append("")
 
