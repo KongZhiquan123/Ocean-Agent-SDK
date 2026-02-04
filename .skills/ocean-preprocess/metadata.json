@@ -1,8 +1,8 @@
 {
   "name": "ocean-preprocess",
   "description": "海洋数据预处理技能 - 专用于超分辨率场景的NC到NPY数据格式转换",
-  "version": "2.9.0",
-  "author": "kzq",
+  "version": "3.0.0",
+  "author": "kongzhiquan",
   "contributors": ["leizheng"],
   "last_modified": "2026-02-04",
   "baseDir": "./.skills/ocean-preprocess",

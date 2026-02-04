@@ -1,12 +1,18 @@
 /**
  * @file visualize.ts
- * @description 海洋数据可视化检查工具 - 生成 HR vs LR 对比图
+ * @description 海洋数据可视化检查工具 - 生成 HR vs LR 对比图和统计分布图
  *
  * @author leizheng
+ * @contributors kongzhiquan
  * @date 2026-02-04
- * @version 1.4.0
+ * @version 3.0.0
  *
  * @changelog
+ *   - 2026-02-04 kongzhiquan: v3.0.0 新增统计分布图
+ *     - 新增均值/方差时序图
+ *     - 新增 HR/LR 数据值直方图对比
+ *     - 新增全局统计汇总图 (statistics_summary.png)
+ *     - 重命名原对比图为 {var}_compare.png
  *   - 2026-02-04 leizheng: v1.4.0 修复坐标文件匹配
  *     - 支持带编号前缀的文件名（如 20_latitude.npy）
  *     - 使用 glob 模式匹配多种命名格式
@@ -36,22 +42,37 @@ export interface VisualizeResult {
 
 export const oceanVisualizeTool = defineTool({
   name: 'ocean_visualize',
-  description: `生成 HR vs LR 对比可视化图片
+  description: `生成 HR vs LR 对比可视化图片和统计分布图
 
-从 train/hr/ 和 train/lr/ 目录读取数据，生成对比图保存到 visualisation_data_process/ 目录。
+从 train/hr/ 和 train/lr/ 目录读取数据，生成对比图和统计图保存到 visualisation_data_process/ 目录。
+
+**生成的图片类型（v3.0.0）**：
+1. **{var}_compare.png** - HR vs LR 空间对比图
+   - 取中间时间步进行对比
+   - 显示真实经纬度坐标（如果有）
+   - NaN 区域显示为灰色背景
+
+2. **{var}_statistics.png** - 统计分布图（新增）
+   - 均值随时间变化曲线（HR vs LR）
+   - 标准差随时间变化曲线（HR vs LR）
+   - HR 数据值直方图（含均值、中位数标注）
+   - LR 数据值直方图（含均值、中位数标注）
+
+3. **statistics_summary.png** - 全局统计汇总（新增）
+   - 所有变量的均值对比条形图
+   - 所有变量的标准差对比条形图
 
 **特性**：
-- 每个变量抽取 1 帧进行检查（取中间时间步）
 - 支持 2D/3D/4D 数据格式
-- NaN 区域显示为灰色背景
-- 显示数据 shape 和切片信息
 - 自动加载 static_variables/ 中的经纬度坐标
 - 坐标轴显示真实经纬度 (Longitude °E, Latitude °N)
 
 **输出目录结构**：
-- dataset_root/visualisation_data_process/train/*.png
-- dataset_root/visualisation_data_process/valid/*.png
-- dataset_root/visualisation_data_process/test/*.png`,
+- dataset_root/visualisation_data_process/train/{var}_compare.png
+- dataset_root/visualisation_data_process/train/{var}_statistics.png
+- dataset_root/visualisation_data_process/valid/...
+- dataset_root/visualisation_data_process/test/...
+- dataset_root/visualisation_data_process/statistics_summary.png`,
 
   params: {
     dataset_root: {
@@ -150,7 +171,7 @@ export const oceanVisualizeTool = defineTool({
         output_dir: outputDir,
         splits,
         generated_files: generatedFiles,
-        message: `可视化完成，生成 ${generatedFiles.length} 张图片`
+        message: `可视化完成，生成 ${generatedFiles.length} 张图片（含对比图和统计分布图）`
       }
 
     } catch (error: any) {

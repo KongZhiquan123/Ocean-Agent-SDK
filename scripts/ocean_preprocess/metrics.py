@@ -5,7 +5,7 @@ metrics.py - 下采样数据质量指标检测
 @author liuzhengyang
 @contributor leizheng, kongzhiquan
 @date 2026-02-04
-@version 1.2.0
+@version 3.0.1
 
 功能:
 - 计算 HR 与 LR 之间的质量指标
@@ -27,14 +27,16 @@ metrics.py - 下采样数据质量指标检测
     dataset_root/metrics_result.json
 
 Changelog:
-    - 2026-02-04 kongzhiquan v1.2.0: 支持分时间步保存的目录结构
-        - 新增 process_variable_timesteps() 函数处理 hr/var/timestep.npy 结构
+    - 2026-02-04 kongzhiquan v3.0.1: 合并分时间步支持功能
+        - 支持分时间步保存的目录结构 (train/hr/var/timestep.npy)
+        - 支持传统单文件结构 (train/hr/var.npy) 兼容
+        - 新增 process_variable_timesteps() 函数处理逐时间步文件
         - 新增 compute_metrics_per_timestep() 函数逐时间步计算指标
         - 逐时间步读取并计算，避免内存占用过大（单时间步 ~68MB）
         - SSIM/MSE 逐时间步计算后取平均
         - Relative L2 累积 norm 值后全局计算
         - 自动检测目录结构（分时间步 vs 传统单文件）
-        - 兼容原有的单文件结构
+        - 输出增加逐时间步详细指标（可选）
     - 2026-02-03 leizheng v1.1.0: 鲁棒性修复
         - 修复 HR/LR 维度不一致导致的错误
         - 修复 HR/LR 时间步不同导致的错误（只比较共同时间步）
@@ -240,6 +242,68 @@ def calculate_ssim_masked(img_a: np.ndarray, img_b: np.ndarray, data_range: floa
 # ========================================
 # 指标计算
 # ========================================
+
+def compute_metrics_2d(hr_data: np.ndarray, lr_upsampled: np.ndarray) -> Optional[Dict]:
+    """
+    计算单帧 2D 数据的指标
+
+    Args:
+        hr_data: HR 2D 数据（基准）
+        lr_upsampled: 上采样后的 LR 2D 数据
+
+    Returns:
+        指标字典
+    """
+    # 检查 Shape
+    if hr_data.shape != lr_upsampled.shape:
+        return None
+
+    # 获取共同的有效数据掩码
+    valid_mask = np.isfinite(hr_data) & np.isfinite(lr_upsampled)
+
+    # 如果完全没有有效像素
+    if np.sum(valid_mask) == 0:
+        return {
+            "ssim": 0.0,
+            "relative_l2": 0.0,
+            "mse": 0.0,
+            "rmse": 0.0
+        }
+
+    hr_valid = hr_data[valid_mask]
+    lr_valid = lr_upsampled[valid_mask]
+
+    # --- MSE ---
+    mse = np.mean((hr_valid - lr_valid) ** 2)
+
+    # --- RMSE ---
+    rmse = np.sqrt(mse)
+
+    # --- Relative L2 Error ---
+    diff_norm = np.linalg.norm(hr_valid - lr_valid)
+    hr_norm = np.linalg.norm(hr_valid)
+
+    if hr_norm == 0:
+        rel_l2 = 0.0
+    else:
+        rel_l2 = diff_norm / hr_norm
+
+    # --- SSIM ---
+    d_max = np.nanmax(hr_data)
+    d_min = np.nanmin(hr_data)
+    data_range = d_max - d_min
+    if data_range == 0:
+        data_range = 1.0
+
+    ssim_score = calculate_ssim_masked(hr_data, lr_upsampled, data_range)
+
+    return {
+        "ssim": float(ssim_score),
+        "relative_l2": float(rel_l2),
+        "mse": float(mse),
+        "rmse": float(rmse)
+    }
+
 
 def compute_metrics(hr_data: np.ndarray, lr_upsampled: np.ndarray) -> Optional[Dict]:
     """
