@@ -3,10 +3,17 @@
  * @description 海洋数据可视化检查工具 - 生成 HR vs LR 对比图
  *
  * @author leizheng
- * @date 2026-02-03
- * @version 1.0.0
+ * @date 2026-02-04
+ * @version 1.4.0
  *
  * @changelog
+ *   - 2026-02-04 leizheng: v1.4.0 修复坐标文件匹配
+ *     - 支持带编号前缀的文件名（如 20_latitude.npy）
+ *     - 使用 glob 模式匹配多种命名格式
+ *   - 2026-02-04 leizheng: v1.3.0 支持经纬度坐标显示
+ *     - 自动加载 static_variables/ 中的 lat.npy/lon.npy
+ *     - 坐标轴显示真实经纬度 (°E, °N)
+ *   - 2026-02-04 leizheng: v1.2.0 添加坐标轴标签
  *   - 2026-02-03 leizheng: v1.0.0 初始版本
  *     - 调用 visualize_check.py 生成对比图
  *     - 每个变量抽取 1 帧进行检查
@@ -38,6 +45,8 @@ export const oceanVisualizeTool = defineTool({
 - 支持 2D/3D/4D 数据格式
 - NaN 区域显示为灰色背景
 - 显示数据 shape 和切片信息
+- 自动加载 static_variables/ 中的经纬度坐标
+- 坐标轴显示真实经纬度 (Longitude °E, Latitude °N)
 
 **输出目录结构**：
 - dataset_root/visualisation_data_process/train/*.png

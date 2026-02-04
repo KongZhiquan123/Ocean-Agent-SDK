@@ -3,8 +3,8 @@
 inspect_data.py - Step A: 数据检查与变量分类
 
 @author leizheng
-@date 2026-02-02
-@version 2.0.1
+@date 2026-02-04
+@version 2.1.0
 
 功能:
 - 扫描 NC 文件目录，获取文件列表
@@ -26,6 +26,10 @@ inspect_data.py - Step A: 数据检查与变量分类
 }
 
 Changelog:
+    - 2026-02-04 leizheng v2.1.0: 检测维度坐标
+        - 同时检查 ds.data_vars 和 ds.coords
+        - 自动检测 latitude, longitude, depth 等维度坐标
+        - 支持 Copernicus 等数据集的坐标变量
     - 2026-02-03 leizheng v2.0.1: 修复 'h' 关键字误匹配 'chl' 问题
         - 将 'h' 改为精确匹配（COORD_EXACT_NAMES）
         - 避免 'chl'（叶绿素）被误判为坐标变量
@@ -344,6 +348,38 @@ def inspect_data(config: Dict[str, Any]) -> Dict[str, Any]:
 
                     # 计算统计信息
                     result["statistics"][var_name] = compute_statistics(ds[var_name].values)
+
+                # ============ 检测维度坐标（如 latitude, longitude, depth）============
+                # Copernicus 等数据集的坐标变量在 ds.coords 中而非 ds.data_vars
+                for coord_name in ds.coords:
+                    if coord_name in result["variables"]:
+                        continue  # 已经处理过
+
+                    # 检查是否是疑似坐标变量
+                    coord_lower = coord_name.lower()
+                    is_coord = any(kw in coord_lower for kw in COORD_KEYWORDS)
+                    is_coord = is_coord or coord_lower in COORD_EXACT_NAMES
+                    is_coord = is_coord or coord_lower in ['latitude', 'longitude', 'depth', 'level', 'time']
+
+                    if is_coord:
+                        coord_data = ds.coords[coord_name]
+                        coord_info = {
+                            "name": coord_name,
+                            "category": "coordinate",
+                            "dims": list(coord_data.dims),
+                            "shape": list(coord_data.shape),
+                            "dtype": str(coord_data.dtype),
+                            "units": coord_data.attrs.get("units", "unknown"),
+                            "long_name": coord_data.attrs.get("long_name", coord_name),
+                            "is_mask": False,
+                            "has_time": False,
+                            "suspected_type": "suspected_coordinate",
+                            "source": "coords"  # 标记来源
+                        }
+                        result["variables"][coord_name] = coord_info
+                        result["suspected_coordinates"].append(coord_name)
+                        result["statistics"][coord_name] = compute_statistics(coord_data.values)
+                        print(f"  检测到维度坐标: {coord_name}, shape={coord_info['shape']}", file=sys.stderr)
         elif nc_files:
             # 没有动态文件，但有文件，分析第一个文件看看有什么变量
             first_file = nc_files[0]

@@ -4,10 +4,14 @@
  *              调用 Python 脚本分析 NC 文件
  *
  * @author leizheng
- * @date 2026-02-02
- * @version 2.2.0
+ * @date 2026-02-04
+ * @version 2.3.0
  *
  * @changelog
+ *   - 2026-02-04 leizheng: v2.3.0 检测维度坐标
+ *     - 同时检查 ds.data_vars 和 ds.coords
+ *     - 自动检测 latitude, longitude, depth 等维度坐标
+ *     - 支持 Copernicus 等数据集的坐标变量
  *   - 2026-02-03 leizheng: v2.2.0 添加 nc_files 参数支持明确指定文件列表
  *   - 2026-02-03 leizheng: v2.1.0 P0 安全修复
  *     - 添加路径验证（检测文件路径 vs 目录路径）

@@ -5,7 +5,7 @@ downsample.py - 海洋数据下采样脚本
 @author liuzhengyang
 @contributor leizheng
 @date 2026-02-03
-@version 1.0.0
+@version 2.0.0
 
 功能:
 - 读取 hr/ 目录下的 NPY 文件
@@ -16,22 +16,29 @@ downsample.py - 海洋数据下采样脚本
 用法:
     python downsample.py --dataset_root /path/to/dataset --scale 4 --method area
 
-目录结构:
+目录结构 (v2.0.0 新格式):
     dataset_root/
     ├── train/
-    │   ├── hr/          ← 源数据
-    │   │   ├── var1.npy
-    │   │   └── var2.npy
-    │   └── lr/          ← 下采样后保存到这里
+    │   ├── hr/
+    │   │   ├── uo/          ← 每个变量一个子目录
+    │   │   │   ├── 000000.npy
+    │   │   │   ├── 000001.npy
+    │   │   │   └── ...
+    │   │   └── vo/
+    │   │       ├── 000000.npy
+    │   │       └── ...
+    │   └── lr/              ← 下采样后保存到这里（相同结构）
+    │       ├── uo/
+    │       └── vo/
     ├── valid/
-    │   ├── hr/
-    │   └── lr/
     ├── test/
-    │   ├── hr/
-    │   └── lr/
     └── static_variables/
 
 Changelog:
+    - 2026-02-04 leizheng v2.0.0: 支持逐时间步文件格式
+        - 适配 convert_npy.py v2.9.0 的新目录结构
+        - hr/uo/000000.npy, hr/vo/000000.npy 等
+        - 输出到 lr/uo/000000.npy, lr/vo/000000.npy 等
     - 2026-02-03 leizheng v1.0.0: 适配 Ocean-Agent-SDK 目录结构
         - 新增 --dataset_root 参数
         - 新增 --scale 参数（替代 --size）
@@ -228,24 +235,57 @@ def process_split(
         print(f"[Warning] HR 目录不存在，跳过: {hr_dir}")
         return []
 
-    # 扫描 hr 目录下的所有 .npy 文件
-    npy_files = glob.glob(os.path.join(hr_dir, '*.npy'))
+    # v2.0.0: 扫描 hr 目录下的子目录（每个变量一个子目录）
+    var_dirs = [d for d in os.listdir(hr_dir) if os.path.isdir(os.path.join(hr_dir, d))]
 
-    if not npy_files:
-        print(f"[Warning] HR 目录为空: {hr_dir}")
-        return []
+    # 如果没有子目录，尝试旧格式（直接扫描 .npy 文件）
+    if not var_dirs:
+        npy_files = glob.glob(os.path.join(hr_dir, '*.npy'))
+        if not npy_files:
+            print(f"[Warning] HR 目录为空: {hr_dir}")
+            return []
 
-    print(f"\n处理 {split} 数据集 ({len(npy_files)} 个文件)...")
+        # 旧格式：直接处理 hr/*.npy 文件
+        print(f"\n处理 {split} 数据集 [旧格式] ({len(npy_files)} 个文件)...")
+        print(f"  HR 目录: {hr_dir}")
+        print(f"  LR 目录: {lr_dir}")
+
+        results = []
+        for src_path in sorted(npy_files):
+            filename = os.path.basename(src_path)
+            dst_path = os.path.join(lr_dir, filename)
+            result = process_file(src_path, dst_path, scale, method_flag)
+            if result:
+                results.append(result)
+        return results
+
+    # v2.0.0 新格式：hr/var_name/000000.npy
+    total_files = 0
+    for var_name in var_dirs:
+        var_hr_dir = os.path.join(hr_dir, var_name)
+        npy_files = glob.glob(os.path.join(var_hr_dir, '*.npy'))
+        total_files += len(npy_files)
+
+    print(f"\n处理 {split} 数据集 [新格式] ({len(var_dirs)} 个变量, {total_files} 个文件)...")
     print(f"  HR 目录: {hr_dir}")
     print(f"  LR 目录: {lr_dir}")
 
     results = []
-    for src_path in sorted(npy_files):
-        filename = os.path.basename(src_path)
-        dst_path = os.path.join(lr_dir, filename)
-        result = process_file(src_path, dst_path, scale, method_flag)
-        if result:
-            results.append(result)
+    for var_name in sorted(var_dirs):
+        var_hr_dir = os.path.join(hr_dir, var_name)
+        var_lr_dir = os.path.join(lr_dir, var_name)
+        os.makedirs(var_lr_dir, exist_ok=True)
+
+        npy_files = glob.glob(os.path.join(var_hr_dir, '*.npy'))
+        print(f"  变量 {var_name}: {len(npy_files)} 个文件")
+
+        for src_path in sorted(npy_files):
+            filename = os.path.basename(src_path)
+            dst_path = os.path.join(var_lr_dir, filename)
+            result = process_file(src_path, dst_path, scale, method_flag)
+            if result:
+                result['variable'] = var_name
+                results.append(result)
 
     return results
 

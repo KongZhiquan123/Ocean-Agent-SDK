@@ -4,10 +4,23 @@
  *              调用 Python 脚本执行转换和后置验证
  *
  * @author leizheng
- * @date 2026-02-02
- * @version 2.4.0
+ * @date 2026-02-04
+ * @version 2.7.0
  *
  * @changelog
+ *   - 2026-02-04 leizheng: v2.7.0 修复 1D 坐标裁剪
+ *     - latitude 正确使用 h_slice 裁剪
+ *     - longitude 正确使用 w_slice 裁剪
+ *     - 修复可视化坐标轴显示错误
+ *   - 2026-02-04 leizheng: v2.6.0 文件级并行处理
+ *     - 使用 multiprocessing.Pool 替代 xr.open_mfdataset
+ *     - 彻底解决段错误问题
+ *   - 2026-02-04 leizheng: v2.5.1 同步 Python 修复
+ *     - workers 参数现在正确配置 dask 线程数
+ *     - 支持从动态文件提取静态变量
+ *   - 2026-02-04 leizheng: v2.5.0 支持粗网格模式
+ *     - 新增 output_subdir 参数（默认 'hr'，可设为 'lr'）
+ *     - 用于支持粗网格数据直接输出到 lr/ 目录
  *   - 2026-02-03 leizheng: v2.4.0 裁剪与多线程
  *     - 新增 h_slice/w_slice 参数，在转换时直接裁剪
  *     - 新增 scale 参数，验证裁剪后尺寸能否被整除
@@ -237,6 +250,12 @@ export const oceanConvertNpyTool = defineTool({
       description: '并行线程数（默认 32）',
       required: false,
       default: 32
+    },
+    output_subdir: {
+      type: 'string',
+      description: '输出子目录名（默认 "hr"，粗网格数据时设为 "lr"）',
+      required: false,
+      default: 'hr'
     }
   },
 
@@ -272,7 +291,8 @@ export const oceanConvertNpyTool = defineTool({
       h_slice,
       w_slice,
       scale,
-      workers = 32
+      workers = 32,
+      output_subdir = 'hr'
     } = args
 
     ctx.emit('step_started', { step: 'C', description: '转换为NPY格式存储' })
@@ -355,7 +375,9 @@ export const oceanConvertNpyTool = defineTool({
       h_slice: h_slice || null,
       w_slice: w_slice || null,
       scale: scale || null,
-      workers
+      workers,
+      // 输出子目录
+      output_subdir
     }
 
     try {
