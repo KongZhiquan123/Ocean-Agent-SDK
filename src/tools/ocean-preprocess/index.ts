@@ -3,10 +3,12 @@
  * @description 海洋数据预处理工具集导出
  *
  * @author leizheng
- * @date 2026-02-03
- * @version 2.4.0
+ * @contributor kongzhiquan
+ * @date 2026-02-04
+ * @version 2.5.0
  *
  * @changelog
+ *   - 2026-02-04 kongzhiquan: v2.5.0 新增报告生成工具
  *   - 2026-02-03 leizheng: v2.4.0 新增下采样、可视化、指标检测工具
  */
 
@@ -17,6 +19,7 @@ import { oceanPreprocessFullTool } from './full'
 import { oceanDownsampleTool } from './downsample'
 import { oceanVisualizeTool } from './visualize'
 import { oceanMetricsTool } from './metrics-tool'
+import { oceanReportTool } from './report'
 
 export const oceanPreprocessTools = [
   oceanInspectDataTool,
@@ -25,7 +28,8 @@ export const oceanPreprocessTools = [
   oceanPreprocessFullTool,
   oceanDownsampleTool,
   oceanVisualizeTool,
-  oceanMetricsTool
+  oceanMetricsTool,
+  oceanReportTool
 ]
 
 export {
@@ -35,7 +39,8 @@ export {
   oceanPreprocessFullTool,
   oceanDownsampleTool,
   oceanVisualizeTool,
-  oceanMetricsTool
+  oceanMetricsTool,
+  oceanReportTool
 }
 
 export default oceanPreprocessTools
