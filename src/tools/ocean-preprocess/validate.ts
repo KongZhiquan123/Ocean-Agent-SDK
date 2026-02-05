@@ -84,13 +84,10 @@ export const oceanValidateTensorTool = defineTool({
       mask_vars = ['mask_rho', 'mask_u', 'mask_v', 'mask_psi']
     } = args
 
-    ctx.emit('step_started', { step: 'B', description: '进行张量约定验证' })
-
     // 1. 检查 Python 环境
     const pythonPath = findFirstPythonPath()
     if (!pythonPath) {
       const errorMsg = '未找到可用的Python解释器，请安装Python或配置PYTHON/PYENV'
-      ctx.emit('step_failed', { step: 'B', error: errorMsg })
       return {
         status: 'error',
         errors: [errorMsg],
@@ -125,7 +122,6 @@ export const oceanValidateTensorTool = defineTool({
       )
 
       if (result.code !== 0) {
-        ctx.emit('step_failed', { step: 'B', error: result.stderr })
         return {
           status: 'error',
           errors: [`Python执行失败: ${result.stderr}`],
@@ -137,16 +133,9 @@ export const oceanValidateTensorTool = defineTool({
       const jsonContent = await ctx.sandbox.fs.read(outputPath)
       const validateResult: ValidateResult = JSON.parse(jsonContent)
 
-      ctx.emit('step_completed', {
-        step: 'B',
-        status: validateResult.status,
-        var_names_config: validateResult.var_names_config
-      })
-
       return validateResult
 
     } catch (error: any) {
-      ctx.emit('step_failed', { step: 'B', error: error.message })
       return {
         status: 'error',
         errors: [error.message],

@@ -85,17 +85,10 @@ export const oceanMetricsTool = defineTool({
       output
     } = args
 
-    ctx.emit('metrics_started', {
-      dataset_root,
-      scale,
-      splits
-    })
-
     // 1. 检查 Python 环境
     const pythonPath = findFirstPythonPath()
     if (!pythonPath) {
       const errorMsg = '未找到可用的Python解释器'
-      ctx.emit('metrics_failed', { error: errorMsg })
       return {
         status: 'error',
         errors: [errorMsg],
@@ -117,7 +110,6 @@ export const oceanMetricsTool = defineTool({
       const result = await ctx.sandbox.exec(cmd, { timeoutMs: 600000 })
 
       if (result.code !== 0) {
-        ctx.emit('metrics_failed', { error: result.stderr })
         return {
           status: 'error',
           errors: [`Python执行失败: ${result.stderr}`],
@@ -135,21 +127,13 @@ export const oceanMetricsTool = defineTool({
         totalVars += Object.keys(splitResult).length
       }
 
-      ctx.emit('metrics_completed', {
-        dataset_root,
-        scale,
-        total_vars: totalVars,
-        output_path: outputPath
-      })
-
       return {
         status: 'success',
         ...metricsResult,
-        message: `指标检测完成，共检测 ${totalVars} 个变量`
+        message: `指标检测完成，共检测 ${totalVars} 个变量，请调用ocean_generate_report工具生成预处理报告。`
       }
 
     } catch (error: any) {
-      ctx.emit('metrics_failed', { error: error.message })
       return {
         status: 'error',
         errors: [error.message],

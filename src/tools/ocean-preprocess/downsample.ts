@@ -96,18 +96,10 @@ export const oceanDownsampleTool = defineTool({
       include_static = false
     } = args
 
-    ctx.emit('downsample_started', {
-      dataset_root,
-      scale,
-      method,
-      splits
-    })
-
     // 1. 检查 Python 环境
     const pythonPath = findFirstPythonPath()
     if (!pythonPath) {
       const errorMsg = '未找到可用的Python解释器'
-      ctx.emit('downsample_failed', { error: errorMsg })
       return {
         status: 'error',
         errors: [errorMsg],
@@ -134,7 +126,6 @@ export const oceanDownsampleTool = defineTool({
       const result = await ctx.sandbox.exec(cmd, { timeoutMs: 600000 })
 
       if (result.code !== 0) {
-        ctx.emit('downsample_failed', { error: result.stderr })
         return {
           status: 'error',
           errors: [`Python执行失败: ${result.stderr}`],
@@ -153,13 +144,6 @@ export const oceanDownsampleTool = defineTool({
       }
       totalFiles += (downsampleResult.static_variables || []).length
 
-      ctx.emit('downsample_completed', {
-        dataset_root,
-        scale,
-        method,
-        total_files: totalFiles
-      })
-
       return {
         status: 'success',
         ...downsampleResult,
@@ -167,7 +151,6 @@ export const oceanDownsampleTool = defineTool({
       }
 
     } catch (error: any) {
-      ctx.emit('downsample_failed', { error: error.message })
       return {
         status: 'error',
         errors: [error.message],

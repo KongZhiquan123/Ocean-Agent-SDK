@@ -295,12 +295,9 @@ export const oceanConvertNpyTool = defineTool({
       output_subdir = 'hr'
     } = args
 
-    ctx.emit('step_started', { step: 'C', description: '转换为NPY格式存储' })
-
     // 验证数据集划分比例（必须由用户指定）
     if (train_ratio === undefined || valid_ratio === undefined || test_ratio === undefined) {
       const errorMsg = '数据集划分比例必须由用户指定！请提供 train_ratio, valid_ratio, test_ratio 参数'
-      ctx.emit('step_failed', { step: 'C', error: errorMsg })
       return {
         status: 'error',
         errors: [errorMsg],
@@ -312,7 +309,6 @@ export const oceanConvertNpyTool = defineTool({
     const totalRatio = train_ratio + valid_ratio + test_ratio
     if (Math.abs(totalRatio - 1.0) > 0.01) {
       const errorMsg = `数据集划分比例之和必须为 1.0，当前为 ${totalRatio}`
-      ctx.emit('step_failed', { step: 'C', error: errorMsg })
       return {
         status: 'error',
         errors: [errorMsg],
@@ -320,17 +316,10 @@ export const oceanConvertNpyTool = defineTool({
       }
     }
 
-    // P0 修复：验证必要参数
-    if (!mask_vars || mask_vars.length === 0) {
-      const warningMsg = '未指定掩码变量（mask_vars），将跳过掩码相关处理'
-      ctx.emit('warning', { step: 'C', message: warningMsg })
-    }
-
     // 1. 检查 Python 环境
     const pythonPath = findFirstPythonPath()
     if (!pythonPath) {
       const errorMsg = '未找到可用的Python解释器，请安装Python或配置PYTHON/PYENV'
-      ctx.emit('step_failed', { step: 'C', error: errorMsg })
       return {
         status: 'error',
         errors: [errorMsg],
@@ -392,7 +381,6 @@ export const oceanConvertNpyTool = defineTool({
       )
 
       if (result.code !== 0) {
-        ctx.emit('step_failed', { step: 'C', error: result.stderr })
         return {
           status: 'error',
           errors: [`Python执行失败: ${result.stderr}`],
@@ -404,17 +392,9 @@ export const oceanConvertNpyTool = defineTool({
       const jsonContent = await ctx.sandbox.fs.read(outputPath)
       const convertResult: ConvertResult = JSON.parse(jsonContent)
 
-      ctx.emit('step_completed', {
-        step: 'C',
-        status: convertResult.status,
-        saved_files: Object.keys(convertResult.saved_files),
-        validation: convertResult.post_validation
-      })
-
       return convertResult
 
     } catch (error: any) {
-      ctx.emit('step_failed', { step: 'C', error: error.message })
       return {
         status: 'error',
         errors: [error.message],

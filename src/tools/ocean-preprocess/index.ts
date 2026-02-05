@@ -5,10 +5,13 @@
  * @author leizheng
  * @contributors kongzhiquan
  * @date 2026-02-04
- * @version 3.0.0
+ * @version 3.0.3
  *
  * @changelog
- *   - 2026-02-04 kongzhiquan: v3.0.0 统一版本号
+ *   - 2026-02-05 kongzhiquan: v3.0.3 新增执行确认 Token 机制
+ *     - workflow-state.ts 新增 confirmation_token 验证
+ *     - 防止 Agent 跳过 awaiting_execution 阶段
+ *   - 2026-02-05 kongzhiquan: v3.0.2 新增状态机模块
  *     - full.ts, report.ts, visualize.ts 统一为 v3.0.0
  *     - visualize 新增统计分布图（均值/方差时序、直方图）
  *     - report 新增可视化图片嵌入（对比图 + 统计图）
@@ -29,6 +32,16 @@ import { oceanDownsampleTool } from './downsample'
 import { oceanVisualizeTool } from './visualize'
 import { oceanMetricsTool } from './metrics-tool'
 import { oceanReportTool } from './report'
+
+// 导出状态机相关类型和类
+export {
+  PreprocessWorkflow,
+  WorkflowState,
+  type WorkflowParams,
+  type WorkflowStateType,
+  type StageCheckResult,
+  type StagePromptResult
+} from './workflow-state'
 
 export const oceanPreprocessTools = [
   oceanInspectDataTool,

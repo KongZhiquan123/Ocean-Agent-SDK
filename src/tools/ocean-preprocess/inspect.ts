@@ -145,13 +145,10 @@ export const oceanInspectDataTool = defineTool({
       static_vars
     } = args
 
-    ctx.emit('step_started', { step: 'A', description: '查看数据并定义变量' })
-
     // 1. 检查 Python 环境
     const pythonPath = findFirstPythonPath()
     if (!pythonPath) {
       const errorMsg = '未找到可用的Python解释器，请安装Python或配置PYTHON/PYENV'
-      ctx.emit('step_failed', { step: 'A', error: errorMsg })
       return {
         status: 'error',
         errors: [errorMsg],
@@ -203,7 +200,6 @@ export const oceanInspectDataTool = defineTool({
       )
 
       if (result.code !== 0) {
-        ctx.emit('step_failed', { step: 'A', error: result.stderr })
         return {
           status: 'error',
           errors: [`Python执行失败: ${result.stderr}`],
@@ -215,18 +211,9 @@ export const oceanInspectDataTool = defineTool({
       const jsonContent = await ctx.sandbox.fs.read(outputPath)
       const inspectResult: InspectResult = JSON.parse(jsonContent)
 
-      ctx.emit('step_completed', {
-        step: 'A',
-        file_count: inspectResult.file_count,
-        dynamic_files: inspectResult.dynamic_files,
-        suspected_static_files: inspectResult.suspected_static_files,
-        dynamic_vars: inspectResult.dynamic_vars_candidates
-      })
-
       return inspectResult
 
     } catch (error: any) {
-      ctx.emit('step_failed', { step: 'A', error: error.message })
       return {
         status: 'error',
         errors: [error.message],

@@ -4,10 +4,14 @@
  *
  * @author kongzhiquan
  * @contributors leizheng
- * @date 2026-02-04
- * @version 3.1.0
+ * @date 2026-02-05
+ * @version 3.2.0
  *
  * @changelog
+ *   - 2026-02-05 kongzhiquan: v3.2.0 使用 zod 添加 user_confirmation 参数严格校验
+ *     - 校验 user_confirmation 必须包含 4 个阶段的确认信息
+ *     - 校验每个阶段必须包含必要字段
+ *     - 返回详细的错误提示，指导 Agent 正确填写
  *   - 2026-02-04 kongzhiquan: v3.1.0 合并 manifest_path 和 user_confirmation 功能
  *     - 新增 manifest_path 参数，用于读取 preprocess_manifest.json
  *     - 新增 user_confirmation 参数记录 4 阶段确认信息
@@ -24,45 +28,97 @@
 
 import { defineTool } from '@shareai-lab/kode-sdk'
 import { findFirstPythonPath } from '@/utils/python-manager'
+import { z } from 'zod'
 import path from 'node:path'
 
-export interface UserConfirmation {
-  stage1_research_vars?: {
-    selected: string[]
-    confirmed_at?: string
-  }
-  stage2_static_mask?: {
-    static_vars: string[]
-    mask_vars: string[]
-    coord_vars?: {
-      lon?: string
-      lat?: string
-    }
-    confirmed_at?: string
-  }
-  stage3_parameters?: {
-    scale?: number
-    downsample_method?: string
-    train_ratio?: number
-    valid_ratio?: number
-    test_ratio?: number
-    h_slice?: string
-    w_slice?: string
-    crop_recommendation?: string
-    confirmed_at?: string
-  }
-  stage4_execution?: {
-    confirmed: boolean
-    confirmed_at?: string
-    execution_started_at?: string
-  }
-}
+// 使用 zod 定义 user_confirmation 的 schema
+const UserConfirmationSchema = z.object({
+  stage1_research_vars: z.object({
+    selected: z.array(z.string()).min(1, '必须选择至少一个研究变量'),
+    confirmed_at: z.string().optional()
+  }),
+
+  stage2_static_mask: z.object({
+    static_vars: z.array(z.string()),
+    mask_vars: z.array(z.string()),
+    coord_vars: z.object({
+      lon: z.string().optional(),
+      lat: z.string().optional()
+    }).optional(),
+    confirmed_at: z.string().optional()
+  }),
+
+  stage3_parameters: z.object({
+    scale: z.number().optional(),
+    downsample_method: z.string().optional(),
+    train_ratio: z.number().min(0).max(1),
+    valid_ratio: z.number().min(0).max(1),
+    test_ratio: z.number().min(0).max(1),
+    h_slice: z.string().optional(),
+    w_slice: z.string().optional(),
+    crop_recommendation: z.string().optional(),
+    confirmed_at: z.string().optional()
+  }).refine(
+    data => !data.scale || data.downsample_method,
+    { message: '指定了 scale 时必须同时指定 downsample_method' }
+  ),
+
+  stage4_execution: z.object({
+    confirmed: z.literal(true, {
+      errorMap: () => ({ message: 'confirmed 必须为 true，表示用户已确认执行' })
+    }),
+    confirmed_at: z.string().optional(),
+    execution_started_at: z.string().optional()
+  })
+})
+
+export type UserConfirmation = z.infer<typeof UserConfirmationSchema>
 
 export interface ReportResult {
   status: 'success' | 'error'
   report_path: string
   errors?: string[]
   message?: string
+}
+
+/**
+ * 格式化 zod 校验错误为可读的错误信息
+ */
+function formatZodErrors(error: z.ZodError): string[] {
+  return error.errors.map(err => {
+    const path = err.path.join('.')
+    return path ? `${path}: ${err.message}` : err.message
+  })
+}
+
+/**
+ * 生成 user_confirmation 格式示例
+ */
+function getUserConfirmationExample(): string {
+  return `{
+  "stage1_research_vars": {
+    "selected": ["chl", "no3"],
+    "confirmed_at": "2026-02-04T10:30:00Z"
+  },
+  "stage2_static_mask": {
+    "static_vars": ["lon", "lat", "mask"],
+    "mask_vars": ["mask"],
+    "coord_vars": { "lon": "lon", "lat": "lat" },
+    "confirmed_at": "2026-02-04T10:31:00Z"
+  },
+  "stage3_parameters": {
+    "scale": 4,
+    "downsample_method": "area",
+    "train_ratio": 0.7,
+    "valid_ratio": 0.15,
+    "test_ratio": 0.15,
+    "confirmed_at": "2026-02-04T10:32:00Z"
+  },
+  "stage4_execution": {
+    "confirmed": true,
+    "confirmed_at": "2026-02-04T10:33:00Z"
+  }
+}`
 }
 
 export const oceanReportTool = defineTool({
@@ -163,18 +219,39 @@ export const oceanReportTool = defineTool({
       output_path
     } = args
 
-    ctx.emit('report_started', { dataset_root })
+    // 0. 使用 zod 校验 user_confirmation 参数
+    const parseResult = UserConfirmationSchema.safeParse(user_confirmation)
+    if (!parseResult.success) {
+      const validationErrors = formatZodErrors(parseResult.error)
+      const errorMessage = [
+        '⛔ user_confirmation 参数校验失败：',
+        '',
+        ...validationErrors.map(e => `  - ${e}`),
+        '',
+        '📋 正确的 user_confirmation 格式示例：',
+        getUserConfirmationExample(),
+        '',
+        '⚠️ 即使用户接受了推荐配置，也必须将这些配置记录到 user_confirmation 中！'
+      ].join('\n')
+
+      return {
+        status: 'error',
+        report_path: '',
+        errors: validationErrors,
+        message: errorMessage
+      } as ReportResult
+    }
 
     // 1. 检查 Python 环境
     const pythonPath = findFirstPythonPath()
     if (!pythonPath) {
       const errorMsg = '未找到可用的Python解释器'
-      ctx.emit('report_failed', { error: errorMsg })
       return {
         status: 'error',
+        report_path: '',
         errors: [errorMsg],
         message: '报告生成失败'
-      }
+      } as ReportResult
     }
 
     // 2. 准备路径
@@ -188,7 +265,7 @@ export const oceanReportTool = defineTool({
 
     const config = {
       dataset_root,
-      user_confirmation: user_confirmation || {},
+      user_confirmation: parseResult.data,
       inspect_result_path: inspect_result_path || path.join(tempDir, 'inspect_result.json'),
       validate_result_path: validate_result_path || path.join(tempDir, 'validate_result.json'),
       convert_result_path: convert_result_path || path.join(tempDir, 'convert_result.json'),
@@ -208,31 +285,27 @@ export const oceanReportTool = defineTool({
       )
 
       if (result.code !== 0) {
-        ctx.emit('report_failed', { error: result.stderr })
         return {
           status: 'error',
+          report_path: '',
           errors: [`Python执行失败: ${result.stderr}`],
           message: '报告生成失败'
-        }
+        } as ReportResult
       }
-
-      ctx.emit('report_completed', {
-        report_path: reportPath
-      })
 
       return {
         status: 'success',
         report_path: reportPath,
-        message: `报告已生成: ${reportPath}`
-      }
+        message: `报告已生成: ${reportPath}，请勿再手写一份新的报告，直接使用此报告并补充分析部分即可。`
+      } as ReportResult
 
     } catch (error: any) {
-      ctx.emit('report_failed', { error: error.message })
       return {
         status: 'error',
+        report_path: '',
         errors: [error.message],
         message: '报告生成执行异常'
-      }
+      } as ReportResult
     }
   }
 })

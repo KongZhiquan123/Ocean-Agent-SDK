@@ -105,16 +105,10 @@ export const oceanVisualizeTool = defineTool({
       out_dir
     } = args
 
-    ctx.emit('visualize_started', {
-      dataset_root,
-      splits
-    })
-
     // 1. 检查 Python 环境
     const pythonPath = findFirstPythonPath()
     if (!pythonPath) {
       const errorMsg = '未找到可用的Python解释器'
-      ctx.emit('visualize_failed', { error: errorMsg })
       return {
         status: 'error',
         errors: [errorMsg],
@@ -136,7 +130,6 @@ export const oceanVisualizeTool = defineTool({
       const result = await ctx.sandbox.exec(cmd, { timeoutMs: 300000 })
 
       if (result.code !== 0) {
-        ctx.emit('visualize_failed', { error: result.stderr })
         return {
           status: 'error',
           errors: [`Python执行失败: ${result.stderr}`],
@@ -159,12 +152,6 @@ export const oceanVisualizeTool = defineTool({
         }
       }
 
-      ctx.emit('visualize_completed', {
-        dataset_root,
-        output_dir: outputDir,
-        generated_files: generatedFiles.length
-      })
-
       return {
         status: 'success',
         dataset_root,
@@ -175,7 +162,6 @@ export const oceanVisualizeTool = defineTool({
       }
 
     } catch (error: any) {
-      ctx.emit('visualize_failed', { error: error.message })
       return {
         status: 'error',
         errors: [error.message],
