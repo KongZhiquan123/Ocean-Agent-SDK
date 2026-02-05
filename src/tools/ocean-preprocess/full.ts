@@ -6,9 +6,13 @@
  * @author leizheng
  * @contributors kongzhiquan
  * @date 2026-02-02
- * @version 3.3.0
+ * @version 3.4.0
  *
  * @changelog
+ *   - 2026-02-05 kongzhiquan: v3.4.0 日期文件名功能
+ *     - 新增 use_date_filename, date_format, time_var 参数
+ *     - 支持从 NC 文件提取时间戳作为 NPY 文件名
+ *     - 自动检测日期格式（日/小时/分钟级数据）
  *   - 2026-02-05 kongzhiquan: v3.3.0 合并重构与区域裁剪功能
  *     - 移除冗余的 try-catch 和 status 检查
  *     - 将验证逻辑下沉到子工具中
@@ -297,6 +301,24 @@ export const oceanPreprocessFullTool = defineTool({
 - "two_step": 两步裁剪，先保存裁剪后的原始数据到 raw/，再做尺寸调整保存到 hr/`,
       required: false,
       default: 'two_step'
+    },
+    // ========== 日期文件名参数 ==========
+    use_date_filename: {
+      type: 'boolean',
+      description: '是否使用日期作为文件名（如 20200101.npy 而非 000000.npy）',
+      required: false,
+      default: false
+    },
+    date_format: {
+      type: 'string',
+      description: '日期格式: "auto"（自动检测）, "YYYYMMDD", "YYYYMMDDHH", "YYYYMMDDHHmm", "YYYY-MM-DD"',
+      required: false,
+      default: 'auto'
+    },
+    time_var: {
+      type: 'string',
+      description: '时间变量名（默认自动检测 time/ocean_time 等）',
+      required: false
     }
   },
 
@@ -340,7 +362,11 @@ export const oceanPreprocessFullTool = defineTool({
       enable_region_crop = false,
       crop_lon_range,
       crop_lat_range,
-      crop_mode = 'two_step'
+      crop_mode = 'two_step',
+      // 日期文件名参数
+      use_date_filename = false,
+      date_format = 'auto',
+      time_var
     } = args
 
     // 检测是否为粗网格模式（数值模型模式）
@@ -520,7 +546,11 @@ export const oceanPreprocessFullTool = defineTool({
       enable_region_crop,
       crop_lon_range,
       crop_lat_range,
-      crop_mode
+      crop_mode,
+      // 日期文件名参数
+      use_date_filename,
+      date_format,
+      time_var
     }, ctx)
 
     result.step_c = stepCResult
@@ -576,7 +606,11 @@ export const oceanPreprocessFullTool = defineTool({
         h_slice,
         w_slice,
         workers,
-        output_subdir: 'lr'
+        output_subdir: 'lr',
+        // 日期文件名参数
+        use_date_filename,
+        date_format,
+        time_var
       }, ctx)
 
       result.step_c2 = stepC2Result

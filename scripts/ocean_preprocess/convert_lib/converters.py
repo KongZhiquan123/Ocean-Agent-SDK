@@ -2,6 +2,12 @@
 converters.py - 核心转换函数
 
 从 convert_npy.py 拆分
+
+@changelog
+  - 2026-02-05 kongzhiquan: 新增日期文件名功能
+    - 新增 use_date_filename, date_format, time_var 参数
+    - 支持从 NC 文件提取时间戳作为文件名
+    - 时间提取失败时自动回退到纯序号命名
 """
 
 import os
@@ -10,7 +16,7 @@ import numpy as np
 import xarray as xr
 from typing import Any, Dict, List, Optional, Tuple
 
-from .constants import DEFAULT_WORKERS, LON_VARS, LAT_VARS
+from .constants import DEFAULT_WORKERS, LON_VARS, LAT_VARS, DEFAULT_DATE_FORMAT
 from .crop import _parallel_extract_var, crop_spatial, validate_crop_divisible
 from .check import (
     is_object_dtype,
@@ -18,6 +24,13 @@ from .check import (
     get_spatial_shape,
     verify_coordinate_range,
     get_static_var_prefix
+)
+from .time_utils import (
+    extract_timestamps_from_files,
+    detect_date_format,
+    generate_date_filenames,
+    validate_time_monotonic,
+    create_time_mapping
 )
 
 
@@ -34,10 +47,34 @@ def convert_dynamic_vars(
     w_slice: Optional[slice] = None,
     scale: Optional[int] = None,
     workers: int = DEFAULT_WORKERS,
-    output_subdir: str = 'hr'
+    output_subdir: str = 'hr',
+    use_date_filename: bool = False,
+    date_format: str = DEFAULT_DATE_FORMAT,
+    time_var: Optional[str] = None
 ) -> Dict[str, Dict[str, Any]]:
     """
     转换动态变量，并按时间顺序划分为 train/valid/test
+
+    Args:
+        nc_files: NC 文件列表
+        dyn_vars: 动态变量名列表
+        output_dir: 输出目录
+        result: 结果字典（用于记录警告和错误）
+        allow_nan: 是否允许 NaN 值
+        train_ratio: 训练集比例
+        valid_ratio: 验证集比例
+        test_ratio: 测试集比例
+        h_slice: 高度方向裁剪
+        w_slice: 宽度方向裁剪
+        scale: 下采样倍数（用于验证尺寸）
+        workers: 并行进程数
+        output_subdir: 输出子目录名（hr 或 lr）
+        use_date_filename: 是否使用日期作为文件名
+        date_format: 日期格式（auto/YYYYMMDD/YYYYMMDDHH/YYYYMMDDHHmm）
+        time_var: 指定的时间变量名（None 则自动检测）
+
+    Returns:
+        保存的文件信息字典
     """
     # 创建输出目录结构
     splits = ['train', 'valid', 'test']
@@ -52,9 +89,74 @@ def convert_dynamic_vars(
     nan_check_results = {}
     split_info = {}
 
+    # ========== 日期文件名处理 ==========
+    timestamps = None
+    date_filenames = None
+    actual_date_format = None
+    detected_time_var = None
+
+    if use_date_filename:
+        print(f"正在提取时间信息用于文件命名...", file=sys.stderr)
+
+        timestamps, detected_time_var, time_warnings = extract_timestamps_from_files(
+            nc_files, time_var
+        )
+
+        if time_warnings:
+            for w in time_warnings:
+                result["warnings"].append(f"时间提取: {w}")
+
+        if timestamps is None:
+            # 时间提取失败，回退到纯序号
+            print(f"  [Warning] 时间提取失败，回退到纯序号命名", file=sys.stderr)
+            result["warnings"].append("时间提取失败，使用纯序号命名")
+            use_date_filename = False
+        else:
+            # 验证时间单调性
+            is_monotonic, mono_msg = validate_time_monotonic(timestamps)
+            if not is_monotonic:
+                print(f"  [Warning] {mono_msg}，回退到纯序号命名", file=sys.stderr)
+                result["warnings"].append(f"时间非单调递增: {mono_msg}，使用纯序号命名")
+                use_date_filename = False
+            else:
+                # 确定日期格式
+                if date_format == "auto":
+                    actual_date_format = detect_date_format(timestamps)
+                    print(f"  自动检测日期格式: {actual_date_format}", file=sys.stderr)
+                else:
+                    actual_date_format = date_format
+
+                # 生成文件名
+                date_filenames = generate_date_filenames(timestamps, actual_date_format)
+
+                print(f"  时间变量: {detected_time_var}", file=sys.stderr)
+                print(f"  时间范围: {timestamps[0]} 到 {timestamps[-1]}", file=sys.stderr)
+                print(f"  时间步数: {len(timestamps)}", file=sys.stderr)
+                print(f"  文件命名示例: {date_filenames[0]}.npy", file=sys.stderr)
+
+                # 记录时间信息到结果
+                result["time_info"] = {
+                    "use_date_filename": True,
+                    "detected_time_var": detected_time_var,
+                    "date_format": actual_date_format,
+                    "total_timestamps": len(timestamps),
+                    "time_range": {
+                        "start": timestamps[0].isoformat(),
+                        "end": timestamps[-1].isoformat()
+                    },
+                    "filename_examples": {
+                        "first": date_filenames[0],
+                        "last": date_filenames[-1]
+                    }
+                }
+
     print(f"处理动态变量，文件数: {len(nc_files)}", file=sys.stderr)
     print(f"划分比例: train={train_ratio}, valid={valid_ratio}, test={test_ratio}", file=sys.stderr)
     print(f"并行进程数: {workers}", file=sys.stderr)
+    if use_date_filename:
+        print(f"文件命名: 日期格式 ({actual_date_format})", file=sys.stderr)
+    else:
+        print(f"文件命名: 纯序号 (000000, 000001, ...)", file=sys.stderr)
 
     for var in dyn_vars:
         try:
@@ -173,11 +275,25 @@ def convert_dynamic_vars(
 
                 time_steps = split_data.shape[0]
                 saved_count = 0
+                saved_filenames = []
+
+                # 获取该 split 的起始全局索引
+                split_start_idx = split_info[var][split_name]['start']
+
                 for t in range(time_steps):
-                    filename = f"{t:06d}.npy"
+                    # 计算全局时间索引
+                    global_idx = split_start_idx + t
+
+                    # 根据配置选择文件名
+                    if use_date_filename and date_filenames and global_idx < len(date_filenames):
+                        filename = f"{date_filenames[global_idx]}.npy"
+                    else:
+                        filename = f"{t:06d}.npy"
+
                     out_fp = os.path.join(var_dir, filename)
                     np.save(out_fp, split_data[t])
                     saved_count += 1
+                    saved_filenames.append(filename)
 
                 var_saved_files[split_name] = {
                     "dir": var_dir,
@@ -186,7 +302,10 @@ def convert_dynamic_vars(
                     "total_shape": list(split_data.shape),
                     "spatial_shape": list(spatial_shape),
                     "dtype": str(split_data.dtype),
-                    "time_steps": time_steps
+                    "time_steps": time_steps,
+                    "filename_pattern": "date" if use_date_filename else "sequential",
+                    "first_file": saved_filenames[0] if saved_filenames else None,
+                    "last_file": saved_filenames[-1] if saved_filenames else None
                 }
 
                 print(f"      {split_name}/{output_subdir}/{var}/: {saved_count} 个文件, 每个 shape={split_data[0].shape}", file=sys.stderr)

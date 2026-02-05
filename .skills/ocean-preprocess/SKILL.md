@@ -1,7 +1,7 @@
 ---
 name: ocean-preprocess
 description: 海洋数据预处理技能 - 专用于超分辨率场景的NC到NPY数据格式转换
-version: 3.2.0
+version: 3.3.0
 author: kongzhiquan
 contributors: leizheng
 last_modified: 2026-02-05
@@ -9,6 +9,11 @@ last_modified: 2026-02-05
 
 <!--
 Changelog:
+  - 2026-02-05 kongzhiquan: v3.3.0
+    - 新增日期文件名功能（use_date_filename, date_format, time_var 参数）
+    - 支持从 NC 文件提取时间戳作为 NPY 文件名
+    - 自动检测日期格式（日/小时/分钟级数据）
+    - 重复日期自动添加时间后缀
   - 2026-02-05 kongzhiquan: v3.2.0
     - 重构文档结构：核心内容精简至 ~150 行
     - 详细文档移至 references/ 目录
@@ -106,6 +111,16 @@ Changelog:
 |------|------|----------|
 | **下采样** | HR 数据下采样生成 LR | `scale` + `downsample_method` |
 | **粗网格** | HR/LR 数据由模型分别生成 | `lr_nc_folder` |
+
+### 日期文件名（可选）
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `use_date_filename` | 使用日期作为文件名 | `false` |
+| `date_format` | 日期格式: `auto`/`YYYYMMDD`/`YYYYMMDDHH`/`YYYYMMDDHHmm` | `auto` |
+| `time_var` | 时间变量名（自动检测 time/ocean_time） | - |
+
+**示例**：启用后输出文件名从 `000000.npy` 变为 `20200101.npy`（按日期命名）
 
 ---
 

@@ -6,9 +6,13 @@
  * @author leizheng
  * @contributors kongzhiquan
  * @date 2026-02-04
- * @version 3.2.0
+ * @version 3.3.0
  *
  * @changelog
+ *   - 2026-02-05 kongzhiquan: v3.3.0 日期文件名功能
+ *     - 新增 use_date_filename, date_format, time_var 参数
+ *     - 支持从 NC 文件提取时间戳作为 NPY 文件名
+ *     - 自动检测日期格式（日/小时/分钟级数据）
  *   - 2026-02-05 kongzhiquan: v3.2.0 合并重构与区域裁剪功能
  *     - 移除 try-catch，统一由上层处理错误
  *     - 错误时直接 throw Error 而非返回 status: 'error'
@@ -287,6 +291,24 @@ export const oceanConvertNpyTool = defineTool({
       description: '区域裁剪模式: "one_step"（一步到位）或 "two_step"（两步裁剪，保存 raw）',
       required: false,
       default: 'two_step'
+    },
+    // ========== 日期文件名参数（v3.2.0 新增）==========
+    use_date_filename: {
+      type: 'boolean',
+      description: '是否使用日期作为文件名（如 20200101.npy 而非 000000.npy）',
+      required: false,
+      default: false
+    },
+    date_format: {
+      type: 'string',
+      description: '日期格式: "auto"（自动检测）, "YYYYMMDD", "YYYYMMDDHH", "YYYYMMDDHHmm"',
+      required: false,
+      default: 'auto'
+    },
+    time_var: {
+      type: 'string',
+      description: '时间变量名（默认自动检测 time/ocean_time 等）',
+      required: false
     }
   },
 
@@ -328,7 +350,11 @@ export const oceanConvertNpyTool = defineTool({
       enable_region_crop = false,
       crop_lon_range,
       crop_lat_range,
-      crop_mode = 'two_step'
+      crop_mode = 'two_step',
+      // 日期文件名参数（v3.2.0 新增）
+      use_date_filename = false,
+      date_format = 'auto',
+      time_var
     } = args
 
     // 验证数据集划分比例（必须由用户指定）
@@ -392,7 +418,11 @@ export const oceanConvertNpyTool = defineTool({
       enable_region_crop,
       crop_lon_range: crop_lon_range || null,
       crop_lat_range: crop_lat_range || null,
-      crop_mode
+      crop_mode,
+      // 日期文件名参数（v3.2.0 新增）
+      use_date_filename,
+      date_format,
+      time_var: time_var || null
     }
 
     // 4. 创建临时目录并写入配置

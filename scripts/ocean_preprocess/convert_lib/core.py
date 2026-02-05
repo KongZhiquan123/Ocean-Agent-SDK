@@ -87,6 +87,11 @@ def convert_npy(config: Dict[str, Any]) -> Dict[str, Any]:
     # 输出子目录（默认 'hr'，用于粗网格数据时设为 'lr'）
     output_subdir = config.get("output_subdir", "hr")
 
+    # ========== 日期文件名参数 ==========
+    use_date_filename = config.get("use_date_filename", False)
+    date_format = config.get("date_format", "auto")
+    time_var = config.get("time_var")  # 指定的时间变量名
+
     # ========== 区域裁剪参数 ==========
     enable_region_crop = config.get("enable_region_crop", False)
     crop_lon_range = config.get("crop_lon_range")  # [min, max]
@@ -265,7 +270,10 @@ def convert_npy(config: Dict[str, Any]) -> Dict[str, Any]:
                 w_slice=raw_w_slice,
                 scale=None,  # raw 不验证 scale
                 workers=workers,
-                output_subdir='raw'
+                output_subdir='raw',
+                use_date_filename=use_date_filename,
+                date_format=date_format,
+                time_var=time_var
             )
             result["saved_files"]["raw_dynamic"] = raw_dyn_saved
 
@@ -317,7 +325,10 @@ def convert_npy(config: Dict[str, Any]) -> Dict[str, Any]:
             w_slice=final_hr_w_slice,
             scale=scale,
             workers=workers,
-            output_subdir=output_subdir
+            output_subdir=output_subdir,
+            use_date_filename=use_date_filename,
+            date_format=date_format,
+            time_var=time_var
         )
         result["saved_files"].update(dyn_saved)
 

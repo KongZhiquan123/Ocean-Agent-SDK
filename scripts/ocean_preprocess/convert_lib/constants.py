@@ -2,6 +2,9 @@
 constants.py - 常量定义
 
 从 convert_npy.py 拆分
+
+@changelog
+  - 2026-02-05 kongzhiquan: 新增日期文件名格式常量
 """
 
 # 静态变量编号前缀
@@ -29,3 +32,8 @@ OCEAN_ZERO_RATIO_MAX = 0.90    # 海洋点零值比例上限
 
 # 多线程默认参数
 DEFAULT_WORKERS = 32
+
+# 日期文件名格式（用于 use_date_filename 功能）
+# 格式选项: "auto", "YYYYMMDD", "YYYYMMDDHH", "YYYYMMDDHHmm", "YYYY-MM-DD"
+DEFAULT_DATE_FORMAT = "auto"
+

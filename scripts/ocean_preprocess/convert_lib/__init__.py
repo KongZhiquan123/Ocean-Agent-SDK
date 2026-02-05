@@ -6,7 +6,7 @@ convert_lib - NC 转 NPY 转换库
 @author leizheng
 @contributors kongzhiquan
 @date 2026-02-05
-@version 3.1.1
+@version 3.2.0
 
 模块结构:
 - constants.py: 常量定义
@@ -16,9 +16,13 @@ convert_lib - NC 转 NPY 转换库
 - mask.py: 掩码相关函数
 - converters.py: 变量转换函数
 - validation.py: 验证规则
+- time_utils.py: 时间处理函数（新增）
 - core.py: 核心转换函数
 
 @changelog
+  - 2026-02-05 kongzhiquan: v3.2.0 新增日期文件名功能
+    - 新增 time_utils.py 模块
+    - 支持从 NC 文件提取时间戳作为文件名
   - 2026-02-05 kongzhiquan: v3.1.1 初始版本，从 convert_npy.py 拆分
 """
 
@@ -40,7 +44,8 @@ from .constants import (
     LAND_THRESHOLD_ABS,
     LAND_ZERO_RATIO_MIN,
     OCEAN_ZERO_RATIO_MAX,
-    DEFAULT_WORKERS
+    DEFAULT_WORKERS,
+    DEFAULT_DATE_FORMAT
 )
 
 # 裁剪函数
@@ -84,6 +89,16 @@ from .validation import (
     validate_rule3
 )
 
+# 时间处理函数
+from .time_utils import (
+    extract_timestamps_from_files,
+    detect_date_format,
+    generate_date_filenames,
+    validate_time_monotonic,
+    create_time_mapping,
+    DATE_FORMATS
+)
+
 __all__ = [
     # 核心
     'convert_npy',
@@ -101,6 +116,7 @@ __all__ = [
     'LAND_ZERO_RATIO_MIN',
     'OCEAN_ZERO_RATIO_MAX',
     'DEFAULT_WORKERS',
+    'DEFAULT_DATE_FORMAT',
 
     # 裁剪
     'parse_slice_str',
@@ -132,4 +148,12 @@ __all__ = [
     'validate_rule1',
     'validate_rule2',
     'validate_rule3',
+
+    # 时间处理
+    'extract_timestamps_from_files',
+    'detect_date_format',
+    'generate_date_filenames',
+    'validate_time_monotonic',
+    'create_time_mapping',
+    'DATE_FORMATS',
 ]
