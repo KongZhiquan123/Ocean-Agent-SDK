@@ -1,11 +1,15 @@
 /**
- * agent-manager.ts
+ * @file agent-manager.ts
  *
- * Description: 管理 Agent 实例的创建与消息处理
- * Author: kongzhiquan
- * Time: 2026-02-02
- * Version: 1.0.0
+ * @description 管理 Agent 实例的创建与消息处理
+ * @author kongzhiquan
+ * @date 2026-02-02
+ * @version 1.1.0
  *
+ * @changelog
+ *   - 2026-02-05 kongzhiquan: v1.1.0 新增 tool:error 事件处理
+ *     - 在 convertProgressToSSE 中添加 tool:error case
+ *     - 返回 tool_error 类型的 SSE 事件
  */
 
 import { Agent, type ProgressEvent } from '@shareai-lab/kode-sdk'
@@ -160,6 +164,14 @@ export function convertProgressToSSE(event: ProgressEvent, reqId: string): SSEEv
         tool_use_id: event.call.id,
         result: event.call.result,
         is_error: event.call.state === 'FAILED',
+        timestamp: Date.now(),
+      }
+
+    case 'tool:error':
+      return {
+        type: 'tool_error',
+        tool: event.call.name,
+        error: event.error,
         timestamp: Date.now(),
       }
 

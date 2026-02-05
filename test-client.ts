@@ -1,14 +1,17 @@
 /**
- * test-client.ts
+ * @file test-client.ts
  *
- * Description: 测试 kode-agent-service 的交互式客户端
+ * @description 测试 kode-agent-service 的交互式客户端
  *              支持多轮对话、海洋数据预处理完整流程测试
- * Author: leizheng
- * Contributors: kongzhiquan
- * Time: 2026-02-02
- * Version: 3.0.0
+ * @author leizheng
+ * @contributors kongzhiquan
+ * @date 2026-02-02
+ * @version 3.1.0
  *
- * Changelog:
+ * @changelog
+ *   - 2026-02-05 kongzhiquan: v3.1.0 新增 tool_error 事件处理
+ *     - 添加 tool_error case 显示工具执行错误
+ *     - 简化 tool_result 显示逻辑
  *   - 2026-02-04 kongzhiquan: v3.0.0 适配 4 阶段强制确认流程
  *     - 新增 4 阶段交互式测试流程引导
  *     - 新增阶段状态显示和流程提示
@@ -142,19 +145,15 @@ async function chat(message: string, mode: 'ask' | 'edit' = 'edit'): Promise<str
 
               case 'tool_result':
                 console.log(`[工具结果] ${event.is_error ? '失败' : '成功'}`)
+                const resultStr = JSON.stringify(event.result, null, 2)
                 // 显示完整结果（格式化 JSON）
-                if (showFullToolResult) {
-                  const resultStr = JSON.stringify(event.result, null, 2)
-                  if (resultStr.length > 2000) {
-                    console.log('结果（前 2000 字符）:')
-                    console.log(resultStr.slice(0, 2000) + '\n... [截断]')
-                  } else {
-                    console.log('结果:', resultStr)
-                  }
-                } else {
-                  // 简短显示
-                  console.log('结果:', JSON.stringify(event.result).slice(0, 200))
-                }
+                const sliceLen = showFullToolResult ? resultStr.length : Math.min(2000, resultStr.length)
+                console.log('结果:', resultStr.slice(0, sliceLen) + (resultStr.length > 2000 && !showFullToolResult ? '\n... [截断]' : ''))
+                break
+              
+              case 'tool_error':
+                console.log(`\n[工具错误] ${event.tool}`)
+                console.log('错误详情:', event.error)
                 break
 
               case 'done':

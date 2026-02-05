@@ -4,10 +4,15 @@
  *              调用 Python 脚本分析 NC 文件
  *
  * @author leizheng
+ * @contributors kongzhiquan
  * @date 2026-02-04
- * @version 2.4.0
+ * @version 2.5.0
  *
  * @changelog
+ *   - 2026-02-05 kongzhiquan: v2.5.0 增强验证逻辑
+ *     - 添加文件数量验证（file_count === 0 时抛出错误）
+ *     - 添加动态变量候选验证（无动态变量时抛出错误）
+ *     - 移除冗余的 try-catch
  *   - 2026-02-04 kongzhiquan: v2.4.0 添加 mask_vars 和 static_vars 参数支持
  *     - 支持通过参数传入掩码变量列表和静态变量列表
  *     - 用于精确控制变量分类逻辑
@@ -148,12 +153,7 @@ export const oceanInspectDataTool = defineTool({
     // 1. 检查 Python 环境
     const pythonPath = findFirstPythonPath()
     if (!pythonPath) {
-      const errorMsg = '未找到可用的Python解释器，请安装Python或配置PYTHON/PYENV'
-      return {
-        status: 'error',
-        errors: [errorMsg],
-        message: '数据检查失败'
-      }
+      throw new Error('未找到可用的Python解释器，请安装Python或配置PYTHON/PYENV')
     }
 
     // 2. 准备路径
@@ -188,37 +188,60 @@ export const oceanInspectDataTool = defineTool({
       config.static_vars = static_vars
     }
 
-    try {
-      // 4. 创建临时目录并写入配置
-      await ctx.sandbox.exec(`mkdir -p "${tempDir}"`)
-      await ctx.sandbox.fs.write(configPath, JSON.stringify(config, null, 2))
+    // 4. 创建临时目录并写入配置
+    await ctx.sandbox.exec(`mkdir -p "${tempDir}"`)
+    await ctx.sandbox.fs.write(configPath, JSON.stringify(config, null, 2))
 
-      // 5. 执行 Python 脚本
-      const result = await ctx.sandbox.exec(
-        `${pythonCmd} "${scriptPath}" --config "${configPath}" --output "${outputPath}"`,
-        { timeoutMs: 300000 }
-      )
+    // 5. 执行 Python 脚本
+    const result = await ctx.sandbox.exec(
+      `${pythonCmd} "${scriptPath}" --config "${configPath}" --output "${outputPath}"`,
+      { timeoutMs: 300000 }
+    )
 
-      if (result.code !== 0) {
-        return {
-          status: 'error',
-          errors: [`Python执行失败: ${result.stderr}`],
-          message: '数据检查失败'
-        }
-      }
-
-      // 6. 读取结果
-      const jsonContent = await ctx.sandbox.fs.read(outputPath)
-      const inspectResult: InspectResult = JSON.parse(jsonContent)
-
-      return inspectResult
-
-    } catch (error: any) {
-      return {
-        status: 'error',
-        errors: [error.message],
-        message: '数据检查执行异常'
-      }
+    if (result.code !== 0) {
+      throw new Error(`Python执行失败: ${result.stderr}`)
     }
+
+    // 6. 读取结果
+    const jsonContent = await ctx.sandbox.fs.read(outputPath)
+    const inspectResult: InspectResult = JSON.parse(jsonContent)
+
+    // 7. 验证结果
+    if (inspectResult.status === 'error') {
+      throw new Error(`数据检查失败: ${inspectResult.errors.join('; ')}`)
+    }
+    // 检查是否找到动态数据文件
+    if (inspectResult.file_count === 0) {
+      throw new Error(`未找到匹配的动态数据文件！
+- 搜索目录: ${nc_folder}
+- 文件匹配模式: "${dyn_file_pattern}"
+请检查：
+1. nc_folder 路径是否正确
+2. dyn_file_pattern 是否匹配你的文件名`)
+    }
+
+    // 检查是否找到任何动态变量候选
+    const dynCandidates = inspectResult.dynamic_vars_candidates || []
+    if (dynCandidates.length === 0) {
+      const allVarNames = Object.keys(inspectResult.variables || {})
+      throw new Error(`数据文件中没有找到任何动态变量（带时间维度的变量）！
+
+这通常意味着您可能提供了静态文件而非动态数据文件。
+
+【文件信息】
+- 搜索目录: ${nc_folder}
+- 找到文件数: ${inspectResult.file_count}
+- 文件列表: ${(inspectResult.file_list || []).slice(0, 3).join(', ')}${(inspectResult.file_list || []).length > 3 ? '...' : ''}
+
+【检测到的变量】（都没有时间维度）
+${allVarNames.slice(0, 10).join(', ')}${allVarNames.length > 10 ? '...' : ''}
+
+请检查：
+1. 您是否将静态文件路径填到了动态数据目录？
+2. 动态数据文件是否确实包含时间维度？
+3. 时间维度的名称是否为标准名称（time, ocean_time, t 等）？`)
+    }
+
+    return inspectResult
   }
 })

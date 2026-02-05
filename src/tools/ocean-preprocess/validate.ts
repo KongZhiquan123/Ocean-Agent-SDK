@@ -4,10 +4,14 @@
  *              调用 Python 脚本验证变量形状
  *
  * @author leizheng
+ * @contributors kongzhiquan
  * @date 2026-02-02
- * @version 2.0.0
+ * @version 2.1.0
  *
  * @changelog
+ *   - 2026-02-05 kongzhiquan: v2.1.0 移除 try-catch，统一由上层处理错误
+ *     - 删除无用参数 inspect_result_path（改为自动从临时目录读取）
+ *     - 错误时直接 throw Error 而非返回 status: 'error'
  *   - 2026-02-02 leizheng: v2.0.0 重构为调用独立 Python 脚本
  */
 
@@ -54,10 +58,6 @@ export const oceanValidateTensorTool = defineTool({
 **返回**：验证结果、var_names配置、张量约定信息`,
 
   params: {
-    inspect_result_path: {
-      type: 'string',
-      description: 'Step A 生成的 inspect_result.json 文件路径'
-    },
     research_vars: {
       type: 'array',
       items: { type: 'string' },
@@ -79,7 +79,6 @@ export const oceanValidateTensorTool = defineTool({
 
   async exec(args, ctx) {
     const {
-      inspect_result_path,
       research_vars,
       mask_vars = ['mask_rho', 'mask_u', 'mask_v', 'mask_psi']
     } = args
@@ -87,12 +86,7 @@ export const oceanValidateTensorTool = defineTool({
     // 1. 检查 Python 环境
     const pythonPath = findFirstPythonPath()
     if (!pythonPath) {
-      const errorMsg = '未找到可用的Python解释器，请安装Python或配置PYTHON/PYENV'
-      return {
-        status: 'error',
-        errors: [errorMsg],
-        message: '张量验证失败'
-      }
+      throw new Error('未找到可用的Python解释器，请安装Python或配置PYTHON/PYENV')
     }
 
     // 2. 准备路径
@@ -106,41 +100,31 @@ export const oceanValidateTensorTool = defineTool({
 
     // 3. 准备配置
     const config = {
-      inspect_result_path,
+      inspect_result_path: path.join(tempDir, 'inspect_result.json'),
       research_vars,
       mask_vars
     }
 
-    try {
-      // 4. 写入配置
-      await ctx.sandbox.fs.write(configPath, JSON.stringify(config, null, 2))
+    // 4. 写入配置
+    await ctx.sandbox.fs.write(configPath, JSON.stringify(config, null, 2))
 
-      // 5. 执行 Python 脚本
-      const result = await ctx.sandbox.exec(
-        `${pythonCmd} "${scriptPath}" --config "${configPath}" --output "${outputPath}"`,
-        { timeoutMs: 60000 }
-      )
+    // 5. 执行 Python 脚本
+    const result = await ctx.sandbox.exec(
+      `${pythonCmd} "${scriptPath}" --config "${configPath}" --output "${outputPath}"`,
+      { timeoutMs: 60000 }
+    )
 
-      if (result.code !== 0) {
-        return {
-          status: 'error',
-          errors: [`Python执行失败: ${result.stderr}`],
-          message: '张量验证失败'
-        }
-      }
-
-      // 6. 读取结果
-      const jsonContent = await ctx.sandbox.fs.read(outputPath)
-      const validateResult: ValidateResult = JSON.parse(jsonContent)
-
-      return validateResult
-
-    } catch (error: any) {
-      return {
-        status: 'error',
-        errors: [error.message],
-        message: '张量验证执行异常'
-      }
+    if (result.code !== 0) {
+      throw new Error(`Python执行失败: ${result.stderr}`)
     }
+
+    // 6. 读取结果
+    const jsonContent = await ctx.sandbox.fs.read(outputPath)
+    const validateResult: ValidateResult = JSON.parse(jsonContent)
+    if (validateResult.status === 'error') {
+      throw new Error(`张量约定验证失败: ${validateResult.errors.join('; ')}`)
+    }
+
+    return validateResult
   }
 })

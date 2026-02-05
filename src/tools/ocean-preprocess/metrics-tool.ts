@@ -3,10 +3,14 @@
  * @description 海洋数据质量指标检测工具 - 计算 HR vs LR 的质量指标
  *
  * @author leizheng
+ * @contributors kongzhiquan
  * @date 2026-02-03
- * @version 1.0.0
+ * @version 1.1.0
  *
  * @changelog
+ *   - 2026-02-05 kongzhiquan: v1.1.0 移除 try-catch，统一由上层处理错误
+ *     - 删除无用参数 output（改为固定输出到 dataset_root/metrics_result.json）
+ *     - 错误时直接 throw Error 而非返回 status: 'error'
  *   - 2026-02-03 leizheng: v1.0.0 初始版本
  *     - 调用 metrics.py 计算质量指标
  *     - 支持 SSIM、Relative L2、MSE、RMSE
@@ -64,11 +68,6 @@ export const oceanMetricsTool = defineTool({
       description: '要检查的数据集划分（默认: train, valid, test）',
       required: false,
       default: ['train', 'valid', 'test']
-    },
-    output: {
-      type: 'string',
-      description: '输出文件路径（默认: dataset_root/metrics_result.json）',
-      required: false
     }
   },
 
@@ -81,64 +80,47 @@ export const oceanMetricsTool = defineTool({
     const {
       dataset_root,
       scale,
-      splits = ['train', 'valid', 'test'],
-      output
+      splits = ['train', 'valid', 'test']
     } = args
 
     // 1. 检查 Python 环境
     const pythonPath = findFirstPythonPath()
     if (!pythonPath) {
-      const errorMsg = '未找到可用的Python解释器'
-      return {
-        status: 'error',
-        errors: [errorMsg],
-        message: '指标检测失败'
-      }
+      throw new Error('未找到可用的Python解释器')
     }
 
     // 2. 准备路径
     const pythonCmd = `"${pythonPath}"`
     const scriptPath = path.resolve(process.cwd(), 'scripts/ocean_preprocess/metrics.py')
-    const outputPath = output || path.join(dataset_root, 'metrics_result.json')
+    const outputPath = path.join(dataset_root, 'metrics_result.json')
 
     // 3. 构建命令
     const splitsArg = splits.join(' ')
     const cmd = `${pythonCmd} "${scriptPath}" --dataset_root "${dataset_root}" --scale ${scale} --splits ${splitsArg} --output "${outputPath}"`
 
-    try {
-      // 4. 执行 Python 脚本
-      const result = await ctx.sandbox.exec(cmd, { timeoutMs: 600000 })
+    // 4. 执行 Python 脚本
+    const result = await ctx.sandbox.exec(cmd, { timeoutMs: 600000 })
 
-      if (result.code !== 0) {
-        return {
-          status: 'error',
-          errors: [`Python执行失败: ${result.stderr}`],
-          message: '指标检测失败'
-        }
-      }
+    if (result.code !== 0) {
+      throw new Error(`Python执行失败: ${result.stderr}`)
+    }
 
-      // 5. 读取结果
-      const jsonContent = await ctx.sandbox.fs.read(outputPath)
-      const metricsResult: MetricsResult = JSON.parse(jsonContent)
+    // 5. 读取结果
+    const jsonContent = await ctx.sandbox.fs.read(outputPath)
+    const metricsResult: MetricsResult = JSON.parse(jsonContent)
+    if (metricsResult.status === 'error') {
+      throw new Error(`指标检测失败: ${metricsResult.errors?.join('; ') || '未知错误'}`)
+    }
+    // 统计变量数
+    let totalVars = 0
+    for (const splitResult of Object.values(metricsResult.splits || {})) {
+      totalVars += Object.keys(splitResult).length
+    }
 
-      // 统计变量数
-      let totalVars = 0
-      for (const splitResult of Object.values(metricsResult.splits || {})) {
-        totalVars += Object.keys(splitResult).length
-      }
-
-      return {
-        status: 'success',
-        ...metricsResult,
-        message: `指标检测完成，共检测 ${totalVars} 个变量，请调用ocean_generate_report工具生成预处理报告。`
-      }
-
-    } catch (error: any) {
-      return {
-        status: 'error',
-        errors: [error.message],
-        message: '指标检测执行异常'
-      }
+    return {
+      status: 'success',
+      ...metricsResult,
+      message: `指标检测完成，共检测 ${totalVars} 个变量，请调用ocean_generate_report工具生成预处理报告。`
     }
   }
 })

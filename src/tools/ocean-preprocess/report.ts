@@ -5,9 +5,12 @@
  * @author kongzhiquan
  * @contributors leizheng
  * @date 2026-02-05
- * @version 3.2.0
+ * @version 3.3.0
  *
  * @changelog
+ *   - 2026-02-05 kongzhiquan: v3.3.0 移除 try-catch 与冗余参数
+ *     - 删除无用参数（inspect_result_path, validate_result_path 等），改为自动从固定路径读取
+ *     - 错误时直接 throw Error 而非返回 status: 'error'
  *   - 2026-02-05 kongzhiquan: v3.2.0 使用 zod 添加 user_confirmation 参数严格校验
  *     - 校验 user_confirmation 必须包含 4 个阶段的确认信息
  *     - 校验每个阶段必须包含必要字段
@@ -170,31 +173,6 @@ export const oceanReportTool = defineTool({
       description: '用户确认信息（4 阶段），包含 stage1_research_vars、stage2_static_mask、stage3_parameters、stage4_execution',
       required: false
     },
-    inspect_result_path: {
-      type: 'string',
-      description: 'Step A 的 inspect_result.json 路径',
-      required: false
-    },
-    validate_result_path: {
-      type: 'string',
-      description: 'Step B 的 validate_result.json 路径',
-      required: false
-    },
-    convert_result_path: {
-      type: 'string',
-      description: 'Step C 的完整转换结果路径（convert_result.json，包含验证、warnings、errors）',
-      required: false
-    },
-    manifest_path: {
-      type: 'string',
-      description: '预处理清单路径（preprocess_manifest.json，包含输入配置）',
-      required: false
-    },
-    metrics_result_path: {
-      type: 'string',
-      description: '质量指标结果路径（metrics_result.json）',
-      required: false
-    },
     output_path: {
       type: 'string',
       description: '报告输出路径（默认: dataset_root/preprocessing_report.md）',
@@ -211,11 +189,6 @@ export const oceanReportTool = defineTool({
     const {
       dataset_root,
       user_confirmation,
-      inspect_result_path,
-      validate_result_path,
-      convert_result_path,
-      manifest_path,
-      metrics_result_path,
       output_path
     } = args
 
@@ -234,24 +207,13 @@ export const oceanReportTool = defineTool({
         '⚠️ 即使用户接受了推荐配置，也必须将这些配置记录到 user_confirmation 中！'
       ].join('\n')
 
-      return {
-        status: 'error',
-        report_path: '',
-        errors: validationErrors,
-        message: errorMessage
-      } as ReportResult
+      throw new Error(errorMessage)
     }
 
     // 1. 检查 Python 环境
     const pythonPath = findFirstPythonPath()
     if (!pythonPath) {
-      const errorMsg = '未找到可用的Python解释器'
-      return {
-        status: 'error',
-        report_path: '',
-        errors: [errorMsg],
-        message: '报告生成失败'
-      } as ReportResult
+      throw new Error('未找到可用的Python解释器')
     }
 
     // 2. 准备路径
@@ -266,46 +228,31 @@ export const oceanReportTool = defineTool({
     const config = {
       dataset_root,
       user_confirmation: parseResult.data,
-      inspect_result_path: inspect_result_path || path.join(tempDir, 'inspect_result.json'),
-      validate_result_path: validate_result_path || path.join(tempDir, 'validate_result.json'),
-      convert_result_path: convert_result_path || path.join(tempDir, 'convert_result.json'),
-      manifest_path: manifest_path || path.join(dataset_root, 'preprocess_manifest.json'),
-      metrics_result_path: metrics_result_path || path.join(dataset_root, 'metrics_result.json'),
+      inspect_result_path: path.join(tempDir, 'inspect_result.json'),
+      validate_result_path: path.join(tempDir, 'validate_result.json'),
+      convert_result_path: path.join(tempDir, 'convert_result.json'),
+      manifest_path: path.join(dataset_root, 'preprocess_manifest.json'),
+      metrics_result_path: path.join(dataset_root, 'metrics_result.json'),
       output_path: reportPath
     }
 
-    try {
-      // 4. 写入配置
-      await ctx.sandbox.fs.write(configPath, JSON.stringify(config, null, 2))
+    // 4. 写入配置
+    await ctx.sandbox.fs.write(configPath, JSON.stringify(config, null, 2))
 
-      // 5. 执行 Python 脚本
-      const result = await ctx.sandbox.exec(
-        `${pythonCmd} "${scriptPath}" --config "${configPath}"`,
-        { timeoutMs: 120000 }
-      )
+    // 5. 执行 Python 脚本
+    const result = await ctx.sandbox.exec(
+      `${pythonCmd} "${scriptPath}" --config "${configPath}"`,
+      { timeoutMs: 120000 }
+    )
 
-      if (result.code !== 0) {
-        return {
-          status: 'error',
-          report_path: '',
-          errors: [`Python执行失败: ${result.stderr}`],
-          message: '报告生成失败'
-        } as ReportResult
-      }
-
-      return {
-        status: 'success',
-        report_path: reportPath,
-        message: `报告已生成: ${reportPath}，请勿再手写一份新的报告，直接使用此报告并补充分析部分即可。`
-      } as ReportResult
-
-    } catch (error: any) {
-      return {
-        status: 'error',
-        report_path: '',
-        errors: [error.message],
-        message: '报告生成执行异常'
-      } as ReportResult
+    if (result.code !== 0) {
+      throw new Error(`Python执行失败: ${result.stderr}`)
     }
+
+    return {
+      status: 'success',
+      report_path: reportPath,
+      message: `报告已生成: ${reportPath}，请勿再手写一份新的报告，直接使用此报告并补充分析部分即可。`
+    } as ReportResult
   }
 })

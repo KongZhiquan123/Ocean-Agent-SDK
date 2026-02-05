@@ -3,10 +3,13 @@
  * @description 海洋数据下采样工具 - 将 HR 数据下采样生成 LR 数据
  *
  * @author leizheng
+ * @contributors kongzhiquan
  * @date 2026-02-03
- * @version 1.0.1
+ * @version 1.1.0
  *
  * @changelog
+ *   - 2026-02-05 kongzhiquan: v1.1.0 移除 try-catch，统一由上层处理错误
+ *     - 错误时直接 throw Error 而非返回 status: 'error'
  *   - 2026-02-04 leizheng: v1.0.1 修复插值方法描述（bicubic → cubic）
  *   - 2026-02-03 leizheng: v1.0.0 初始版本
  *     - 调用 downsample.py 执行下采样
@@ -99,12 +102,7 @@ export const oceanDownsampleTool = defineTool({
     // 1. 检查 Python 环境
     const pythonPath = findFirstPythonPath()
     if (!pythonPath) {
-      const errorMsg = '未找到可用的Python解释器'
-      return {
-        status: 'error',
-        errors: [errorMsg],
-        message: '下采样失败'
-      }
+      throw new Error('未找到可用的Python解释器')
     }
 
     // 2. 准备路径
@@ -118,44 +116,33 @@ export const oceanDownsampleTool = defineTool({
     const staticArg = include_static ? '--include_static' : ''
     const cmd = `${pythonCmd} "${scriptPath}" --dataset_root "${dataset_root}" --scale ${scale} --method ${method} --splits ${splitsArg} ${staticArg} --output "${outputPath}"`
 
-    try {
-      // 4. 创建临时目录
-      await ctx.sandbox.exec(`mkdir -p "${tempDir}"`)
+    // 4. 创建临时目录
+    await ctx.sandbox.exec(`mkdir -p "${tempDir}"`)
 
-      // 5. 执行 Python 脚本
-      const result = await ctx.sandbox.exec(cmd, { timeoutMs: 600000 })
+    // 5. 执行 Python 脚本
+    const result = await ctx.sandbox.exec(cmd, { timeoutMs: 600000 })
 
-      if (result.code !== 0) {
-        return {
-          status: 'error',
-          errors: [`Python执行失败: ${result.stderr}`],
-          message: '下采样失败'
-        }
-      }
+    if (result.code !== 0) {
+      throw new Error(`Python执行失败: ${result.stderr}`)
+    }
 
-      // 6. 读取结果
-      const jsonContent = await ctx.sandbox.fs.read(outputPath)
-      const downsampleResult: DownsampleResult = JSON.parse(jsonContent)
+    // 6. 读取结果
+    const jsonContent = await ctx.sandbox.fs.read(outputPath)
+    const downsampleResult: DownsampleResult = JSON.parse(jsonContent)
+    if (downsampleResult.status === 'error') {
+      throw new Error(`下采样失败: ${downsampleResult.errors?.join('; ') || '未知错误'}`)
+    }
+    // 统计处理的文件数
+    let totalFiles = 0
+    for (const splitResult of Object.values(downsampleResult.splits || {})) {
+      totalFiles += (splitResult as any[]).length
+    }
+    totalFiles += (downsampleResult.static_variables || []).length
 
-      // 统计处理的文件数
-      let totalFiles = 0
-      for (const splitResult of Object.values(downsampleResult.splits || {})) {
-        totalFiles += (splitResult as any[]).length
-      }
-      totalFiles += (downsampleResult.static_variables || []).length
-
-      return {
-        status: 'success',
-        ...downsampleResult,
-        message: `下采样完成，共处理 ${totalFiles} 个文件`
-      }
-
-    } catch (error: any) {
-      return {
-        status: 'error',
-        errors: [error.message],
-        message: '下采样执行异常'
-      }
+    return {
+      status: 'success',
+      ...downsampleResult,
+      message: `下采样完成，共处理 ${totalFiles} 个文件`
     }
   }
 })

@@ -5,9 +5,11 @@
  * @author leizheng
  * @contributors kongzhiquan
  * @date 2026-02-04
- * @version 3.0.0
+ * @version 3.1.0
  *
  * @changelog
+ *   - 2026-02-05 kongzhiquan: v3.1.0 移除 try-catch，统一由上层处理错误
+ *     - 错误时直接 throw Error 而非返回 status: 'error'
  *   - 2026-02-04 kongzhiquan: v3.0.0 新增统计分布图
  *     - 新增均值/方差时序图
  *     - 新增 HR/LR 数据值直方图对比
@@ -108,12 +110,7 @@ export const oceanVisualizeTool = defineTool({
     // 1. 检查 Python 环境
     const pythonPath = findFirstPythonPath()
     if (!pythonPath) {
-      const errorMsg = '未找到可用的Python解释器'
-      return {
-        status: 'error',
-        errors: [errorMsg],
-        message: '可视化失败'
-      }
+      throw new Error('未找到可用的Python解释器')
     }
 
     // 2. 准备路径
@@ -125,48 +122,31 @@ export const oceanVisualizeTool = defineTool({
     const splitsArg = splits.join(' ')
     const cmd = `${pythonCmd} "${scriptPath}" --dataset_root "${dataset_root}" --splits ${splitsArg} --out_dir "${outputDir}"`
 
-    try {
-      // 4. 执行 Python 脚本
-      const result = await ctx.sandbox.exec(cmd, { timeoutMs: 300000 })
+    // 4. 执行 Python 脚本
+    const result = await ctx.sandbox.exec(cmd, { timeoutMs: 300000 })
 
-      if (result.code !== 0) {
-        return {
-          status: 'error',
-          errors: [`Python执行失败: ${result.stderr}`],
-          message: '可视化失败'
-        }
-      }
+    if (result.code !== 0) {
+      throw new Error(`Python执行失败: ${result.stderr}`)
+    }
 
-      // 5. 列出生成的文件
-      const generatedFiles: string[] = []
-      for (const split of splits) {
-        const splitDir = path.join(outputDir, split)
-        try {
-          const lsResult = await ctx.sandbox.exec(`ls "${splitDir}"/*.png 2>/dev/null || true`)
-          if (lsResult.stdout.trim()) {
-            const files = lsResult.stdout.trim().split('\n')
-            generatedFiles.push(...files)
-          }
-        } catch {
-          // 目录可能不存在
-        }
+    // 5. 列出生成的文件
+    const generatedFiles: string[] = []
+    for (const split of splits) {
+      const splitDir = path.join(outputDir, split)
+      const lsResult = await ctx.sandbox.exec(`ls "${splitDir}"/*.png 2>/dev/null || true`)
+      if (lsResult.stdout.trim()) {
+        const files = lsResult.stdout.trim().split('\n')
+        generatedFiles.push(...files)
       }
+    }
 
-      return {
-        status: 'success',
-        dataset_root,
-        output_dir: outputDir,
-        splits,
-        generated_files: generatedFiles,
-        message: `可视化完成，生成 ${generatedFiles.length} 张图片（含对比图和统计分布图）`
-      }
-
-    } catch (error: any) {
-      return {
-        status: 'error',
-        errors: [error.message],
-        message: '可视化执行异常'
-      }
+    return {
+      status: 'success',
+      dataset_root,
+      output_dir: outputDir,
+      splits,
+      generated_files: generatedFiles,
+      message: `可视化完成，生成 ${generatedFiles.length} 张图片（含对比图和统计分布图）`
     }
   }
 })

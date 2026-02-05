@@ -4,10 +4,13 @@
  *              调用 Python 脚本执行转换和后置验证
  *
  * @author leizheng
+ * @contributors kongzhiquan
  * @date 2026-02-04
- * @version 2.7.0
+ * @version 2.8.0
  *
  * @changelog
+ *   - 2026-02-05 kongzhiquan: v2.8.0 移除 try-catch，统一由上层处理错误
+ *     - 错误时直接 throw Error 而非返回 status: 'error'
  *   - 2026-02-04 leizheng: v2.7.0 修复 1D 坐标裁剪
  *     - latitude 正确使用 h_slice 裁剪
  *     - longitude 正确使用 w_slice 裁剪
@@ -297,34 +300,19 @@ export const oceanConvertNpyTool = defineTool({
 
     // 验证数据集划分比例（必须由用户指定）
     if (train_ratio === undefined || valid_ratio === undefined || test_ratio === undefined) {
-      const errorMsg = '数据集划分比例必须由用户指定！请提供 train_ratio, valid_ratio, test_ratio 参数'
-      return {
-        status: 'error',
-        errors: [errorMsg],
-        message: '缺少划分比例参数'
-      }
+      throw new Error('数据集划分比例必须由用户指定！请提供 train_ratio, valid_ratio, test_ratio 参数')
     }
 
     // 验证划分比例之和
     const totalRatio = train_ratio + valid_ratio + test_ratio
     if (Math.abs(totalRatio - 1.0) > 0.01) {
-      const errorMsg = `数据集划分比例之和必须为 1.0，当前为 ${totalRatio}`
-      return {
-        status: 'error',
-        errors: [errorMsg],
-        message: '划分比例错误'
-      }
+      throw new Error(`数据集划分比例之和必须为 1.0，当前为 ${totalRatio}`)
     }
 
     // 1. 检查 Python 环境
     const pythonPath = findFirstPythonPath()
     if (!pythonPath) {
-      const errorMsg = '未找到可用的Python解释器，请安装Python或配置PYTHON/PYENV'
-      return {
-        status: 'error',
-        errors: [errorMsg],
-        message: '转换失败'
-      }
+      throw new Error('未找到可用的Python解释器，请安装Python或配置PYTHON/PYENV')
     }
 
     // 2. 准备路径
@@ -369,37 +357,29 @@ export const oceanConvertNpyTool = defineTool({
       output_subdir
     }
 
-    try {
-      // 4. 创建临时目录并写入配置
-      await ctx.sandbox.exec(`mkdir -p "${tempDir}"`)
-      await ctx.sandbox.fs.write(configPath, JSON.stringify(config, null, 2))
+    // 4. 创建临时目录并写入配置
+    await ctx.sandbox.exec(`mkdir -p "${tempDir}"`)
+    await ctx.sandbox.fs.write(configPath, JSON.stringify(config, null, 2))
 
-      // 5. 执行 Python 脚本
-      const result = await ctx.sandbox.exec(
-        `${pythonCmd} "${scriptPath}" --config "${configPath}" --output "${outputPath}"`,
-        { timeoutMs: 600000 }
-      )
+    // 5. 执行 Python 脚本
+    const result = await ctx.sandbox.exec(
+      `${pythonCmd} "${scriptPath}" --config "${configPath}" --output "${outputPath}"`,
+      { timeoutMs: 600000 }
+    )
 
-      if (result.code !== 0) {
-        return {
-          status: 'error',
-          errors: [`Python执行失败: ${result.stderr}`],
-          message: '转换失败'
-        }
-      }
-
-      // 6. 读取结果
-      const jsonContent = await ctx.sandbox.fs.read(outputPath)
-      const convertResult: ConvertResult = JSON.parse(jsonContent)
-
-      return convertResult
-
-    } catch (error: any) {
-      return {
-        status: 'error',
-        errors: [error.message],
-        message: '转换执行异常'
-      }
+    if (result.code !== 0) {
+      throw new Error(`Python执行失败: ${result.stderr}`)
     }
+
+    // 6. 读取结果
+    const jsonContent = await ctx.sandbox.fs.read(outputPath)
+    const convertResult: ConvertResult = JSON.parse(jsonContent)
+    if (convertResult.status === 'error') {
+      throw new Error(`NC 转 NPY 转换失败: ${convertResult.errors.join('; ')}`)
+    } else if (convertResult.status === 'pending') {
+      throw new Error(`NC 转 NPY 转换未完成: ${convertResult.message}`)
+    }
+
+    return convertResult
   }
 })

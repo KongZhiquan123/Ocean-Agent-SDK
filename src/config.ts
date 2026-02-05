@@ -1,11 +1,15 @@
 /**
- * config.ts
+ * @file config.ts
  *
- * Description: 配置文件，包含环境变量加载、配置验证和依赖初始化
- * Author: kongzhiquan
- * Time: 2026-02-02
- * Version: 1.0.0
+ * @description 配置文件，包含环境变量加载、配置验证和依赖初始化
+ * @author kongzhiquan
+ * @date 2026-02-02
+ * @version 1.1.0
  *
+ * @changelog
+ *   - 2026-02-05 kongzhiquan: v1.1.0 优化工具加载与模板配置
+ *     - 将 loadAllTools() 函数改为常量 allTools，避免重复创建
+ *     - ask 模式移除 bash_run，添加 ocean_inspect_data（只读数据检查）
  */
 
 import dotenv from 'dotenv'
@@ -91,16 +95,12 @@ function createStore() {
 
 // 创建 SkillsManager
 const skillsManager = new SkillsManager(config.skillsDir, skillsWhiteList)
-
-function loadAllTools() {
-  return [...builtin.fs(), ...builtin.bash(), ...builtin.todo(), ...oceanPreprocessTools, createSkillsTool(skillsManager)]
-}
+const allTools = [...builtin.fs(), ...builtin.bash(), ...builtin.todo(), ...oceanPreprocessTools, createSkillsTool(skillsManager)]
 
 function createToolRegistry() {
   const registry = new ToolRegistry()
   // 注册所有工具
-  const tools = loadAllTools()
-  tools.forEach(tool => registry.register(tool.name, () => tool))
+  allTools.forEach(tool => registry.register(tool.name, () => tool))
   console.log('[config] 已注册工具:', registry.list())
   return registry
 }
@@ -153,7 +153,7 @@ function createTemplateRegistry() {
 - ❌ 自动决定 scale、ratio 等参数
 - ❌ 跳过任何确认阶段
 - ❌ 伪造或省略 confirmation_token`,
-    tools: loadAllTools().map(t => t.name),
+    tools: allTools.map(t => t.name),
   })
 
   // 问答助手模板（ask 模式）
@@ -169,7 +169,7 @@ function createTemplateRegistry() {
 1. 你只能读取信息，不能修改任何文件。
 2. 专注于回答用户的问题，提供准确、有帮助的信息。
 3. 如果需要查看代码或文件内容，使用 fs_read 工具。`,
-    tools: ['fs_read', 'fs_glob', 'fs_grep', 'bash_run'],
+    tools: ['fs_read', 'fs_glob', 'fs_grep', 'ocean_inspect_data'],
   })
 
   return registry

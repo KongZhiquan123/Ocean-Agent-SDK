@@ -6,9 +6,13 @@
  * @author leizheng
  * @contributors kongzhiquan
  * @date 2026-02-02
- * @version 3.0.3
+ * @version 3.1.0
  *
  * @changelog
+ *   - 2026-02-05 kongzhiquan: v3.1.0 重构错误处理与职责分离
+ *     - 移除冗余的 try-catch 和 status 检查
+ *     - 将验证逻辑下沉到子工具中
+ *     - 简化 full.ts 为纯粹的流程编排器
  *   - 2026-02-05 kongzhiquan: v3.0.3 新增执行确认 Token 机制
  *     - 新增 confirmation_token 参数
  *     - 防止 Agent 跳过 awaiting_execution 阶段直接执行
@@ -167,13 +171,11 @@ export const oceanPreprocessFullTool = defineTool({
       type: 'string',
       description: '经度参考变量名（必须由用户指定或从数据检测，禁止硬编码默认值）',
       required: false
-      // P0 修复：移除硬编码默认值 'lon_rho'
     },
     lat_var: {
       type: 'string',
       description: '纬度参考变量名（必须由用户指定或从数据检测，禁止硬编码默认值）',
       required: false
-      // P0 修复：移除硬编码默认值 'lat_rho'
     },
     run_validation: {
       type: 'boolean',
@@ -214,19 +216,16 @@ export const oceanPreprocessFullTool = defineTool({
       type: 'number',
       description: '【必须由用户指定】训练集比例（按时间顺序取前 N%），如 0.7。Agent 禁止自动设置！',
       required: false
-      // 注意：无默认值，必须由用户提供
     },
     valid_ratio: {
       type: 'number',
       description: '【必须由用户指定】验证集比例（按时间顺序取中间 N%），如 0.15。Agent 禁止自动设置！',
       required: false
-      // 注意：无默认值，必须由用户提供
     },
     test_ratio: {
       type: 'number',
       description: '【必须由用户指定】测试集比例（按时间顺序取最后 N%），如 0.15。Agent 禁止自动设置！',
       required: false
-      // 注意：无默认值，必须由用户提供
     },
     h_slice: {
       type: 'string',
@@ -253,7 +252,6 @@ export const oceanPreprocessFullTool = defineTool({
       type: 'string',
       description: '【必须由用户指定】下采样插值方法：area（推荐）、cubic、nearest、linear、lanczos',
       required: false
-      // 注意：无默认值，必须由用户提供
     },
     skip_downsample: {
       type: 'boolean',
@@ -307,21 +305,20 @@ export const oceanPreprocessFullTool = defineTool({
       lon_range,
       lat_range,
       user_confirmed = false,
-      confirmation_token,    // 执行确认 Token
-      train_ratio,   // 无默认值，必须由用户提供
-      valid_ratio,   // 无默认值，必须由用户提供
-      test_ratio,    // 无默认值，必须由用户提供
-      h_slice,       // 裁剪参数
-      w_slice,       // 裁剪参数
-      scale,         // 下采样倍数
-      workers = 32,  // 并行线程数
-      downsample_method,   // 下采样插值方法，无默认值
-      skip_downsample = false,     // 是否跳过下采样
-      skip_visualize = false,      // 是否跳过可视化
-      // 粗网格模式参数
-      lr_nc_folder,         // 低分辨率数据目录
-      lr_static_file,       // 低分辨率静态文件
-      lr_dyn_file_pattern   // 低分辨率文件匹配模式
+      confirmation_token,
+      train_ratio,
+      valid_ratio,
+      test_ratio,
+      h_slice,
+      w_slice,
+      scale,
+      workers = 32,
+      downsample_method,
+      skip_downsample = false,
+      skip_visualize = false,
+      lr_nc_folder,
+      lr_static_file,
+      lr_dyn_file_pattern
     } = args
 
     // 检测是否为粗网格模式（数值模型模式）
@@ -334,7 +331,6 @@ export const oceanPreprocessFullTool = defineTool({
 
     // 检测是否为单个 NC 文件路径
     if (actualNcFolder.endsWith('.nc') || actualNcFolder.endsWith('.NC')) {
-      // 用户提供的是单个文件，自动转换为目录 + nc_files 模式
       const filePath = actualNcFolder
       const lastSlash = filePath.lastIndexOf('/')
       if (lastSlash === -1) {
@@ -344,23 +340,22 @@ export const oceanPreprocessFullTool = defineTool({
         actualNcFolder = filePath.substring(0, lastSlash)
         actualNcFiles = [filePath.substring(lastSlash + 1)]
       }
-
     }
 
     const result = {
       step_a: null as any,
       step_b: null as any,
       step_c: null as any,
-      step_c2: null as any, // 粗网格模式下的 LR 数据转换
-      step_d: null as any,  // 下采样结果
-      step_e: null as any,  // 可视化结果
+      step_c2: null as any,
+      step_d: null as any,
+      step_e: null as any,
       overall_status: 'pending' as string,
       message: '',
       validation_summary: null as any,
       mode: isNumericalModelMode ? 'numerical_model' : 'downsample'
     }
 
-    // Step A
+    // ========== Step A: 数据检查 ==========
     const stepAResult = await oceanInspectDataTool.exec({
       nc_folder: actualNcFolder,
       nc_files: actualNcFiles,
@@ -369,52 +364,9 @@ export const oceanPreprocessFullTool = defineTool({
     }, ctx)
 
     result.step_a = stepAResult
-
-    if (stepAResult.status === 'error') {
-      result.overall_status = 'error'
-      result.message = 'Step A 失败'
-      return result
-    }
-
-    // 检查是否找到动态数据文件
-    if (stepAResult.file_count === 0) {
-      result.overall_status = 'error'
-      result.message = `未找到匹配的动态数据文件！
-- 搜索目录: ${actualNcFolder}
-- 文件匹配模式: "${actualFilePattern}"
-请检查：
-1. nc_folder 路径是否正确
-2. dyn_file_pattern 是否匹配你的文件名`
-      return result
-    }
-
-    // 检查是否找到任何动态变量候选
     const dynCandidates = stepAResult.dynamic_vars_candidates || []
-    if (dynCandidates.length === 0) {
-      result.overall_status = 'error'
-      result.message = `数据文件中没有找到任何动态变量（带时间维度的变量）！
 
-这通常意味着您可能提供了静态文件而非动态数据文件。
-
-【文件信息】
-- 搜索目录: ${nc_folder}
-- 找到文件数: ${stepAResult.file_count}
-- 文件列表: ${(stepAResult.file_list || []).slice(0, 3).join(', ')}${(stepAResult.file_list || []).length > 3 ? '...' : ''}
-
-【检测到的变量】（都没有时间维度）
-${Object.keys(stepAResult.variables || {}).slice(0, 10).join(', ')}${Object.keys(stepAResult.variables || {}).length > 10 ? '...' : ''}
-
-请检查：
-1. 您是否将静态文件路径填到了动态数据目录？
-2. 动态数据文件是否确实包含时间维度？
-3. 时间维度的名称是否为标准名称（time, ocean_time, t 等）？`
-
-      return result
-    }
-
-    // ========== v3.0.3 使用状态机进行阶段判断 ==========
-    // 核心思想：根据已有参数倒推当前阶段，严格防止跳步
-    // 新增 confirmation_token 验证，防止 Agent 跳过 awaiting_execution 阶段
+    // ========== 状态机判断 ==========
     const workflowParams: WorkflowParams = {
       nc_folder: actualNcFolder,
       output_base,
@@ -429,16 +381,14 @@ ${Object.keys(stepAResult.variables || {}).slice(0, 10).join(', ')}${Object.keys
       h_slice,
       w_slice,
       user_confirmed,
-      confirmation_token,  // 执行确认 Token
+      confirmation_token,
       lr_nc_folder
     }
 
     const workflow = new PreprocessWorkflow(workflowParams)
     const stateCheck = workflow.determineCurrentState()
 
-    // 根据状态机判断结果返回相应的阶段提示
-    // 注意：即使用户传了后续阶段的参数，如果前置阶段未完成，也会被忽略
-    // 特别注意：TOKEN_INVALID 状态表示 Agent 试图跳过确认阶段
+    // 如果状态机判断未通过，返回相应的阶段提示
     if (stateCheck.currentState !== WorkflowState.PASS) {
       const prompt = workflow.getStagePrompt(stepAResult)
 
@@ -456,84 +406,32 @@ ${Object.keys(stepAResult.variables || {}).slice(0, 10).join(', ')}${Object.keys
       return result
     }
 
-    // ========== 状态机判断通过，验证研究变量是否存在 ==========
-    // 检查用户指定的研究变量是否存在于动态变量候选中
+    // ========== 状态机通过，验证研究变量 ==========
     const missingVars = dyn_vars!.filter((v: string) => !dynCandidates.includes(v))
     if (missingVars.length > 0) {
-      // 不是所有指定的变量都在动态候选中
-      const allVarNames = Object.keys(stepAResult.variables || {})
-
-      result.overall_status = 'error'
-      result.message = `您指定的研究变量不在动态变量候选列表中！
-
-【您指定的研究变量】
-${dyn_vars!.join(', ')}
-
-【缺失的变量】
-${missingVars.join(', ')}
-
-【可用的动态变量候选】（有时间维度）
-${dynCandidates.length > 0 ? dynCandidates.join(', ') : '（无）'}
-
-【所有检测到的变量】
-${allVarNames.slice(0, 15).join(', ')}${allVarNames.length > 15 ? '...' : ''}
-
-请检查：
-1. 变量名是否拼写正确？
-2. 这些变量是否确实在数据文件中？
-3. 这些变量是否有时间维度？`
-
-      return result
+      throw new Error(`研究变量不在动态变量候选列表中：${missingVars.join(', ')}
+可用的动态变量候选：${dynCandidates.join(', ')}`)
     }
 
-    // ========== 状态机已确认所有参数，开始执行 ==========
-    // 验证划分比例之和
-    const totalRatio = train_ratio! + valid_ratio! + test_ratio!
-    if (Math.abs(totalRatio - 1.0) > 0.01) {
-      result.step_a = stepAResult
-      result.overall_status = 'error'
-      result.message = `数据集划分比例之和必须为 1.0！
-
-当前设置：
-- train_ratio: ${train_ratio}
-- valid_ratio: ${valid_ratio}
-- test_ratio: ${test_ratio}
-- 总和: ${totalRatio}
-
-请调整比例使其总和为 1.0`
-
-      return result
-    }
-
-    // P0 修复：移除硬编码默认值，必须使用用户确认的值或从数据检测的值
-    // 如果没有检测到任何掩码或坐标变量，且用户未提供，应该报错而非使用默认值
-
-    // 掩码变量：由用户指定或从 Step A 检测到
-    // 注意：某些数据集可能没有掩码变量，这是允许的
+    // ========== 准备变量配置 ==========
     const detectedMaskVars = stepAResult.suspected_masks || []
     const finalMaskVars = mask_vars || (detectedMaskVars.length > 0 ? detectedMaskVars : [])
 
-
-    // 静态变量：由用户指定或从 Step A 检测到
-    // 注意：某些数据集可能没有静态变量，这是允许的
     const detectedCoordVars = stepAResult.suspected_coordinates || []
     const finalStaticVars = stat_vars || (detectedCoordVars.length > 0
       ? [...detectedCoordVars, ...detectedMaskVars]
       : [])
 
-
-    // 主掩码变量选择（如果有掩码变量的话）
+    // 主掩码变量选择
     let primaryMaskVar: string | undefined
     if (finalMaskVars.length === 1) {
       primaryMaskVar = finalMaskVars[0]
     } else if (finalMaskVars.length > 1) {
-      // 有多个掩码变量时，优先选择 rho 网格的（ROMS 模型常见）
       const rhoMask = finalMaskVars.find((m: string) => m.includes('rho'))
       primaryMaskVar = rhoMask || finalMaskVars[0]
     }
-    // 如果没有掩码变量，primaryMaskVar 保持 undefined
 
-    // P0 修复：经纬度变量必须从数据中检测到或由用户指定，不使用硬编码默认值
+    // 经纬度变量
     const detectedLonVar = finalStaticVars.find((v: string) =>
       v.toLowerCase().includes('lon') && !v.toLowerCase().includes('mask')
     )
@@ -543,26 +441,15 @@ ${allVarNames.slice(0, 15).join(', ')}${allVarNames.length > 15 ? '...' : ''}
     const finalLonVar = lon_var || detectedLonVar
     const finalLatVar = lat_var || detectedLatVar
 
-    // Step B
-    const tempDir = path.resolve(ctx.sandbox.workDir, 'ocean_preprocess_temp')
-    const inspectResultPath = path.join(tempDir, 'inspect_result.json')
-
+    // ========== Step B: 张量验证 ==========
     const stepBResult = await oceanValidateTensorTool.exec({
-      inspect_result_path: inspectResultPath,
       research_vars: dyn_vars,
       mask_vars: finalMaskVars
     }, ctx)
 
     result.step_b = stepBResult
 
-    if (stepBResult.status === 'error') {
-      result.overall_status = 'error'
-      result.message = 'Step B 失败'
-      return result
-    }
-
-    // Step C
-
+    // ========== Step C: HR 数据转换 ==========
     const stepCResult = await oceanConvertNpyTool.exec({
       nc_folder: actualNcFolder,
       output_base,
@@ -577,18 +464,15 @@ ${allVarNames.slice(0, 15).join(', ')}${allVarNames.length > 15 ? '...' : ''}
       allow_nan,
       lon_range,
       lat_range,
-      // Rule 2/3 验证参数（使用检测到的主掩码变量）
       mask_src_var: primaryMaskVar,
       mask_derive_op: 'identity',
-      heuristic_check_var: dyn_vars?.[0],  // 使用第一个动态变量进行启发式验证
+      heuristic_check_var: dyn_vars?.[0],
       land_threshold_abs: 1e-12,
       heuristic_sample_size: 2000,
       require_sorted: true,
-      // 数据集划分参数
       train_ratio,
       valid_ratio,
       test_ratio,
-      // 裁剪参数
       h_slice,
       w_slice,
       scale,
@@ -597,20 +481,11 @@ ${allVarNames.slice(0, 15).join(', ')}${allVarNames.length > 15 ? '...' : ''}
 
     result.step_c = stepCResult
 
-    if (stepCResult.status !== 'pass') {
-      result.overall_status = 'error'
-      result.message = 'Step C 失败'
-      return result
-    }
-
-    // Step C2: 粗网格模式下转换 LR 数据
+    // ========== Step C2: 粗网格模式下转换 LR 数据 ==========
     if (isNumericalModelMode) {
-
-      // 智能路径处理：支持目录或单个文件
       let actualLrNcFolder = lr_nc_folder!.trim()
-      let actualLrFilePattern = lr_dyn_file_pattern || actualFilePattern  // 默认使用与 HR 相同的模式
+      let actualLrFilePattern = lr_dyn_file_pattern || actualFilePattern
 
-      // 检测是否为单个 NC 文件路径
       if (actualLrNcFolder.endsWith('.nc') || actualLrNcFolder.endsWith('.NC')) {
         const filePath = actualLrNcFolder
         const lastSlash = filePath.lastIndexOf('/')
@@ -627,7 +502,7 @@ ${allVarNames.slice(0, 15).join(', ')}${allVarNames.length > 15 ? '...' : ''}
         nc_folder: actualLrNcFolder,
         output_base,
         dyn_vars,
-        static_file: lr_static_file || static_file,  // 优先使用 LR 静态文件，否则用 HR 的
+        static_file: lr_static_file || static_file,
         dyn_file_pattern: actualLrFilePattern,
         stat_vars: finalStaticVars,
         mask_vars: finalMaskVars,
@@ -648,27 +523,17 @@ ${allVarNames.slice(0, 15).join(', ')}${allVarNames.length > 15 ? '...' : ''}
         test_ratio,
         h_slice,
         w_slice,
-        // 注意：LR 数据不需要验证 scale 整除
         workers,
-        // 关键：输出到 lr/ 子目录而非 hr/
         output_subdir: 'lr'
       }, ctx)
 
       result.step_c2 = stepC2Result
-
-      if (stepC2Result.status !== 'pass') {
-        result.overall_status = 'error'
-        result.message = 'Step C2 (LR 数据转换) 失败'
-        return result
-      }
     }
 
-    // Step D: 下采样（仅在下采样模式下执行）
+    // ========== Step D: 下采样 ==========
     if (isNumericalModelMode) {
-      // 粗网格模式下跳过下采样
       result.step_d = { status: 'skipped', reason: '粗网格模式（数值模型）下自动跳过下采样' }
     } else if (!skip_downsample) {
-
       const stepDResult = await oceanDownsampleTool.exec({
         dataset_root: output_base,
         scale: scale,
@@ -678,17 +543,11 @@ ${allVarNames.slice(0, 15).join(', ')}${allVarNames.length > 15 ? '...' : ''}
       }, ctx)
 
       result.step_d = stepDResult
-
-      if (stepDResult.status === 'error') {
-        result.overall_status = 'error'
-        result.message = 'Step D 下采样失败'
-        return result
-      }
     } else {
       result.step_d = { status: 'skipped', reason: 'skip_downsample=true' }
     }
 
-    // Step E: 可视化
+    // ========== Step E: 可视化 ==========
     if (!skip_visualize) {
       const stepEResult = await oceanVisualizeTool.exec({
         dataset_root: output_base,
@@ -696,20 +555,14 @@ ${allVarNames.slice(0, 15).join(', ')}${allVarNames.length > 15 ? '...' : ''}
       }, ctx)
 
       result.step_e = stepEResult
-
     } else {
       result.step_e = { status: 'skipped', reason: 'skip_visualize=true' }
     }
 
-    // 最终状态
-    if (stepCResult.status === 'pass') {
-      result.overall_status = 'pass'
-      result.message = '预处理完成，所有检查通过，请调用ocean_metrics工具生成质量指标，随后调用ocean_generate_report生成预处理报告。'
-      result.validation_summary = stepCResult.post_validation
-    } else {
-      result.overall_status = 'error'
-      result.message = 'Step C 失败'
-    }
+    // ========== 最终状态 ==========
+    result.overall_status = 'pass'
+    result.message = '预处理完成，所有检查通过，请调用ocean_metrics工具生成质量指标，随后调用ocean_generate_report生成预处理报告。'
+    result.validation_summary = stepCResult.post_validation
 
     return result
   }
