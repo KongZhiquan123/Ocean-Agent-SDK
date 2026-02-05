@@ -6,7 +6,8 @@
   "scripts": {
     "start": "npx tsx src/server.ts",
     "dev": "npx tsx watch src/server.ts",
-    "test:client": "npx tsx test-client.ts"
+    "test:client": "npx tsx test-client.ts",
+    "typecheck": "npx tsc --noEmit"
   },
   "keywords": [
     "ai",
@@ -32,6 +33,7 @@
     "@types/jest": "^30.0.0",
     "@types/node": "^25.1.0",
     "jest": "^30.2.0",
-    "tsx": "^4.19.2"
+    "tsx": "^4.19.2",
+    "typescript": "^5.9.3"
   }
 }

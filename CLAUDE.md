@@ -239,5 +239,12 @@ When generating or modifying code files, always add/update a standardized header
 ```
 If the file already has a header, update the "Changelog" section and append `kongzhiquan`(your name should be here) to the "@contributors" list if not already present.
 
-Python Command Execution
+## Python Command Execution
 If you need to use Bash tools to run Python, please use the executable file path /home/kzq/miniconda3/envs/ocean-agent/bin/python to ensure the correct Python environment is used.
+
+## Typescript Typechecking
+If you want to typecheck the entire project, you can simply run:
+```bash
+npm run typecheck
+```
+This will typecheck all files in the project according to the tsconfig.json settings.
