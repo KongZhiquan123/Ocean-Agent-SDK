@@ -123,10 +123,16 @@ def _extract_timestamps_with_cftime(
         if not units:
             return [], [f"时间变量 '{time_var}' 缺少 units 属性"]
 
+        # 确保 time_values 是数组（处理标量情况）
+        time_values = np.atleast_1d(time_values)
+
         # 尝试使用 cftime
         try:
             import cftime
             dates = cftime.num2date(time_values, units, calendar)
+            # cftime.num2date 可能返回单个对象或数组
+            if not hasattr(dates, '__iter__') or isinstance(dates, (str, bytes)):
+                dates = [dates]
             for d in dates:
                 # cftime 日期转 Python datetime
                 try:

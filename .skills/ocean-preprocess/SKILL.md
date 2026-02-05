@@ -112,15 +112,15 @@ Changelog:
 | **下采样** | HR 数据下采样生成 LR | `scale` + `downsample_method` |
 | **粗网格** | HR/LR 数据由模型分别生成 | `lr_nc_folder` |
 
-### 日期文件名（可选）
+### 日期文件名（默认开启）
 
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
-| `use_date_filename` | 使用日期作为文件名 | `false` |
+| `use_date_filename` | 使用日期作为文件名 | `true` |
 | `date_format` | 日期格式: `auto`/`YYYYMMDD`/`YYYYMMDDHH`/`YYYYMMDDHHmm` | `auto` |
 | `time_var` | 时间变量名（自动检测 time/ocean_time） | - |
 
-**示例**：启用后输出文件名从 `000000.npy` 变为 `20200101.npy`（按日期命名）
+**输出文件名示例**：`20200101.npy`, `20200102.npy`（自动从 NC 文件提取日期）
 
 ---
 

@@ -167,3 +167,76 @@ Agent: [开始执行完整流程...]
 | "数据在 /data，变量是 chl no3，输出到 /out" | 分析数据，追问处理参数 |
 | "...4倍下采样，area方法，0.7/0.15/0.15" | 记下参数，执行前 check 确认 |
 | "看看 /data 有什么变量" | 调用 ocean_inspect_data，只展示不处理 |
+
+---
+
+## 示例 4：启用日期文件名
+
+```
+用户: 数据在 /data/ocean，研究 temp 和 salt，输出到 /output，4 倍下采样用 area 方法，
+     划分 0.7/0.15/0.15，文件名用日期命名
+
+Agent: 收到，我先分析一下您的数据...
+
+[分析数据]
+
+数据分析完成：
+- 文件数量: 365 个
+- temp 形状: (365, 680, 1440)
+- salt 形状: (365, 680, 1440)
+- 时间范围: 2020-01-01 ~ 2020-12-31
+
+请确认：
+1. 掩码变量使用 mask_rho 吗？
+2. 需要保存哪些静态变量？
+
+用户: mask 用 mask_rho，静态变量保存 lon_rho lat_rho
+
+Agent: 好的，执行前请确认所有参数：
+
+【处理参数确认】
+- 数据目录: /data/ocean
+- 研究变量: temp, salt
+- 掩码: mask_rho
+- 静态变量: lon_rho, lat_rho
+- 下采样: 4x, area 方法
+- 划分: 70%/15%/15%
+- 文件命名: 日期格式（自动检测）
+
+确认无误后我将开始处理。
+
+用户: 确认执行
+
+Agent: [开始执行...]
+
+处理完成！输出文件名示例：
+- train/hr/temp/20200101.npy
+- train/hr/temp/20200102.npy
+- ...
+- train/hr/temp/20201231.npy
+```
+
+**日期文件名调用参数**：
+```json
+{
+  "nc_folder": "/data/ocean",
+  "output_base": "/output",
+  "dyn_vars": ["temp", "salt"],
+  "user_confirmed": true,
+  "confirmation_token": "xxx",
+  "mask_vars": ["mask_rho"],
+  "stat_vars": ["lon_rho", "lat_rho"],
+  "scale": 4,
+  "downsample_method": "area",
+  "train_ratio": 0.7,
+  "valid_ratio": 0.15,
+  "test_ratio": 0.15,
+  "use_date_filename": true,
+  "date_format": "auto"
+}
+```
+
+**日期格式自动检测规则**：
+- 日级数据 → `YYYYMMDD`（如 `20200101.npy`）
+- 小时级数据 → `YYYYMMDDHH`（如 `2020010106.npy`）
+- 同一天多个时间步 → 自动添加时间后缀（如 `20200101_0600.npy`）

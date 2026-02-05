@@ -305,9 +305,9 @@ export const oceanPreprocessFullTool = defineTool({
     // ========== 日期文件名参数 ==========
     use_date_filename: {
       type: 'boolean',
-      description: '是否使用日期作为文件名（如 20200101.npy 而非 000000.npy）',
+      description: '是否使用日期作为文件名（如 20200101.npy 而非 000000.npy），默认开启',
       required: false,
-      default: false
+      default: true
     },
     date_format: {
       type: 'string',
@@ -364,7 +364,7 @@ export const oceanPreprocessFullTool = defineTool({
       crop_lat_range,
       crop_mode = 'two_step',
       // 日期文件名参数
-      use_date_filename = false,
+      use_date_filename = true,
       date_format = 'auto',
       time_var
     } = args
