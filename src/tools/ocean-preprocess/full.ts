@@ -6,21 +6,17 @@
  * @author leizheng
  * @contributors kongzhiquan
  * @date 2026-02-02
- * @version 3.1.0
+ * @version 3.3.0
  *
  * @changelog
- *   - 2026-02-05 kongzhiquan: v3.1.0 重构错误处理与职责分离
+ *   - 2026-02-05 kongzhiquan: v3.3.0 合并重构与区域裁剪功能
  *     - 移除冗余的 try-catch 和 status 检查
  *     - 将验证逻辑下沉到子工具中
  *     - 简化 full.ts 为纯粹的流程编排器
- *   - 2026-02-05 kongzhiquan: v3.0.3 新增执行确认 Token 机制
- *     - 新增 confirmation_token 参数
- *     - 防止 Agent 跳过 awaiting_execution 阶段直接执行
- *     - Token 基于参数 hash 生成，确保参数未被篡改
- *   - 2026-02-05 kongzhiquan: v3.0.2 重构状态机逻辑
- *     - 对齐 SKILL.md v3.0.0
- *     - 可视化工具新增统计分布图
- *     - 报告工具新增图片嵌入
+ *     - 新增执行确认 Token 机制，防止 Agent 跳过确认阶段
+ *     - 整合状态机架构，阶段判断逻辑移至 workflow-state.ts
+ *     - 支持阶段2.5区域裁剪确认
+ *     - 新增 enable_region_crop, crop_lon_range, crop_lat_range, crop_mode 参数
  *   - 2026-02-04 leizheng: v2.9.0 分阶段强制确认流程
  *     - 阶段1: awaiting_variable_selection - 研究变量选择
  *     - 阶段2: awaiting_static_selection - 静态/掩码变量选择
@@ -62,14 +58,13 @@
  *     - 集成后置验证结果
  */
 
-import path from 'path'
 import { defineTool } from '@shareai-lab/kode-sdk'
 import { oceanInspectDataTool } from './inspect'
 import { oceanValidateTensorTool } from './validate'
 import { oceanConvertNpyTool } from './convert'
 import { oceanDownsampleTool } from './downsample'
 import { oceanVisualizeTool } from './visualize'
-import { PreprocessWorkflow, WorkflowState, type WorkflowParams } from './workflow-state'
+import { PreprocessWorkflow, WorkflowState } from './workflow-state'
 
 export const oceanPreprocessFullTool = defineTool({
   name: 'ocean_preprocess_full',
@@ -207,11 +202,6 @@ export const oceanPreprocessFullTool = defineTool({
       required: false,
       default: false
     },
-    confirmation_token: {
-      type: 'string',
-      description: '【必须】执行确认 Token。必须从 awaiting_execution 阶段的返回结果中获取，与 user_confirmed=true 一起使用。用于防止 Agent 跳过确认阶段直接执行。',
-      required: false
-    },
     train_ratio: {
       type: 'number',
       description: '【必须由用户指定】训练集比例（按时间顺序取前 N%），如 0.7。Agent 禁止自动设置！',
@@ -280,6 +270,33 @@ export const oceanPreprocessFullTool = defineTool({
       type: 'string',
       description: '【粗网格模式】低分辨率动态文件的 glob 匹配模式（默认与 dyn_file_pattern 相同）',
       required: false
+    },
+    // ========== 区域裁剪参数 ==========
+    enable_region_crop: {
+      type: 'boolean',
+      description: '是否启用区域裁剪（先裁剪到特定经纬度区域再进行下采样）',
+      required: false,
+      default: false
+    },
+    crop_lon_range: {
+      type: 'array',
+      items: { type: 'number' },
+      description: '区域裁剪的经度范围 [min, max]，如 [100, 120]',
+      required: false
+    },
+    crop_lat_range: {
+      type: 'array',
+      items: { type: 'number' },
+      description: '区域裁剪的纬度范围 [min, max]，如 [20, 40]',
+      required: false
+    },
+    crop_mode: {
+      type: 'string',
+      description: `区域裁剪模式:
+- "one_step": 一步到位，直接计算能被 scale 整除的裁剪区域，不保存 raw
+- "two_step": 两步裁剪，先保存裁剪后的原始数据到 raw/，再做尺寸调整保存到 hr/`,
+      required: false,
+      default: 'two_step'
     }
   },
 
@@ -318,7 +335,12 @@ export const oceanPreprocessFullTool = defineTool({
       skip_visualize = false,
       lr_nc_folder,
       lr_static_file,
-      lr_dyn_file_pattern
+      lr_dyn_file_pattern,
+      // 区域裁剪参数
+      enable_region_crop = false,
+      crop_lon_range,
+      crop_lat_range,
+      crop_mode = 'two_step'
     } = args
 
     // 检测是否为粗网格模式（数值模型模式）
@@ -341,6 +363,13 @@ export const oceanPreprocessFullTool = defineTool({
         actualNcFiles = [filePath.substring(lastSlash + 1)]
       }
     }
+
+    ctx.emit('pipeline_started', {
+      nc_folder: actualNcFolder,
+      nc_files: actualNcFiles,
+      output_base,
+      dyn_vars
+    })
 
     const result = {
       step_a: null as any,
@@ -367,12 +396,16 @@ export const oceanPreprocessFullTool = defineTool({
     const dynCandidates = stepAResult.dynamic_vars_candidates || []
 
     // ========== 状态机判断 ==========
-    const workflowParams: WorkflowParams = {
+    const workflow = new PreprocessWorkflow({
       nc_folder: actualNcFolder,
       output_base,
       dyn_vars,
       stat_vars,
       mask_vars,
+      enable_region_crop,
+      crop_lon_range: crop_lon_range as [number, number] | undefined,
+      crop_lat_range: crop_lat_range as [number, number] | undefined,
+      crop_mode: crop_mode as 'one_step' | 'two_step' | undefined,
       scale,
       downsample_method,
       train_ratio,
@@ -380,18 +413,16 @@ export const oceanPreprocessFullTool = defineTool({
       test_ratio,
       h_slice,
       w_slice,
+      lr_nc_folder,
       user_confirmed,
-      confirmation_token,
-      lr_nc_folder
-    }
+      confirmation_token
+    })
 
-    const workflow = new PreprocessWorkflow(workflowParams)
     const stateCheck = workflow.determineCurrentState()
 
     // 如果状态机判断未通过，返回相应的阶段提示
     if (stateCheck.currentState !== WorkflowState.PASS) {
       const prompt = workflow.getStagePrompt(stepAResult)
-
       result.step_a = {
         status: stepAResult.status,
         nc_folder: stepAResult.nc_folder,
@@ -412,11 +443,14 @@ export const oceanPreprocessFullTool = defineTool({
       throw new Error(`研究变量不在动态变量候选列表中：${missingVars.join(', ')}
 可用的动态变量候选：${dynCandidates.join(', ')}`)
     }
+    const totalRatio = train_ratio! + valid_ratio! + test_ratio!
+    if (totalRatio < 0.99 || totalRatio > 1.01) {
+      throw new Error(`数据集划分比例之和必须等于 1.0，目前为 ${totalRatio}`)
+    }
 
     // ========== 准备变量配置 ==========
     const detectedMaskVars = stepAResult.suspected_masks || []
     const finalMaskVars = mask_vars || (detectedMaskVars.length > 0 ? detectedMaskVars : [])
-
     const detectedCoordVars = stepAResult.suspected_coordinates || []
     const finalStaticVars = stat_vars || (detectedCoordVars.length > 0
       ? [...detectedCoordVars, ...detectedMaskVars]
@@ -429,6 +463,11 @@ export const oceanPreprocessFullTool = defineTool({
     } else if (finalMaskVars.length > 1) {
       const rhoMask = finalMaskVars.find((m: string) => m.includes('rho'))
       primaryMaskVar = rhoMask || finalMaskVars[0]
+      ctx.emit('info', {
+        type: 'primary_mask_selected',
+        message: `自动选择主掩码变量: ${primaryMaskVar}（共有 ${finalMaskVars.length} 个掩码变量）`,
+        all_masks: finalMaskVars
+      })
     }
 
     // 经纬度变量
@@ -476,7 +515,12 @@ export const oceanPreprocessFullTool = defineTool({
       h_slice,
       w_slice,
       scale,
-      workers
+      workers,
+      // 区域裁剪参数
+      enable_region_crop,
+      crop_lon_range,
+      crop_lat_range,
+      crop_mode
     }, ctx)
 
     result.step_c = stepCResult
@@ -496,6 +540,14 @@ export const oceanPreprocessFullTool = defineTool({
           actualLrNcFolder = filePath.substring(0, lastSlash)
           actualLrFilePattern = filePath.substring(lastSlash + 1)
         }
+
+        ctx.emit('info', {
+          type: 'single_file_mode_lr',
+          message: `检测到单个 LR 文件路径，自动转换为目录模式`,
+          original_path: filePath,
+          lr_nc_folder: actualLrNcFolder,
+          lr_dyn_file_pattern: actualLrFilePattern
+        })
       }
 
       const stepC2Result = await oceanConvertNpyTool.exec({
@@ -533,6 +585,10 @@ export const oceanPreprocessFullTool = defineTool({
     // ========== Step D: 下采样 ==========
     if (isNumericalModelMode) {
       result.step_d = { status: 'skipped', reason: '粗网格模式（数值模型）下自动跳过下采样' }
+      ctx.emit('info', {
+        type: 'downsample_skipped',
+        message: '粗网格模式：LR 数据已在 Step C2 中转换，跳过下采样步骤'
+      })
     } else if (!skip_downsample) {
       const stepDResult = await oceanDownsampleTool.exec({
         dataset_root: output_base,
@@ -549,6 +605,8 @@ export const oceanPreprocessFullTool = defineTool({
 
     // ========== Step E: 可视化 ==========
     if (!skip_visualize) {
+      ctx.emit('step_started', { step: 'E', description: '生成可视化对比图' })
+
       const stepEResult = await oceanVisualizeTool.exec({
         dataset_root: output_base,
         splits: ['train', 'valid', 'test']

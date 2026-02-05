@@ -5,11 +5,12 @@
  * @author leizheng
  * @contributors kongzhiquan
  * @date 2026-02-03
- * @version 1.1.0
+ * @version 1.2.0
  *
  * @changelog
- *   - 2026-02-05 kongzhiquan: v1.1.0 移除 try-catch，统一由上层处理错误
- *     - 删除无用参数 output（改为固定输出到 dataset_root/metrics_result.json）
+ *   - 2026-02-05 kongzhiquan: v1.2.0 合并重构与沙盒修复
+ *     - 移除 try-catch，统一由上层处理错误
+ *     - 删除无用参数 output（改为固定输出到 ./ocean_preprocess_temp/metrics_result.json）
  *     - 错误时直接 throw Error 而非返回 status: 'error'
  *   - 2026-02-03 leizheng: v1.0.0 初始版本
  *     - 调用 metrics.py 计算质量指标
@@ -92,7 +93,8 @@ export const oceanMetricsTool = defineTool({
     // 2. 准备路径
     const pythonCmd = `"${pythonPath}"`
     const scriptPath = path.resolve(process.cwd(), 'scripts/ocean_preprocess/metrics.py')
-    const outputPath = path.join(dataset_root, 'metrics_result.json')
+    const tempDir = path.resolve(ctx.sandbox.workDir, 'ocean_preprocess_temp')
+    const outputPath = path.join(tempDir, 'metrics_result.json')
 
     // 3. 构建命令
     const splitsArg = splits.join(' ')

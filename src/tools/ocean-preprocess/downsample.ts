@@ -5,11 +5,13 @@
  * @author leizheng
  * @contributors kongzhiquan
  * @date 2026-02-03
- * @version 1.1.0
+ * @version 1.2.0
  *
  * @changelog
- *   - 2026-02-05 kongzhiquan: v1.1.0 移除 try-catch，统一由上层处理错误
+ *   - 2026-02-05 kongzhiquan: v1.2.0 合并重构与默认值修复
+ *     - 移除 try-catch，统一由上层处理错误
  *     - 错误时直接 throw Error 而非返回 status: 'error'
+ *     - include_static 默认值为 true，确保静态变量被下采样
  *   - 2026-02-04 leizheng: v1.0.1 修复插值方法描述（bicubic → cubic）
  *   - 2026-02-03 leizheng: v1.0.0 初始版本
  *     - 调用 downsample.py 执行下采样
@@ -96,7 +98,7 @@ export const oceanDownsampleTool = defineTool({
       scale,
       method = 'area',
       splits = ['train', 'valid', 'test'],
-      include_static = false
+      include_static = true
     } = args
 
     // 1. 检查 Python 环境

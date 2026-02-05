@@ -28,6 +28,10 @@ import json
 import sys
 from typing import Any, Dict, List
 
+__all__ = [
+    'validate_tensor_convention',
+    'DEFAULT_MASK_VARS',
+]
 
 # ========================================
 # 常量定义

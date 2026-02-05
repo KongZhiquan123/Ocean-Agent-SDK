@@ -50,6 +50,13 @@ import glob
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 
+__all__ = [
+    'load_json_safe',
+    'format_shape',
+    'analyze_data_quality',
+    'generate_report',
+]
+
 
 def load_json_safe(file_path: str) -> Optional[Dict]:
     """安全加载 JSON 文件"""

@@ -65,6 +65,18 @@ import cv2
 import numpy as np
 from skimage.metrics import structural_similarity as ssim
 
+__all__ = [
+    'validate_data_pair',
+    'upsample_slice',
+    'upsample_to_hr_shape',
+    'calculate_ssim_masked',
+    'compute_metrics_2d',
+    'compute_metrics',
+    'compute_metrics_per_timestep',
+    'process_variable_timesteps',
+    'process_split',
+]
+
 
 # ========================================
 # 数据验证函数

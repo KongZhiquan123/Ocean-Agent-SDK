@@ -232,7 +232,7 @@ export const oceanReportTool = defineTool({
       validate_result_path: path.join(tempDir, 'validate_result.json'),
       convert_result_path: path.join(tempDir, 'convert_result.json'),
       manifest_path: path.join(dataset_root, 'preprocess_manifest.json'),
-      metrics_result_path: path.join(dataset_root, 'metrics_result.json'),
+      metrics_result_path: path.join(tempDir, 'metrics_result.json'),
       output_path: reportPath
     }
 

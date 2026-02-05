@@ -3,38 +3,50 @@
 downsample.py - 海洋数据下采样脚本
 
 @author liuzhengyang
-@contributor leizheng
+@contributor leizheng, kongzhiquan
 @date 2026-02-03
-@version 2.0.0
+@version 3.1.1
 
 功能:
 - 读取 hr/ 目录下的 NPY 文件
 - 下采样后保存到 lr/ 目录
 - 支持 NaN 处理（先填 0，下采样后恢复 NaN）
 - 支持多种插值方法
+- v3.1.0: 静态变量类型特定插值（经纬度=linear, 掩码=nearest）
+- v3.1.1: 支持 1D 数组下采样（经纬度坐标数组）
 
 用法:
     python downsample.py --dataset_root /path/to/dataset --scale 4 --method area
 
-目录结构 (v2.0.0 新格式):
+目录结构 (v3.1.0):
     dataset_root/
     ├── train/
+    │   ├── raw/              ← 区域裁剪后的原始数据（可选）
     │   ├── hr/
     │   │   ├── uo/          ← 每个变量一个子目录
     │   │   │   ├── 000000.npy
-    │   │   │   ├── 000001.npy
     │   │   │   └── ...
     │   │   └── vo/
-    │   │       ├── 000000.npy
-    │   │       └── ...
-    │   └── lr/              ← 下采样后保存到这里（相同结构）
+    │   └── lr/              ← 下采样后保存到这里
     │       ├── uo/
     │       └── vo/
     ├── valid/
     ├── test/
     └── static_variables/
+        ├── raw/             ← 区域裁剪后的静态变量（可选）
+        ├── hr/              ← 尺寸裁剪后的静态变量
+        └── lr/              ← 下采样后的静态变量
 
 Changelog:
+    - 2026-02-05 kongzhiquan v3.1.1: 支持 1D 数组下采样
+        - 修复静态变量 lr 目录为空的问题
+        - 经纬度坐标数组（1D）使用 scipy.ndimage.zoom 线性插值
+    - 2026-02-05 kongzhiquan v3.1.0: 静态变量类型特定插值
+        - 经纬度坐标使用线性插值 (bilinear)
+        - 掩码使用最近邻插值 (nearest)
+        - 其他静态变量使用用户指定的方法
+        - 支持新目录结构: static_variables/hr/ → static_variables/lr/
+        - 兼容旧目录结构: static_variables/ → static_variables/lr/
     - 2026-02-04 leizheng v2.0.0: 支持逐时间步文件格式
         - 适配 convert_npy.py v2.9.0 的新目录结构
         - hr/uo/000000.npy, hr/vo/000000.npy 等
@@ -59,6 +71,16 @@ from typing import List, Tuple, Optional
 
 import cv2
 import numpy as np
+
+__all__ = [
+    'get_cv2_interpolation',
+    'resize_with_nan_handling',
+    'process_file',
+    'process_split',
+    'get_static_var_type',
+    'process_static_variables',
+    'INTERPOLATION_METHODS',
+]
 
 
 # ========================================
@@ -152,6 +174,38 @@ def process_file(
     # 获取原始形状
     original_shape = data.shape
 
+    if data.ndim == 1:
+        # 1D 数组（如经纬度坐标）
+        n = data.shape[0]
+        target_n = n // scale
+        if target_n < 1:
+            print(f"[Error] 下采样后尺寸太小: {target_n}, 原始: {n}, scale={scale}")
+            return None
+        # 使用线性插值对 1D 数组下采样
+        from scipy.ndimage import zoom
+        result_data = zoom(data, 1.0 / scale, order=1)  # order=1 为线性插值
+        # 确保精确的目标长度
+        if len(result_data) != target_n:
+            # 使用简单的等距采样作为备选
+            indices = np.linspace(0, n - 1, target_n).astype(int)
+            result_data = data[indices]
+        # 保存
+        os.makedirs(os.path.dirname(dst_path), exist_ok=True)
+        try:
+            np.save(dst_path, result_data)
+            print(f"[OK] {os.path.basename(src_path)}: {original_shape} -> {result_data.shape}")
+            return {
+                "src": src_path,
+                "dst": dst_path,
+                "original_shape": list(original_shape),
+                "result_shape": list(result_data.shape),
+                "scale": scale
+            }
+        except Exception as e:
+            print(f"[Error] 保存文件失败 {dst_path}: {e}")
+            return None
+
+    # 以下处理 2D/3D/4D 数据
     if data.ndim == 2:
         h, w = data.shape
     elif data.ndim == 3:
@@ -173,7 +227,7 @@ def process_file(
 
     target_size = (target_w, target_h)
 
-    # 开始处理
+    # 开始处理 2D/3D/4D 数据
     if data.ndim == 2:
         # 2D 数据
         result_data = resize_with_nan_handling(data, target_size, method_flag)
@@ -290,48 +344,127 @@ def process_split(
     return results
 
 
+# ========================================
+# 静态变量类型判断
+# ========================================
+
+# 经度变量名模式
+LON_PATTERNS = ['lon', 'longitude', 'lon_rho', 'lon_u', 'lon_v']
+# 纬度变量名模式
+LAT_PATTERNS = ['lat', 'latitude', 'lat_rho', 'lat_u', 'lat_v']
+# 掩码变量名模式
+MASK_PATTERNS = ['mask', 'land_mask', 'mask_rho', 'mask_u', 'mask_v']
+
+
+def get_static_var_type(filename: str) -> str:
+    """
+    根据文件名判断静态变量类型
+
+    Args:
+        filename: 文件名（如 00_longitude.npy, 90_mask_rho.npy）
+
+    Returns:
+        变量类型: 'lon', 'lat', 'mask', 'other'
+    """
+    # 移除前缀编号和扩展名
+    name_lower = filename.lower()
+
+    # 检查是否是经度
+    for pattern in LON_PATTERNS:
+        if pattern in name_lower:
+            return 'lon'
+
+    # 检查是否是纬度
+    for pattern in LAT_PATTERNS:
+        if pattern in name_lower:
+            return 'lat'
+
+    # 检查是否是掩码
+    for pattern in MASK_PATTERNS:
+        if pattern in name_lower:
+            return 'mask'
+
+    return 'other'
+
+
 def process_static_variables(
     dataset_root: str,
     scale: int,
     method_flag: int
 ) -> List[dict]:
     """
-    处理静态变量（如果需要的话）
+    处理静态变量（支持新的目录结构和类型特定插值）
+
+    目录结构:
+    - 优先从 static_variables/hr/ 读取（如果存在）
+    - 否则从 static_variables/ 读取
+    - 输出到 static_variables/lr/
+
+    插值规则:
+    - 经纬度坐标: 线性插值 (bilinear)
+    - 掩码: 最近邻插值 (nearest)
+    - 其他: 使用用户指定的方法
 
     Args:
         dataset_root: 数据集根目录
         scale: 下采样倍数
-        method_flag: 插值方法
+        method_flag: 默认插值方法（用于非经纬度非掩码变量）
 
     Returns:
         处理结果列表
     """
+    # 确定源目录（优先使用 hr/ 子目录）
+    static_hr_dir = os.path.join(dataset_root, 'static_variables', 'hr')
     static_dir = os.path.join(dataset_root, 'static_variables')
 
-    if not os.path.exists(static_dir):
-        print(f"[Info] 静态变量目录不存在，跳过: {static_dir}")
+    if os.path.exists(static_hr_dir) and os.listdir(static_hr_dir):
+        source_dir = static_hr_dir
+        print(f"[Info] 使用 static_variables/hr/ 作为源目录")
+    elif os.path.exists(static_dir):
+        source_dir = static_dir
+    else:
+        print(f"[Info] 静态变量目录不存在，跳过")
         return []
 
     # 扫描静态变量文件
-    npy_files = glob.glob(os.path.join(static_dir, '*.npy'))
+    npy_files = glob.glob(os.path.join(source_dir, '*.npy'))
 
     if not npy_files:
-        print(f"[Info] 静态变量目录为空: {static_dir}")
+        print(f"[Info] 静态变量目录为空: {source_dir}")
         return []
 
-    # 静态变量的 LR 版本保存到 static_variables_lr/
-    lr_static_dir = os.path.join(dataset_root, 'static_variables_lr')
+    # 输出目录
+    lr_static_dir = os.path.join(dataset_root, 'static_variables', 'lr')
+    os.makedirs(lr_static_dir, exist_ok=True)
 
     print(f"\n处理静态变量 ({len(npy_files)} 个文件)...")
-    print(f"  源目录: {static_dir}")
+    print(f"  源目录: {source_dir}")
     print(f"  目标目录: {lr_static_dir}")
+    print(f"  插值规则: 经纬度=linear, 掩码=nearest, 其他=用户指定")
 
     results = []
     for src_path in sorted(npy_files):
         filename = os.path.basename(src_path)
         dst_path = os.path.join(lr_static_dir, filename)
-        result = process_file(src_path, dst_path, scale, method_flag)
+
+        # 根据变量类型选择插值方法
+        var_type = get_static_var_type(filename)
+        if var_type in ['lon', 'lat']:
+            actual_method = cv2.INTER_LINEAR
+            method_name = 'linear'
+        elif var_type == 'mask':
+            actual_method = cv2.INTER_NEAREST
+            method_name = 'nearest'
+        else:
+            actual_method = method_flag
+            method_name = 'user_specified'
+
+        print(f"  {filename}: 类型={var_type}, 插值={method_name}")
+
+        result = process_file(src_path, dst_path, scale, actual_method)
         if result:
+            result['var_type'] = var_type
+            result['interpolation'] = method_name
             results.append(result)
 
     return results

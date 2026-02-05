@@ -6,11 +6,14 @@
  * @author leizheng
  * @contributors kongzhiquan
  * @date 2026-02-04
- * @version 2.8.0
+ * @version 3.2.0
  *
  * @changelog
- *   - 2026-02-05 kongzhiquan: v2.8.0 移除 try-catch，统一由上层处理错误
+ *   - 2026-02-05 kongzhiquan: v3.2.0 合并重构与区域裁剪功能
+ *     - 移除 try-catch，统一由上层处理错误
  *     - 错误时直接 throw Error 而非返回 status: 'error'
+ *     - 新增 enable_region_crop, crop_lon_range, crop_lat_range, crop_mode 参数
+ *     - 参数传递给 Python 脚本 convert_npy.py
  *   - 2026-02-04 leizheng: v2.7.0 修复 1D 坐标裁剪
  *     - latitude 正确使用 h_slice 裁剪
  *     - longitude 正确使用 w_slice 裁剪
@@ -259,6 +262,31 @@ export const oceanConvertNpyTool = defineTool({
       description: '输出子目录名（默认 "hr"，粗网格数据时设为 "lr"）',
       required: false,
       default: 'hr'
+    },
+    // ========== 区域裁剪参数（v3.1.0 新增）==========
+    enable_region_crop: {
+      type: 'boolean',
+      description: '是否启用区域裁剪（先裁剪到特定经纬度区域再进行下采样）',
+      required: false,
+      default: false
+    },
+    crop_lon_range: {
+      type: 'array',
+      items: { type: 'number' },
+      description: '区域裁剪的经度范围 [min, max]，如 [100, 120]',
+      required: false
+    },
+    crop_lat_range: {
+      type: 'array',
+      items: { type: 'number' },
+      description: '区域裁剪的纬度范围 [min, max]，如 [20, 40]',
+      required: false
+    },
+    crop_mode: {
+      type: 'string',
+      description: '区域裁剪模式: "one_step"（一步到位）或 "two_step"（两步裁剪，保存 raw）',
+      required: false,
+      default: 'two_step'
     }
   },
 
@@ -295,7 +323,12 @@ export const oceanConvertNpyTool = defineTool({
       w_slice,
       scale,
       workers = 32,
-      output_subdir = 'hr'
+      output_subdir = 'hr',
+      // 区域裁剪参数（v3.1.0 新增）
+      enable_region_crop = false,
+      crop_lon_range,
+      crop_lat_range,
+      crop_mode = 'two_step'
     } = args
 
     // 验证数据集划分比例（必须由用户指定）
@@ -354,7 +387,12 @@ export const oceanConvertNpyTool = defineTool({
       scale: scale || null,
       workers,
       // 输出子目录
-      output_subdir
+      output_subdir,
+      // 区域裁剪参数（v3.1.0 新增）
+      enable_region_crop,
+      crop_lon_range: crop_lon_range || null,
+      crop_lat_range: crop_lat_range || null,
+      crop_mode
     }
 
     // 4. 创建临时目录并写入配置
