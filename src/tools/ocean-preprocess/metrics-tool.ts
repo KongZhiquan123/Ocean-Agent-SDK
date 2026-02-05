@@ -4,9 +4,12 @@
  *
  * @author leizheng
  * @date 2026-02-03
- * @version 1.0.0
+ * @version 1.0.1
  *
  * @changelog
+ *   - 2026-02-05 kongzhiquan: v1.0.1 修复沙盒路径限制问题
+ *     - 默认输出路径改为沙盒内临时目录
+ *     - 避免 "Path outside sandbox" 错误
  *   - 2026-02-03 leizheng: v1.0.0 初始版本
  *     - 调用 metrics.py 计算质量指标
  *     - 支持 SSIM、Relative L2、MSE、RMSE
@@ -99,14 +102,20 @@ export const oceanMetricsTool = defineTool({
     // 2. 准备路径
     const pythonCmd = `"${pythonPath}"`
     const scriptPath = path.resolve(process.cwd(), 'scripts/ocean_preprocess/metrics.py')
-    const outputPath = output || path.join(dataset_root, 'metrics_result.json')
+
+    // 使用沙盒内临时目录作为默认输出路径，避免 "Path outside sandbox" 错误
+    const tempDir = path.resolve(ctx.sandbox.workDir, 'ocean_preprocess_temp')
+    const outputPath = output || path.join(tempDir, 'metrics_result.json')
 
     // 3. 构建命令
     const splitsArg = splits.join(' ')
     const cmd = `${pythonCmd} "${scriptPath}" --dataset_root "${dataset_root}" --scale ${scale} --splits ${splitsArg} --output "${outputPath}"`
 
     try {
-      // 4. 执行 Python 脚本
+      // 4. 创建临时目录
+      await ctx.sandbox.exec(`mkdir -p "${tempDir}"`)
+
+      // 5. 执行 Python 脚本
       const result = await ctx.sandbox.exec(cmd, { timeoutMs: 600000 })
 
       if (result.code !== 0) {
@@ -117,7 +126,7 @@ export const oceanMetricsTool = defineTool({
         }
       }
 
-      // 5. 读取结果
+      // 6. 读取结果
       const jsonContent = await ctx.sandbox.fs.read(outputPath)
       const metricsResult: MetricsResult = JSON.parse(jsonContent)
 

@@ -4,9 +4,11 @@
  *
  * @author leizheng
  * @date 2026-02-03
- * @version 1.0.1
+ * @version 1.0.2
  *
  * @changelog
+ *   - 2026-02-05 kongzhiquan: v1.0.2 修复 include_static 默认值
+ *     - 默认值从 false 改为 true，确保静态变量被下采样
  *   - 2026-02-04 leizheng: v1.0.1 修复插值方法描述（bicubic → cubic）
  *   - 2026-02-03 leizheng: v1.0.0 初始版本
  *     - 调用 downsample.py 执行下采样
@@ -93,7 +95,7 @@ export const oceanDownsampleTool = defineTool({
       scale,
       method = 'area',
       splits = ['train', 'valid', 'test'],
-      include_static = false
+      include_static = true
     } = args
 
     // 1. 检查 Python 环境

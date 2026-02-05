@@ -5,9 +5,15 @@
  *
  * @author kongzhiquan
  * @date 2026-02-05
- * @version 3.0.3
+ * @version 3.2.0
  *
  * @changelog
+ *   - 2026-02-05 kongzhiquan: v3.2.0 新增阶段2.5区域裁剪
+ *     - 新增 AWAITING_REGION_SELECTION 状态
+ *     - WorkflowParams 添加区域裁剪参数（enable_region_crop, crop_lon_range, crop_lat_range, crop_mode）
+ *     - determineCurrentState() 插入阶段2.5判断逻辑
+ *     - Token 生成包含区域裁剪参数
+ *     - 新增 buildRegionSelectionPrompt() 提示构建
  *   - 2026-02-05 kongzhiquan: v3.0.3 新增执行确认 Token 机制
  *     - 防止 Agent 跳过 awaiting_execution 阶段直接执行
  *     - 在 awaiting_execution 阶段生成 confirmation_token
@@ -28,6 +34,8 @@ export const WorkflowState = {
   AWAITING_VARIABLE_SELECTION: 'awaiting_variable_selection',
   /** 阶段2: 等待用户选择静态/掩码变量 */
   AWAITING_STATIC_SELECTION: 'awaiting_static_selection',
+  /** 阶段2.5: 等待用户确认区域裁剪 */
+  AWAITING_REGION_SELECTION: 'awaiting_region_selection',
   /** 阶段3: 等待用户确认处理参数 */
   AWAITING_PARAMETERS: 'awaiting_parameters',
   /** 阶段4: 等待用户最终确认执行 */
@@ -56,6 +64,16 @@ export interface WorkflowParams {
   // 阶段2: 静态/掩码变量
   stat_vars?: string[]
   mask_vars?: string[]
+
+  // 阶段2.5: 区域裁剪（新增）
+  /** undefined=未回答, true=启用裁剪, false=不启用裁剪 */
+  enable_region_crop?: boolean
+  /** 经度裁剪范围 [min, max] */
+  crop_lon_range?: [number, number]
+  /** 纬度裁剪范围 [min, max] */
+  crop_lat_range?: [number, number]
+  /** 裁剪模式: one_step=一步到位, two_step=两步裁剪(保存raw) */
+  crop_mode?: 'one_step' | 'two_step'
 
   // 阶段3: 处理参数
   scale?: number
@@ -126,6 +144,12 @@ export class PreprocessWorkflow {
       dyn_vars: params.dyn_vars?.sort().join(','),
       stat_vars: params.stat_vars?.sort().join(','),
       mask_vars: params.mask_vars?.sort().join(','),
+      // 区域裁剪参数（新增）
+      enable_region_crop: params.enable_region_crop,
+      crop_lon_range: params.crop_lon_range?.join(','),
+      crop_lat_range: params.crop_lat_range?.join(','),
+      crop_mode: params.crop_mode,
+      // 处理参数
       scale: params.scale,
       downsample_method: params.downsample_method,
       train_ratio: params.train_ratio,
@@ -230,8 +254,8 @@ confirmation_token 是基于所有参数生成的签名，用于：
     }
 
     // ========== 阶段4: 等待执行确认 ==========
-    // 前提：必须有 dyn_vars + stat_vars + mask_vars + 处理参数
-    if (this.hasVariableParams() && this.hasProcessingParams()) {
+    // 前提：必须有 dyn_vars + stat_vars + mask_vars + 区域裁剪决定 + 处理参数
+    if (this.hasVariableParams() && this.hasRegionCropDecision() && this.hasProcessingParams()) {
       return {
         currentState: WorkflowState.AWAITING_EXECUTION,
         missingParams: ['user_confirmed', 'confirmation_token'],
@@ -241,14 +265,25 @@ confirmation_token 是基于所有参数生成的签名，用于：
     }
 
     // ========== 阶段3: 等待处理参数 ==========
-    // 前提：必须有 dyn_vars + stat_vars + mask_vars
-    if (this.hasVariableParams()) {
+    // 前提：必须有 dyn_vars + stat_vars + mask_vars + 区域裁剪决定
+    if (this.hasVariableParams() && this.hasRegionCropDecision()) {
       const missingProcessingParams = this.getMissingProcessingParams()
       return {
         currentState: WorkflowState.AWAITING_PARAMETERS,
         missingParams: missingProcessingParams,
         canProceed: false,
-        stageDescription: '变量已确认，等待处理参数'
+        stageDescription: '变量和区域裁剪已确认，等待处理参数'
+      }
+    }
+
+    // ========== 阶段2.5: 等待区域裁剪确认 ==========
+    // 前提：必须有 dyn_vars + stat_vars + mask_vars，但 enable_region_crop 未明确
+    if (this.hasVariableParams() && !this.hasRegionCropDecision()) {
+      return {
+        currentState: WorkflowState.AWAITING_REGION_SELECTION,
+        missingParams: ['enable_region_crop'],
+        canProceed: false,
+        stageDescription: '变量已确认，等待区域裁剪决定'
       }
     }
 
@@ -287,6 +322,28 @@ confirmation_token 是基于所有参数生成的签名，用于：
       params.stat_vars !== undefined &&  // 允许空数组 []
       params.mask_vars !== undefined      // 允许空数组 []
     )
+  }
+
+  /**
+   * 检查是否已决定区域裁剪（阶段2.5完成）
+   * enable_region_crop 必须有明确值（true 或 false）
+   */
+  private hasRegionCropDecision(): boolean {
+    const { enable_region_crop, crop_lon_range, crop_lat_range } = this.params
+
+    // 明确设置为 false = 不需要裁剪，可以跳过
+    if (enable_region_crop === false) return true
+
+    // 明确设置为 true，必须有有效的裁剪范围
+    if (enable_region_crop === true) {
+      return !!(
+        crop_lon_range && crop_lon_range.length === 2 &&
+        crop_lat_range && crop_lat_range.length === 2
+      )
+    }
+
+    // undefined = 还未回答，需要询问
+    return false
   }
 
   /**
@@ -335,7 +392,7 @@ confirmation_token 是基于所有参数生成的签名，用于：
    * 检查是否有所有必需参数（可以执行）
    */
   private hasAllRequiredParams(): boolean {
-    return this.hasVariableParams() && this.hasProcessingParams()
+    return this.hasVariableParams() && this.hasRegionCropDecision() && this.hasProcessingParams()
   }
 
   /**
@@ -350,6 +407,9 @@ confirmation_token 是基于所有参数生成的签名，用于：
 
       case WorkflowState.AWAITING_STATIC_SELECTION:
         return this.buildStaticSelectionPrompt(inspectResult)
+
+      case WorkflowState.AWAITING_REGION_SELECTION:
+        return this.buildRegionSelectionPrompt(inspectResult)
 
       case WorkflowState.AWAITING_PARAMETERS:
         return this.buildParametersPrompt(inspectResult)
@@ -493,6 +553,152 @@ ${(inspectResult?.suspected_masks || []).map((v: string) => `  - ${v}`).join('\n
   }
 
   /**
+   * 构建阶段2.5提示：区域裁剪确认
+   */
+  private buildRegionSelectionPrompt(inspectResult?: any): StagePromptResult {
+    const { params } = this
+
+    // 从 inspectResult 获取数据的经纬度范围
+    const statistics = inspectResult?.statistics || {}
+
+    // 查找经纬度变量及其范围
+    let lonVarName: string | undefined
+    let latVarName: string | undefined
+    let dataLonMin: number | undefined
+    let dataLonMax: number | undefined
+    let dataLatMin: number | undefined
+    let dataLatMax: number | undefined
+
+    // 从 statistics 中查找经纬度信息
+    for (const [varName, stats] of Object.entries(statistics)) {
+      const s = stats as any
+      const lowerName = varName.toLowerCase()
+      if (lowerName.includes('lon') || lowerName === 'x') {
+        lonVarName = varName
+        dataLonMin = s.min
+        dataLonMax = s.max
+      }
+      if (lowerName.includes('lat') || lowerName === 'y') {
+        latVarName = varName
+        dataLatMin = s.min
+        dataLatMax = s.max
+      }
+    }
+
+    // 获取数据形状
+    const firstVar = params.dyn_vars?.[0]
+    const varInfo = inspectResult?.variables?.[firstVar]
+    const dataShape = varInfo?.shape || []
+    const H = typeof dataShape[dataShape.length - 2] === 'number' ? dataShape[dataShape.length - 2] : '?'
+    const W = typeof dataShape[dataShape.length - 1] === 'number' ? dataShape[dataShape.length - 1] : '?'
+
+    // 格式化经纬度范围显示
+    const lonRangeStr = (dataLonMin !== undefined && dataLonMax !== undefined)
+      ? `[${dataLonMin.toFixed(4)}, ${dataLonMax.toFixed(4)}]`
+      : '未知（请确认经度变量名是否正确）'
+    const latRangeStr = (dataLatMin !== undefined && dataLatMax !== undefined)
+      ? `[${dataLatMin.toFixed(4)}, ${dataLatMax.toFixed(4)}]`
+      : '未知（请确认纬度变量名是否正确）'
+
+    // 如果用户已提供裁剪范围，验证是否在数据边界内
+    let rangeValidationMsg = ''
+    if (params.enable_region_crop === true && params.crop_lon_range && params.crop_lat_range) {
+      const [userLonMin, userLonMax] = params.crop_lon_range
+      const [userLatMin, userLatMax] = params.crop_lat_range
+      const errors: string[] = []
+
+      if (dataLonMin !== undefined && dataLonMax !== undefined) {
+        if (userLonMin < dataLonMin || userLonMax > dataLonMax) {
+          errors.push(`  ❌ 经度范围越界: 您指定 [${userLonMin}, ${userLonMax}]，但数据范围是 [${dataLonMin.toFixed(4)}, ${dataLonMax.toFixed(4)}]`)
+        }
+        if (userLonMin >= userLonMax) {
+          errors.push(`  ❌ 经度范围无效: 最小值 ${userLonMin} 必须小于最大值 ${userLonMax}`)
+        }
+      }
+      if (dataLatMin !== undefined && dataLatMax !== undefined) {
+        if (userLatMin < dataLatMin || userLatMax > dataLatMax) {
+          errors.push(`  ❌ 纬度范围越界: 您指定 [${userLatMin}, ${userLatMax}]，但数据范围是 [${dataLatMin.toFixed(4)}, ${dataLatMax.toFixed(4)}]`)
+        }
+        if (userLatMin >= userLatMax) {
+          errors.push(`  ❌ 纬度范围无效: 最小值 ${userLatMin} 必须小于最大值 ${userLatMax}`)
+        }
+      }
+
+      if (errors.length > 0) {
+        rangeValidationMsg = `
+================================================================================
+                         ⚠️ 裁剪范围验证失败
+================================================================================
+
+${errors.join('\n')}
+
+请重新指定有效的裁剪范围。
+
+`
+      }
+    }
+
+    // 根据用户是否已表态，显示不同的提示
+    const alreadyEnabledCrop = params.enable_region_crop === true
+
+    return {
+      status: WorkflowState.AWAITING_REGION_SELECTION,
+      message: `变量选择已确认：
+- 研究变量: ${params.dyn_vars?.join(', ')}
+- 静态变量: ${params.stat_vars?.length ? params.stat_vars.join(', ') : '无'}
+- 掩码变量: ${params.mask_vars?.length ? params.mask_vars.join(', ') : '无'}
+${rangeValidationMsg}
+================================================================================
+                    ⚠️ ${alreadyEnabledCrop ? '请确认区域裁剪参数' : '是否需要区域裁剪？'}
+================================================================================
+
+【数据空间范围】
+- 经度变量: ${lonVarName || '未检测到'}
+- 纬度变量: ${latVarName || '未检测到'}
+- 经度范围: ${lonRangeStr}
+- 纬度范围: ${latRangeStr}
+- 空间尺寸: ${H} × ${W}
+
+================================================================================
+
+**请回答以下问题：**
+
+${alreadyEnabledCrop ? '' : `🔹 **是否需要先裁剪到特定区域？**
+   - 如果需要，请回复"需要裁剪"或"是"，并提供经纬度范围
+   - 如果不需要，请回复"不需要裁剪"或"否"
+
+`}🗺️ **裁剪区域（如果需要裁剪）：**
+   - crop_lon_range: [经度最小值, 经度最大值]，如 [100, 120]
+   - crop_lat_range: [纬度最小值, 纬度最大值]，如 [20, 40]
+   - 注意: 裁剪范围必须在数据范围内
+
+📐 **裁剪模式：**
+   - "one_step": 一步到位，直接计算能被 scale 整除的区域（不保存 raw）
+   - "two_step": 两步裁剪，先保存到 raw/，再裁剪到 hr/（默认，推荐）
+
+================================================================================
+
+⚠️ Agent 注意：
+- 如果用户说"不需要裁剪"，设置 enable_region_crop: false
+- 如果用户说"需要裁剪"并提供了范围，设置 enable_region_crop: true 和对应的范围
+- 如果用户不清楚范围，请告知上面显示的数据经纬度范围
+- 如果用户指定的范围超出数据边界，请告知有效范围并请求重新输入
+- **禁止自动决定是否裁剪或裁剪范围！**`,
+      canExecute: false,
+      data: {
+        dyn_vars_confirmed: params.dyn_vars,
+        stat_vars_confirmed: params.stat_vars,
+        mask_vars_confirmed: params.mask_vars,
+        lon_var_name: lonVarName,
+        lat_var_name: latVarName,
+        data_lon_range: dataLonMin !== undefined ? [dataLonMin, dataLonMax] : null,
+        data_lat_range: dataLatMin !== undefined ? [dataLatMin, dataLatMax] : null,
+        data_shape: { H, W }
+      }
+    }
+  }
+
+  /**
    * 构建阶段3提示：处理参数确认
    */
   private buildParametersPrompt(inspectResult?: any): StagePromptResult {
@@ -631,6 +837,12 @@ ${cropRecommendation || `   - 请指定 h_slice 和 w_slice，或回复"不裁�
 - 静态变量: ${params.stat_vars?.length ? params.stat_vars.join(', ') : '无'}
 - 掩码变量: ${params.mask_vars?.length ? params.mask_vars.join(', ') : '无'}
 
+【区域裁剪】
+${params.enable_region_crop ? `- 启用区域裁剪: 是
+- 经度范围: [${params.crop_lon_range?.[0]}, ${params.crop_lon_range?.[1]}]
+- 纬度范围: [${params.crop_lat_range?.[0]}, ${params.crop_lat_range?.[1]}]
+- 裁剪模式: ${params.crop_mode === 'one_step' ? '一步到位（不保存 raw）' : '两步裁剪（保存 raw）'}` : '- 启用区域裁剪: 否'}
+
 【处理参数】
 - 模式: ${this.isNumericalModelMode ? '粗网格模式（数值模型）' : '下采样模式'}
 ${!this.isNumericalModelMode ? `- 下采样倍数: ${params.scale}x
@@ -664,6 +876,10 @@ ${params.h_slice || params.w_slice ? `- 裁剪后尺寸: ${finalH} × ${finalW}
           dyn_vars: params.dyn_vars,
           stat_vars: params.stat_vars,
           mask_vars: params.mask_vars,
+          enable_region_crop: params.enable_region_crop,
+          crop_lon_range: params.crop_lon_range,
+          crop_lat_range: params.crop_lat_range,
+          crop_mode: params.crop_mode,
           scale: params.scale,
           downsample_method: params.downsample_method,
           train_ratio: params.train_ratio,

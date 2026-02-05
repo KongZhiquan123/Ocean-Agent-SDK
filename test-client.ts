@@ -6,9 +6,17 @@
  * Author: leizheng
  * Contributors: kongzhiquan
  * Time: 2026-02-02
- * Version: 3.0.0
+ * Version: 3.1.1
  *
  * Changelog:
+ *   - 2026-02-05 kongzhiquan: v3.1.1 适配经纬度范围验证
+ *     - 阶段 2.5 新增经纬度范围验证功能说明
+ *     - 系统会自动检测数据的经纬度范围并展示给用户
+ *     - 用户指定的裁剪范围如果超出数据边界会提示错误
+ *   - 2026-02-05 kongzhiquan: v3.1.0 适配区域裁剪功能
+ *     - 新增阶段 2.5 区域裁剪确认 (awaiting_region_selection)
+ *     - 更新流程图和阶段说明
+ *     - 更新测试说明，对应 SKILL.md v3.1.0
  *   - 2026-02-04 kongzhiquan: v3.0.0 适配 4 阶段强制确认流程
  *     - 新增 4 阶段交互式测试流程引导
  *     - 新增阶段状态显示和流程提示
@@ -229,15 +237,15 @@ async function interactiveMode() {
   rl.close()
 }
 
-// 测试海洋数据预处理的完整流程（v3.0 四阶段）
+// 测试海洋数据预处理的完整流程（v3.1 五阶段）
 async function testOceanPreprocess() {
   console.log('\n' + '='.repeat(60))
-  console.log('海洋数据预处理测试 v3.0（4 阶段强制确认流程）')
+  console.log('海洋数据预处理测试 v3.1（5 阶段强制确认流程）')
   console.log('='.repeat(60))
 
   console.log(`
 ┌─────────────────────────────────────────────────────────────┐
-│  v3.0 工作流程（4 阶段强制确认）                            │
+│  v3.1 工作流程（5 阶段强制确认）                            │
 ├─────────────────────────────────────────────────────────────┤
 │  阶段 0: 启动分析                                           │
 │    → 提供 NC 数据目录和输出目录                             │
@@ -250,6 +258,12 @@ async function testOceanPreprocess() {
 │    → Agent 展示静态变量、掩码变量、坐标变量候选             │
 │    → 你逐一确认：静态变量、掩码变量、经纬度变量             │
 │                                                             │
+│  阶段 2.5: 区域裁剪确认 (awaiting_region_selection)【新增】 │
+│    → Agent 展示数据的经纬度范围（自动检测 min/max）         │
+│    → 确认是否裁剪、经纬度范围、裁剪模式                     │
+│    → 如果指定范围超出数据边界，会提示错误并要求重新输入     │
+│    → 裁剪模式: one_step（一步到位）/ two_step（两步裁剪）   │
+│                                                             │
 │  阶段 3: 处理参数确认 (awaiting_parameters)                 │
 │    → Agent 展示数据尺寸和推荐裁剪                           │
 │    → 你确认：scale、插值方法、数据集划分、裁剪参数          │
@@ -260,13 +274,27 @@ async function testOceanPreprocess() {
 │                                                             │
 │  完成后: Agent 自动生成预处理报告                           │
 └─────────────────────────────────────────────────────────────┘
+
+【v3.1 新增目录结构】
+  dataset_root/
+  ├── train/
+  │   ├── raw/    ← 区域裁剪后的原始数据（两步裁剪模式）
+  │   ├── hr/     ← 尺寸裁剪后的高分辨率数据
+  │   └── lr/     ← 下采样后的低分辨率数据
+  ├── static_variables/
+  │   ├── raw/    ← 区域裁剪后的静态变量
+  │   ├── hr/     ← 尺寸裁剪后的静态变量
+  │   └── lr/     ← 下采样后的静态变量（经纬度用linear，掩码用nearest）
+  └── ...
 `)
 
   console.log('请用自然语言描述您的预处理需求，例如：')
   console.log('  - "我的数据在 /data/ocean，输出到 /output，帮我做超分预处理"')
   console.log('  - "HR 数据在 /data/hr，LR 在 /data/lr，转成超分训练格式"')
   console.log('  - "/data/cmems 里有 chl 和 no3，4 倍下采样到 /output"')
-  console.log('\nAgent 会引导您完成 4 个阶段的参数确认。')
+  console.log('  - "我想先裁剪到南海区域，经度100-120，纬度5-25，然后再下采样"')
+  console.log('  - "我不确定数据的经纬度范围，帮我分析一下"  ← 系统会自动显示范围')
+  console.log('\nAgent 会引导您完成 5 个阶段的参数确认。')
   console.log('-'.repeat(60))
 
   // 重置会话
@@ -289,6 +317,7 @@ async function testOceanPreprocess() {
   console.log('继续与 Agent 对话，按阶段确认参数：')
   console.log('  - 阶段 1: 选择研究变量（如"uo, vo"）')
   console.log('  - 阶段 2: 确认静态/掩码/坐标变量')
+  console.log('  - 阶段 2.5: 确认区域裁剪参数（如果启用）')
   console.log('  - 阶段 3: 确认 scale、插值方法、划分比例、裁剪')
   console.log('  - 阶段 4: 回复"确认"执行')
   console.log('')
@@ -322,6 +351,7 @@ async function testOceanPreprocess() {
       console.log('  0 = 等待启动（提供数据目录）')
       console.log('  1 = awaiting_variable_selection（选择研究变量）')
       console.log('  2 = awaiting_static_selection（选择静态/掩码变量）')
+      console.log('  2.5 = awaiting_region_selection（确认区域裁剪参数）')
       console.log('  3 = awaiting_parameters（确认处理参数）')
       console.log('  4 = awaiting_execution（确认执行）')
       console.log('  5 = 执行完成，生成报告')
@@ -409,7 +439,7 @@ async function runAutomatedTests() {
 
 // 主程序
 async function main() {
-  console.log('KODE Agent Service 交互式测试客户端 v3.0')
+  console.log('KODE Agent Service 交互式测试客户端 v3.1.1')
   console.log(`API URL: ${API_URL}`)
   console.log(`API Key: ${API_KEY.slice(0, 10)}...`)
 
@@ -424,7 +454,7 @@ async function main() {
   console.log('\n服务正常！')
   console.log('\n选择测试模式:')
   console.log('  1. 交互式对话')
-  console.log('  2. 海洋数据预处理测试（v3.0 四阶段流程）')
+  console.log('  2. 海洋数据预处理测试（v3.1 五阶段流程，含区域裁剪）')
   console.log('  3. 海洋预处理工具快速测试（自动化）')
   console.log('  4. 单条消息测试')
   console.log('  5. 自动化测试套件（原测试）')

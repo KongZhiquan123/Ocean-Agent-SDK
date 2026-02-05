@@ -45,6 +45,15 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
+__all__ = [
+    'has_time_dimension',
+    'file_has_time_dimension',
+    'guess_variable_type',
+    'compute_statistics',
+    'analyze_variable',
+    'inspect_data',
+]
+
 try:
     import xarray as xr
 except ImportError:

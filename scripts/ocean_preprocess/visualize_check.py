@@ -5,7 +5,7 @@ visualize_check.py - 数据处理后的可视化检查脚本
 @author liuzhengyang
 @contributor leizheng, kongzhiquan
 @date 2026-02-04
-@version 3.0.0
+@version 3.1.2
 
 功能:
 - 对比 HR 和 LR 数据的可视化
@@ -18,9 +18,10 @@ visualize_check.py - 数据处理后的可视化检查脚本
 用法:
     python visualize_check.py --dataset_root /path/to/dataset
 
-目录结构 (v3.0.0 新格式):
+目录结构 (v3.1.0 新格式):
     dataset_root/
     ├── train/
+    │   ├── raw/   ← 区域裁剪后的原始数据（两步裁剪模式）
     │   ├── hr/
     │   └── lr/
     ├── valid/
@@ -29,6 +30,10 @@ visualize_check.py - 数据处理后的可视化检查脚本
     ├── test/
     │   ├── hr/
     │   └── lr/
+    ├── static_variables/
+    │   ├── raw/   ← 区域裁剪后的静态变量
+    │   ├── hr/    ← 尺寸裁剪后的静态变量
+    │   └── lr/    ← 下采样后的静态变量
     └── visualisation_data_process/   ← 图片输出到这里
         ├── train/
         │   ├── {var}_compare.png      # HR vs LR 空间对比
@@ -38,6 +43,12 @@ visualize_check.py - 数据处理后的可视化检查脚本
         └── statistics_summary.png     # 全局统计汇总
 
 Changelog:
+    - 2026-02-05 kongzhiquan v3.1.2: 修复单时间步 X 轴显示异常
+        - 当只有 1 个时间步时，X 轴显示 "t=0" 而非异常范围
+        - 添加 xlim 边界处理避免 matplotlib 自动缩放问题
+    - 2026-02-05 kongzhiquan v3.1.1: 修复坐标文件搜索路径
+        - 支持 static_variables/hr 和 static_variables/lr 子目录
+        - 修复 v3.1.0 区域裁剪后坐标不显示的问题
     - 2026-02-04 kongzhiquan v3.0.0: 新增统计分布图
         - 新增均值/方差时序图
         - 新增 HR/LR 数据值直方图对比
@@ -77,6 +88,15 @@ import argparse
 import glob
 import numpy as np
 import matplotlib.pyplot as plt
+
+__all__ = [
+    'extract_2d_slice',
+    'plot_and_save',
+    'plot_statistics',
+    'plot_summary_statistics',
+    'load_coordinates',
+    'process_split',
+]
 
 
 def extract_2d_slice(data: np.ndarray, name: str) -> tuple:
@@ -282,6 +302,7 @@ def plot_statistics(
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
 
     time_steps = np.arange(len(hr_means))
+    n_steps = len(hr_means)
 
     # 1. 均值时序图 (左上)
     ax1 = axes[0, 0]
@@ -292,6 +313,13 @@ def plot_statistics(
     ax1.set_title(f'{var_name} - Mean over Time')
     ax1.legend()
     ax1.grid(True, alpha=0.3)
+    # 修复单时间步 X 轴显示异常（v3.1.2）
+    if n_steps == 1:
+        ax1.set_xlim(-0.5, 0.5)
+        ax1.set_xticks([0])
+        ax1.set_xticklabels(['t=0'])
+    elif n_steps > 1:
+        ax1.set_xlim(-0.5, n_steps - 0.5)
 
     # 2. 方差/标准差时序图 (右上)
     ax2 = axes[0, 1]
@@ -302,6 +330,13 @@ def plot_statistics(
     ax2.set_title(f'{var_name} - Std Dev over Time')
     ax2.legend()
     ax2.grid(True, alpha=0.3)
+    # 修复单时间步 X 轴显示异常（v3.1.2）
+    if n_steps == 1:
+        ax2.set_xlim(-0.5, 0.5)
+        ax2.set_xticks([0])
+        ax2.set_xticklabels(['t=0'])
+    elif n_steps > 1:
+        ax2.set_xlim(-0.5, n_steps - 0.5)
 
     # 3. HR 直方图 (左下)
     ax3 = axes[1, 0]
@@ -459,11 +494,16 @@ def load_coordinates(dataset_root: str, subdir: str = None) -> tuple:
         '*_lon.npy', '*_longitude.npy', '*_lon_rho.npy'
     ]
 
-    # 搜索路径
+    # 搜索路径（v3.1.1 更新：支持新的 hr/lr 子目录结构）
     search_dirs = []
     if subdir:
         search_dirs.append(os.path.join(dataset_root, subdir))
+        # 新增：支持 static_variables/hr 和 static_variables/lr 结构
+        search_dirs.append(os.path.join(dataset_root, subdir, 'hr'))
+        search_dirs.append(os.path.join(dataset_root, subdir, 'lr'))
     search_dirs.append(os.path.join(dataset_root, 'static_variables'))
+    search_dirs.append(os.path.join(dataset_root, 'static_variables', 'hr'))
+    search_dirs.append(os.path.join(dataset_root, 'static_variables', 'lr'))
     search_dirs.append(dataset_root)
 
     lat = None
