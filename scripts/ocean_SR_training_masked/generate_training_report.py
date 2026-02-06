@@ -375,10 +375,10 @@ def generate_report(config: Dict) -> str:
     lines.append("## 4. 评估结果")
     lines.append("")
 
-    for split_name, metrics_key in [('验证集', 'valid_metrics'), ('测试集', 'test_metrics')]:
+    for idx, (split_name, metrics_key) in enumerate([('验证集', 'valid_metrics'), ('测试集', 'test_metrics')], start=1):
         metrics = log_info.get(metrics_key)
         if metrics:
-            lines.append(f"### 4.x {split_name}")
+            lines.append(f"### 4.{idx} {split_name}")
             lines.append("")
             lines.append("| 指标 | 值 |")
             lines.append("|------|-----|")
@@ -507,7 +507,9 @@ def main():
 
         # 写入文件
         output_path = config['output_path']
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        output_dir = os.path.dirname(output_path)
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
 
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write(report_content)

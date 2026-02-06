@@ -23,7 +23,7 @@ MODELS = [
     {"name": "SR3",                  "category": "diffusion", "trainer": "DDPMTrainer",     "description": "SR3 Diffusion Model"},
     {"name": "MG-DDPM",              "category": "diffusion", "trainer": "DDPMTrainer",     "description": "Multigrid DDPM"},
     {"name": "Resshift",             "category": "diffusion", "trainer": "ResshiftTrainer", "description": "Residual Shifting Diffusion"},
-    {"name": "ReMiG",                "category": "diffusion", "trainer": "DDPMTrainer",     "description": "ReMiG Diffusion Model"},
+    {"name": "ReMiG",                "category": "diffusion", "trainer": "ReMiGTrainer",    "description": "ReMiG Diffusion Model"},
 ]
 
 

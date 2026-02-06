@@ -79,7 +79,7 @@ class ResshiftTrainer(BaseTrainer):
             
             loss = losses['mse']
             # print(f"epoch:{epoch}, iter:{i}, loss:{loss.item():.6f}")
-            loss_record.update({"train_loss": loss}, n=B)
+            loss_record.update({"train_loss": loss.item()}, n=B)
             
             self.optimizer.zero_grad()
             loss.backward()

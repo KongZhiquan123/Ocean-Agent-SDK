@@ -27,6 +27,7 @@ class CompositeLoss:
     组合损失：传入 {name: weight}，自动求和并返回总损失与分项日志
     """
     def __init__(self, spec: dict[str, float]):  # e.g. {"l1":1.0,"l2":0.1,"physics":0.5}
+        self.spec = spec
         self.loss_list = ["total_loss", "l2", "l1"]
         self.init_record()
 
@@ -34,15 +35,15 @@ class CompositeLoss:
         logs = {}
         total = 0.0
         for name, w in self.spec.items():
-            if w == 0: 
+            if w == 0:
                 continue
-            fn = LOSS_REGISTRY[name]
+            fn = _loss_dict[name]
             val = fn(pred, target, **batch)  # 标量（已mean）
             total = total + w * val
             logs[name] = float(val.detach().item())
         logs["loss_total"] = float(total.detach().item())
-        if record is not None and batch_size is not None:
-            record.update(logs, n=batch_size)
+        if self.record is not None and batch_size is not None:
+            self.record.update(logs, n=batch_size)
         return total  # 用于 backward
 
     def init_record(self):

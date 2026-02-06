@@ -64,7 +64,7 @@ class DDPMTrainer(BaseTrainer):
             else:
                 loss = pix_loss / (B * C * H * W)
 
-            loss_record.update({"train_loss": pix_loss}, n=B)
+            loss_record.update({"train_loss": loss.item()}, n=B)
             self.optimizer.zero_grad()
             loss.backward()
             self.optimizer.step()
