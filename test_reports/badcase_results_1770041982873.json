@@ -1,0 +1,32 @@
+[
+  {
+    "caseName": "bad_nan_in_data.nc",
+    "description": "NaN 值检测",
+    "status": "PASS",
+    "expectedResult": "error",
+    "actualResult": "error",
+    "responseStyle": "professional",
+    "duration": 149192,
+    "timestamp": "2026-02-02T14:15:37.946Z"
+  },
+  {
+    "caseName": "bad_random_coords_nan.nc",
+    "description": "坐标含 NaN",
+    "status": "PASS",
+    "expectedResult": "error",
+    "actualResult": "error",
+    "responseStyle": "newbie",
+    "duration": 25919,
+    "timestamp": "2026-02-02T14:18:08.139Z"
+  },
+  {
+    "caseName": "bad_random_checkerboard_nan.nc",
+    "description": "棋盘格 NaN",
+    "status": "PASS",
+    "expectedResult": "error",
+    "actualResult": "error",
+    "responseStyle": "lazy",
+    "duration": 66793,
+    "timestamp": "2026-02-02T14:18:35.059Z"
+  }
+]

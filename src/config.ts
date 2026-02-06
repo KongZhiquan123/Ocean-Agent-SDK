@@ -3,10 +3,16 @@
  *
  * @description 配置文件，包含环境变量加载、配置验证和依赖初始化
  * @author kongzhiquan
+ * @contributors Leizheng
  * @date 2026-02-02
- * @version 1.1.0
+ * @version 1.3.0
  *
  * @changelog
+ *   - 2026-02-06 Leizheng: v1.3.0 新增训练报告工具（自动通过 index.ts 导出注册）
+ *   - 2026-02-06 Leizheng: v1.2.0 新增海洋超分训练工具集
+ *     - 导入 oceanSrTrainingTools 并注册
+ *     - skillsWhiteList 添加 ocean-SR-training
+ *     - 系统提示词添加训练技能说明
  *   - 2026-02-05 kongzhiquan: v1.1.0 优化工具加载与模板配置
  *     - 将 loadAllTools() 函数改为常量 allTools，避免重复创建
  *     - ask 模式移除 bash_run，添加 ocean_inspect_data（只读数据检查）
@@ -28,6 +34,8 @@ import {
 
 // 导入海洋数据预处理工具
 import { oceanPreprocessTools } from './tools/ocean-preprocess'
+// 导入海洋超分训练工具
+import { oceanSrTrainingTools } from './tools/ocean-sr-training'
 import { findFirstPythonPath } from './utils/python-manager'
 
 // ========================================
@@ -47,7 +55,7 @@ export const config = {
 console.log('[config] 环境变量 ANTHROPIC_MODEL_ID:', process.env.ANTHROPIC_MODEL_ID)
 console.log('[config] 最终使用模型:', config.anthropicModelId)
 
-const skillsWhiteList= ['ocean-preprocess']
+const skillsWhiteList= ['ocean-preprocess', 'ocean-SR-training']
 
 // ========================================
 // 配置验证
@@ -96,7 +104,7 @@ function createStore() {
 
 // 创建 SkillsManager
 const skillsManager = new SkillsManager(config.skillsDir, skillsWhiteList)
-const allTools = [...builtin.fs(), ...builtin.bash(), ...builtin.todo(), ...oceanPreprocessTools, createSkillsTool(skillsManager)]
+const allTools = [...builtin.fs(), ...builtin.bash(), ...builtin.todo(), ...oceanPreprocessTools, ...oceanSrTrainingTools, createSkillsTool(skillsManager)]
 
 function createToolRegistry() {
   const registry = new ToolRegistry()
@@ -145,6 +153,7 @@ skills {"action": "load", "skill_name": "技能名称"}
 
 **已有技能**：
 - ocean-preprocess: 海洋数据预处理（超分辨率、格式转换等）
+- ocean-SR-training: 海洋超分辨率模型训练（模型选择、训练、推理）
 
 **工作流程**：
 1. 用户提出任务需求

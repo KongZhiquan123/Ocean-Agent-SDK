@@ -2,13 +2,16 @@
  * @file test-client.ts
  *
  * @description 测试 kode-agent-service 的交互式客户端
- *              支持多轮对话、海洋数据预处理完整流程测试
+ *              支持多轮对话、海洋数据预处理完整流程测试、超分训练测试
  * @author leizheng
- * @contributors kongzhiquan
+ * @contributors kongzhiquan, Leizheng
  * @date 2026-02-02
- * @version 3.2.0
+ * @version 3.3.0
  *
  * @changelog
+ *   - 2026-02-06 Leizheng: v3.3.0 新增超分训练测试入口
+ *     - 新增 testOceanSRTraining() 交互式训练测试流程
+ *     - 菜单新增选项 6、命令行参数 --train / -t
  *   - 2026-02-05 kongzhiquan: v3.2.0 合并功能更新
  *     - 新增 tool_error 事件处理，显示工具执行错误
  *     - 简化 tool_result 显示逻辑
@@ -395,6 +398,107 @@ async function testOceanToolsQuick() {
   rl.close()
 }
 
+// 测试海洋超分辨率训练流程
+async function testOceanSRTraining() {
+  console.log('\n' + '='.repeat(60))
+  console.log('海洋超分辨率训练测试 v1.0')
+  console.log('='.repeat(60))
+
+  console.log(`
+┌─────────────────────────────────────────────────────────────┐
+│  训练工作流程                                                │
+├─────────────────────────────────────────────────────────────┤
+│  步骤 1: 确认数据目录和输出目录                              │
+│    → 提供 ocean-preprocess 预处理后的数据目录                │
+│    → 提供训练日志输出目录                                    │
+│                                                             │
+│  步骤 2: 选择模型                                            │
+│    → Agent 展示可用模型列表（标准模型 / 扩散模型）           │
+│    → 你选择要训练的模型                                      │
+│                                                             │
+│  步骤 3: 确认训练参数                                        │
+│    → epochs, lr, batch_size                                 │
+│    → GPU 选择：查看可用显卡，选择用哪些卡                    │
+│    → 多卡模式选择（DP / DDP）                                │
+│                                                             │
+│  步骤 4: 参数汇总确认                                        │
+│    → Agent 展示完整参数列表                                  │
+│    → 你回复"确认"开始训练                                    │
+│                                                             │
+│  步骤 5: 执行训练                                            │
+│    → 训练进度输出                                            │
+│    → 完成后展示测试指标                                      │
+└─────────────────────────────────────────────────────────────┘
+
+【数据目录要求】（ocean-preprocess 预处理输出）
+  dataset_root/
+  ├── train/hr/{var}/*.npy
+  ├── train/lr/{var}/*.npy
+  ├── valid/hr/{var}/*.npy
+  ├── valid/lr/{var}/*.npy
+  ├── test/hr/{var}/*.npy
+  └── test/lr/{var}/*.npy
+`)
+
+  console.log('请用自然语言描述您的训练需求，例如：')
+  console.log('  - "数据在 /data/output/demo14，帮我训练超分模型"')
+  console.log('  - "用 SwinIR 训练，数据在 /output，日志输出到 /logs"')
+  console.log('  - "查看有哪些可用模型"')
+  console.log('  - "看看当前 GPU 情况"')
+  console.log('\nAgent 会引导您完成模型选择、参数确认、训练执行。')
+  console.log('-'.repeat(60))
+
+  // 重置会话
+  agentId = null
+  showFullToolResult = true
+
+  // 用户输入初始 prompt
+  const userPrompt = await prompt('\n你: ')
+  if (!userPrompt.trim()) {
+    console.log('错误: 请输入训练需求')
+    rl.close()
+    return
+  }
+
+  // 发送初始请求
+  await chat(userPrompt, 'edit')
+
+  // 进入交互式对话循环
+  console.log('\n' + '-'.repeat(60))
+  console.log('继续与 Agent 对话：')
+  console.log('  - 选择模型（如"SwinIR"、"FNO2d"）')
+  console.log('  - 确认参数（epochs, lr, batch_size, GPU 等）')
+  console.log('  - 回复"确认"开始训练')
+  console.log('')
+  console.log('命令: "done" 结束测试, "reset" 重置会话')
+  console.log('-'.repeat(60))
+
+  while (true) {
+    const userInput = await prompt('\n你: ')
+
+    if (userInput.toLowerCase() === 'done') {
+      console.log('\n测试结束')
+      break
+    }
+
+    if (userInput.toLowerCase() === 'reset') {
+      agentId = null
+      console.log('会话已重置，请重新描述您的需求')
+      const newPrompt = await prompt('\n你: ')
+      if (newPrompt.trim()) {
+        await chat(newPrompt, 'edit')
+      }
+      continue
+    }
+
+    if (userInput.trim()) {
+      await chat(userInput, 'edit')
+    }
+  }
+
+  rl.close()
+}
+
 // 原来的自动化测试（保留）
 async function runAutomatedTests() {
   console.log('\n' + '='.repeat(60))
@@ -433,7 +537,7 @@ async function runAutomatedTests() {
 
 // 主程序
 async function main() {
-  console.log('KODE Agent Service 交互式测试客户端 v3.1.1')
+  console.log('KODE Agent Service 交互式测试客户端 v3.3.0')
   console.log(`API URL: ${API_URL}`)
   console.log(`API Key: ${API_KEY.slice(0, 10)}...`)
 
@@ -452,8 +556,9 @@ async function main() {
   console.log('  3. 海洋预处理工具快速测试（自动化）')
   console.log('  4. 单条消息测试')
   console.log('  5. 自动化测试套件（原测试）')
+  console.log('  6. 海洋超分辨率训练测试')
 
-  const choice = await prompt('\n请选择 (1/2/3/4/5): ')
+  const choice = await prompt('\n请选择 (1/2/3/4/5/6): ')
 
   switch (choice) {
     case '1':
@@ -472,6 +577,9 @@ async function main() {
       break
     case '5':
       await runAutomatedTests()
+      break
+    case '6':
+      await testOceanSRTraining()
       break
     default:
       console.log('无效选择，进入交互模式')
@@ -512,6 +620,15 @@ if (args.includes('--interactive') || args.includes('-i')) {
   testHealth().then((healthy) => {
     if (healthy) {
       runAutomatedTests()
+    } else {
+      console.error('服务不可用')
+      process.exit(1)
+    }
+  })
+} else if (args.includes('--train') || args.includes('-t')) {
+  testHealth().then((healthy) => {
+    if (healthy) {
+      testOceanSRTraining()
     } else {
       console.error('服务不可用')
       process.exit(1)
