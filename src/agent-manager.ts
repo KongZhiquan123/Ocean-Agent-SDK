@@ -10,6 +10,7 @@
  *   - 2026-02-05 kongzhiquan: v1.1.0 新增 tool:error 事件处理
  *     - 在 convertProgressToSSE 中添加 tool:error case
  *     - 返回 tool_error 类型的 SSE 事件
+ *   - 2026-02-06 Leizheng: v1.1.1 修复 tool:end 事件 result 可能为 undefined
  */
 
 import { Agent, type ProgressEvent } from '@shareai-lab/kode-sdk'
@@ -162,7 +163,7 @@ export function convertProgressToSSE(event: ProgressEvent, reqId: string): SSEEv
       return {
         type: 'tool_result',
         tool_use_id: event.call.id,
-        result: event.call.result,
+        result: event.call.result ?? null,
         is_error: event.call.state === 'FAILED',
         timestamp: Date.now(),
       }

@@ -77,7 +77,9 @@ class BaseForecaster(object):
             num_workers=self.data_args.get('num_workers', 0),
             pin_memory=True)
     
-    def forecast(self, loader, normalizer, **kwargs):        
+    def forecast(self, loader, normalizer, **kwargs):
+        # 兼容 normalizer 为 dict {'hr': ..., 'lr': ...} 的情况
+        _norm = normalizer['hr'] if isinstance(normalizer, dict) else normalizer
         loss_record = self.evaluator.init_record()
         all_y = []
         all_y_pred = []
@@ -87,8 +89,8 @@ class BaseForecaster(object):
                 x = x.to(self.device, non_blocking=True)
                 y = y.to(self.device, non_blocking=True)
                 y_pred = self.inference(x, y, **kwargs)
-                y_pred = normalizer.decode(y_pred)
-                y = normalizer.decode(y)
+                y_pred = _norm.decode(y_pred)
+                y = _norm.decode(y)
                 all_y.append(y)
                 all_y_pred.append(y_pred)
         y = torch.cat(all_y, dim=0)
@@ -106,8 +108,8 @@ class BaseForecaster(object):
         with torch.no_grad():
             raw_x = raw_x.to(self.device)
             pred_y = self.inference(raw_x, raw_y, **kwargs)
-        pred_y = normalizer.decode(pred_y)
-        raw_y = normalizer.decode(raw_y)
+        pred_y = (normalizer['hr'] if isinstance(normalizer, dict) else normalizer).decode(pred_y)
+        raw_y = (normalizer['hr'] if isinstance(normalizer, dict) else normalizer).decode(raw_y)
         raw_x = make_lr_blur(raw_y.permute(0, 3, 1, 2), scale=self.data_args.get('sample_factor', 2)).permute(0, 2, 3, 1)
         
         pred_y = pred_y.cpu().reshape(self.shape)

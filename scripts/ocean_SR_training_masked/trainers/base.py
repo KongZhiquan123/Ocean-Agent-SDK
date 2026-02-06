@@ -448,8 +448,10 @@ class BaseTrainer:
                 x = x.to(self.device, non_blocking=True)
                 y = y.to(self.device, non_blocking=True)
                 y_pred = self.inference(x, y, **kwargs)
-                y_pred = self.normalizer.decode(y_pred)
-                y = self.normalizer.decode(y)
+                # normalizer 可能是 dict {'hr': ..., 'lr': ...} 或单个对象
+                _norm = self.normalizer['hr'] if isinstance(self.normalizer, dict) else self.normalizer
+                y_pred = _norm.decode(y_pred)
+                y = _norm.decode(y)
                 all_y.append(y)
                 all_y_pred.append(y_pred)
         y = torch.cat(all_y, dim=0)

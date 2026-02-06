@@ -14,9 +14,13 @@ OceanNPY Dataset - 适配 ocean-preprocess 预处理输出的数据集类（带�
 
 @author Leizheng
 @date 2026-02-06
-@version 2.0.0
+@version 2.1.0
 
 @changelog
+  - 2026-02-06 Leizheng: v2.1.0 修复 PGN 归一化器 HR/LR 空间分辨率不匹配
+    - PGN 模式下 HR 和 LR 使用各自独立的 normalizer（空间维度不同不能共用）
+    - GN 模式下 HR 和 LR 共用同一个 normalizer（全局标量统计量）
+    - normalizer 改为 dict: {'hr': normalizer_hr, 'lr': normalizer_lr}
   - 2026-02-06 Leizheng: v2.0.0 添加陆地掩码支持
     - _load_split() 中从 HR 数据第一个时间步生成 mask
     - NaN 填充为 0（在归一化之前）
@@ -91,26 +95,45 @@ class OceanNPYDataset:
         print(f'[OceanNPY] Test:  HR {test_hr.shape}, LR {test_lr.shape}')
 
         # 归一化（在训练集上拟合，应用到所有 split）
+        # 注意：PGN (UnitGaussianNormalizer) 是逐空间点归一化，mean/std 形状 = [N_spatial, C]
+        #       HR 和 LR 空间分辨率不同（如 174240 vs 10890），所以 PGN 必须分别拟合
+        #       GN (GaussianNormalizer) 是全局标量归一化，mean/std 是标量，可以共用
         if normalize:
-            B, H, W, C = train_hr.shape
-            train_hr_flat = train_hr.reshape(B, -1, C)
+            B_hr, H, W, C = train_hr.shape
+            B_lr = train_lr.shape[0]
+            h, w = train_lr.shape[1], train_lr.shape[2]
+
+            train_hr_flat = train_hr.reshape(B_hr, -1, C)
+            train_lr_flat = train_lr.reshape(B_lr, -1, C)
+
             if normalizer_type == 'PGN':
-                normalizer = UnitGaussianNormalizer(train_hr_flat)
+                # PGN: HR 和 LR 各自独立的 normalizer
+                normalizer_hr = UnitGaussianNormalizer(train_hr_flat)
+                normalizer_lr = UnitGaussianNormalizer(train_lr_flat)
             else:
-                normalizer = GaussianNormalizer(train_hr_flat)
+                # GN: 全局标量统计，HR 和 LR 共用同一个
+                normalizer_hr = GaussianNormalizer(train_hr_flat)
+                normalizer_lr = normalizer_hr
 
-            train_hr = normalizer.encode(train_hr_flat).reshape(B, H, W, C)
-            train_lr = normalizer.encode(train_lr.reshape(train_lr.shape[0], -1, C)).reshape(train_lr.shape)
+            train_hr = normalizer_hr.encode(train_hr_flat).reshape(B_hr, H, W, C)
+            train_lr = normalizer_lr.encode(train_lr_flat).reshape(B_lr, h, w, C)
 
-            valid_hr = normalizer.encode(valid_hr.reshape(valid_hr.shape[0], -1, C)).reshape(valid_hr.shape)
-            valid_lr = normalizer.encode(valid_lr.reshape(valid_lr.shape[0], -1, C)).reshape(valid_lr.shape)
+            valid_hr = normalizer_hr.encode(valid_hr.reshape(valid_hr.shape[0], -1, C)).reshape(valid_hr.shape)
+            valid_lr = normalizer_lr.encode(valid_lr.reshape(valid_lr.shape[0], -1, C)).reshape(valid_lr.shape)
 
-            test_hr = normalizer.encode(test_hr.reshape(test_hr.shape[0], -1, C)).reshape(test_hr.shape)
-            test_lr = normalizer.encode(test_lr.reshape(test_lr.shape[0], -1, C)).reshape(test_lr.shape)
+            test_hr = normalizer_hr.encode(test_hr.reshape(test_hr.shape[0], -1, C)).reshape(test_hr.shape)
+            test_lr = normalizer_lr.encode(test_lr.reshape(test_lr.shape[0], -1, C)).reshape(test_lr.shape)
+
+            print(f'[OceanNPY] Normalizer type: {normalizer_type}')
+            if normalizer_type == 'PGN':
+                print(f'[OceanNPY] HR normalizer: mean/std shape {normalizer_hr.mean.shape}')
+                print(f'[OceanNPY] LR normalizer: mean/std shape {normalizer_lr.mean.shape}')
         else:
-            normalizer = None
+            normalizer_hr = None
+            normalizer_lr = None
 
-        self.normalizer = normalizer
+        # normalizer 保存为 dict，方便 trainer 在 decode 时区分 HR/LR
+        self.normalizer = {'hr': normalizer_hr, 'lr': normalizer_lr}
         # 保存 mask 供 trainer 使用
         self.mask_hr = mask_hr_spatial  # [1, H, W, 1] bool
         self.mask_lr = mask_lr_spatial  # [1, h, w, 1] bool

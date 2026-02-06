@@ -9,6 +9,8 @@
  * @version 3.4.0
  *
  * @changelog
+ *   - 2026-02-06 Leizheng: v3.4.1 有 mask 变量时自动允许 NaN
+ *     - 陆地掩码区域的 NaN 是海洋数据的正常特征，不应阻断转换
  *   - 2026-02-05 kongzhiquan: v3.4.0 日期文件名功能
  *     - 新增 use_date_filename, date_format, time_var 参数
  *     - 支持从 NC 文件提取时间戳作为 NPY 文件名
@@ -515,6 +517,9 @@ export const oceanPreprocessFullTool = defineTool({
     result.step_b = stepBResult
 
     // ========== Step C: HR 数据转换 ==========
+    // 有掩码变量时自动允许 NaN（陆地区域的 NaN 是海洋数据的正常特征）
+    const effectiveAllowNan = allow_nan || (finalMaskVars && finalMaskVars.length > 0)
+
     const stepCResult = await oceanConvertNpyTool.exec({
       nc_folder: actualNcFolder,
       output_base,
@@ -526,7 +531,7 @@ export const oceanPreprocessFullTool = defineTool({
       lon_var: finalLonVar,
       lat_var: finalLatVar,
       run_validation,
-      allow_nan,
+      allow_nan: effectiveAllowNan,
       lon_range,
       lat_range,
       mask_src_var: primaryMaskVar,
@@ -591,7 +596,7 @@ export const oceanPreprocessFullTool = defineTool({
         lon_var: finalLonVar,
         lat_var: finalLatVar,
         run_validation,
-        allow_nan,
+        allow_nan: effectiveAllowNan,
         lon_range,
         lat_range,
         mask_src_var: primaryMaskVar,

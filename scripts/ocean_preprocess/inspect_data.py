@@ -4,11 +4,11 @@ inspect_data.py - Step A: 数据检查与变量分类
 
 @author leizheng
 @date 2026-02-04
-@version 2.1.0
+@version 2.2.0
 
 功能:
 - 扫描 NC 文件目录，获取文件列表
-- 逐个文件检测是否有时间维度（区分动态/静态文件）
+- 采样检测文件是否有时间维度（区分动态/静态文件）
 - 分析变量信息（维度、形状、类型）
 - 自动分类：动态变量、静态变量、掩码变量
 - 计算统计信息（min, max, mean, nan_count）
@@ -26,6 +26,10 @@ inspect_data.py - Step A: 数据检查与变量分类
 }
 
 Changelog:
+    - 2026-02-06 Leizheng v2.2.0: 采样检测优化
+        - 大文件数（>10）时采样首尾各几个文件检测，而非逐个打开
+        - 采样一致则推断全部，不一致才逐个检查
+        - 解决 3000+ 文件逐个 xr.open_dataset 导致超时问题
     - 2026-02-04 leizheng v2.1.0: 检测维度坐标
         - 同时检查 ds.data_vars 和 ds.coords
         - 自动检测 latitude, longitude, depth 等维度坐标
@@ -312,19 +316,72 @@ def inspect_data(config: Dict[str, Any]) -> Dict[str, Any]:
         if not nc_files:
             result["warnings"].append(f"未找到匹配的 NC 文件，模式: {dyn_file_pattern}")
 
-        # 3. 逐个文件检测时间维度（新增功能）
-        print(f"扫描 {len(nc_files)} 个文件...", file=sys.stderr)
+        # 3. 采样检测文件时间维度（避免逐个打开导致超时）
+        SAMPLE_THRESHOLD = 10  # 超过此数量启用采样
+        SAMPLE_COUNT = 4       # 采样数（前3 + 后1）
 
-        for nc_file in nc_files:
-            file_name = os.path.basename(nc_file)
-            file_info = file_has_time_dimension(nc_file)
-            result["file_analysis"][file_name] = file_info
+        if len(nc_files) > SAMPLE_THRESHOLD:
+            # 采样：前3个 + 最后1个
+            sample_indices = list(range(min(3, len(nc_files))))
+            if len(nc_files) > 3:
+                sample_indices.append(len(nc_files) - 1)
+            sample_files = [nc_files[i] for i in sample_indices]
 
-            if file_info.get("has_time_vars", False):
-                result["dynamic_files"].append(file_name)
+            print(f"采样检测 {len(sample_files)}/{len(nc_files)} 个文件...", file=sys.stderr)
+
+            sample_dynamic = []
+            sample_static = []
+            for nc_file in sample_files:
+                file_name = os.path.basename(nc_file)
+                file_info = file_has_time_dimension(nc_file)
+                result["file_analysis"][file_name] = file_info
+                if file_info.get("has_time_vars", False):
+                    sample_dynamic.append(file_name)
+                else:
+                    sample_static.append(file_name)
+
+            # 判断采样结果是否一致
+            if sample_static and sample_dynamic:
+                # 混合情况：需要逐个检查
+                print(f"  采样发现混合文件类型，逐个检查全部 {len(nc_files)} 个文件...", file=sys.stderr)
+                for nc_file in nc_files:
+                    file_name = os.path.basename(nc_file)
+                    if file_name in result["file_analysis"]:
+                        # 已在采样中检查过
+                        file_info = result["file_analysis"][file_name]
+                    else:
+                        file_info = file_has_time_dimension(nc_file)
+                        result["file_analysis"][file_name] = file_info
+
+                    if file_info.get("has_time_vars", False):
+                        result["dynamic_files"].append(file_name)
+                    else:
+                        result["suspected_static_files"].append(file_name)
+                        print(f"  ⚠️ 疑似静态文件: {file_name}", file=sys.stderr)
+            elif not sample_static:
+                # 全部采样都是动态 → 推断所有文件为动态
+                all_file_names = [os.path.basename(f) for f in nc_files]
+                result["dynamic_files"] = all_file_names
+                print(f"  采样全部为动态文件，推断全部 {len(nc_files)} 个文件为动态", file=sys.stderr)
             else:
-                result["suspected_static_files"].append(file_name)
-                print(f"  ⚠️ 疑似静态文件: {file_name}", file=sys.stderr)
+                # 全部采样都是静态 → 推断所有文件为静态
+                all_file_names = [os.path.basename(f) for f in nc_files]
+                result["suspected_static_files"] = all_file_names
+                print(f"  采样全部为静态文件，推断全部 {len(nc_files)} 个文件为静态", file=sys.stderr)
+        else:
+            # 文件数量少，逐个检查
+            print(f"扫描 {len(nc_files)} 个文件...", file=sys.stderr)
+
+            for nc_file in nc_files:
+                file_name = os.path.basename(nc_file)
+                file_info = file_has_time_dimension(nc_file)
+                result["file_analysis"][file_name] = file_info
+
+                if file_info.get("has_time_vars", False):
+                    result["dynamic_files"].append(file_name)
+                else:
+                    result["suspected_static_files"].append(file_name)
+                    print(f"  ⚠️ 疑似静态文件: {file_name}", file=sys.stderr)
 
         # 4. 如果有疑似静态文件混入，生成警告
         if result["suspected_static_files"]:

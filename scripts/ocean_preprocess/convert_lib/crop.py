@@ -2,10 +2,14 @@
 crop.py - 裁剪相关函数
 
 从 convert_npy.py 拆分
+
+@changelog
+  - 2026-02-06 Leizheng: 添加并行提取进度日志与耗时统计
 """
 
 import os
 import sys
+import time
 import numpy as np
 import xarray as xr
 from typing import Any, Dict, List, Optional, Tuple
@@ -55,22 +59,47 @@ def _parallel_extract_var(nc_files: List[str], var_name: str, workers: int,
     并行从多个 NC 文件中提取变量并合并
     """
     errors = []
+    total = len(nc_files)
 
     # 限制 workers 数量
-    actual_workers = min(workers, len(nc_files), cpu_count())
+    actual_workers = min(workers, total, cpu_count())
 
     # 创建 partial 函数固定参数
     extract_func = partial(_extract_var_from_file, var_name=var_name, h_slice=h_slice, w_slice=w_slice)
 
-    print(f"    并行提取 '{var_name}'，进程数: {actual_workers}，文件数: {len(nc_files)}", file=sys.stderr)
+    print(f"    并行提取 '{var_name}'，进程数: {actual_workers}，文件数: {total}", file=sys.stderr)
+
+    t_start = time.time()
 
     if actual_workers > 1:
-        # 多进程并行
+        # 多进程并行，使用 imap_unordered 显示进度
+        results_ordered = [None] * total
+        file_index_map = {f: i for i, f in enumerate(nc_files)}
+        done_count = 0
+
         with Pool(processes=actual_workers) as pool:
-            results = pool.map(extract_func, nc_files)
+            for r in pool.imap_unordered(extract_func, nc_files):
+                done_count += 1
+                idx = file_index_map[r["file"]]
+                results_ordered[idx] = r
+                if done_count % 100 == 0 or done_count == total:
+                    elapsed = time.time() - t_start
+                    rate = done_count / elapsed if elapsed > 0 else 0
+                    eta = (total - done_count) / rate if rate > 0 else 0
+                    print(f"      读取进度: {done_count}/{total} ({done_count*100//total}%) | {elapsed:.1f}s 已用 | {rate:.1f} files/s | ETA {eta:.0f}s", file=sys.stderr)
+
+        results = results_ordered
     else:
         # 单进程顺序执行
-        results = [extract_func(f) for f in nc_files]
+        results = []
+        for i, f in enumerate(nc_files):
+            results.append(extract_func(f))
+            if (i + 1) % 100 == 0 or (i + 1) == total:
+                elapsed = time.time() - t_start
+                print(f"      读取进度: {i+1}/{total} ({(i+1)*100//total}%) | {elapsed:.1f}s", file=sys.stderr)
+
+    t_read = time.time()
+    print(f"      读取完成: {t_read - t_start:.1f}s", file=sys.stderr)
 
     # 收集结果
     data_list = []
@@ -85,7 +114,12 @@ def _parallel_extract_var(nc_files: List[str], var_name: str, workers: int,
 
     # 沿时间轴合并（第 0 维）
     try:
+        mem_est = sum(d.nbytes for d in data_list) / (1024**3)
+        print(f"      合并 {len(data_list)} 个数组 (预计 {mem_est:.2f} GB)...", file=sys.stderr)
+        t_merge = time.time()
         combined = np.concatenate(data_list, axis=0)
+        t_done = time.time()
+        print(f"      合并完成: {t_done - t_merge:.1f}s, shape={combined.shape}, {combined.nbytes/(1024**3):.2f} GB", file=sys.stderr)
         return combined, errors
     except Exception as e:
         errors.append(f"合并数据失败: {str(e)}")

@@ -4,6 +4,7 @@ converters.py - 核心转换函数
 从 convert_npy.py 拆分
 
 @changelog
+  - 2026-02-06 Leizheng: 添加写入进度日志与各阶段耗时统计
   - 2026-02-05 kongzhiquan: 新增日期文件名功能
     - 新增 use_date_filename, date_format, time_var 参数
     - 支持从 NC 文件提取时间戳作为文件名
@@ -12,6 +13,7 @@ converters.py - 核心转换函数
 
 import os
 import sys
+import time
 import numpy as np
 import xarray as xr
 from typing import Any, Dict, List, Optional, Tuple
@@ -160,6 +162,7 @@ def convert_dynamic_vars(
 
     for var in dyn_vars:
         try:
+            var_t0 = time.time()
             # 并行提取变量数据
             data_arr, extract_errors = _parallel_extract_var(
                 nc_files, var, workers, h_slice, w_slice
@@ -266,6 +269,9 @@ def convert_dynamic_vars(
             spatial_shape = get_spatial_shape(data_arr)
             var_saved_files = {}
 
+            t_write_start = time.time()
+            total_written = 0
+
             for split_name, split_data in [('train', train_data), ('valid', valid_data), ('test', test_data)]:
                 if split_data.size == 0:
                     continue
@@ -293,7 +299,12 @@ def convert_dynamic_vars(
                     out_fp = os.path.join(var_dir, filename)
                     np.save(out_fp, split_data[t])
                     saved_count += 1
+                    total_written += 1
                     saved_filenames.append(filename)
+
+                    if total_written % 200 == 0:
+                        elapsed = time.time() - t_write_start
+                        print(f"      写入进度: {total_written} 个文件 | {elapsed:.1f}s", file=sys.stderr)
 
                 var_saved_files[split_name] = {
                     "dir": var_dir,
@@ -332,6 +343,8 @@ def convert_dynamic_vars(
             }
 
             print(f"    完成，total_shape={data_arr.shape}, spatial={spatial_shape}", file=sys.stderr)
+            var_elapsed = time.time() - var_t0
+            print(f"    变量 '{var}' 总耗时: {var_elapsed:.1f}s (写入: {time.time() - t_write_start:.1f}s)", file=sys.stderr)
             del data_arr, train_data, valid_data, test_data
 
         except Exception as e:
