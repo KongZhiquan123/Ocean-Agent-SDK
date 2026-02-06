@@ -126,9 +126,9 @@ def generate_report(config: Dict) -> str:
     lines = []
     lines.append("# 海洋数据预处理报告")
     lines.append("")
-    lines.append(f"**生成时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    lines.append(f"**数据集路径**: `{dataset_root}`")
-    lines.append(f"**流程版本**: v3.0.0（4 阶段强制确认）")
+    lines.append(f"**生成时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+    lines.append(f"**数据集路径**: `{dataset_root}`\n")
+    lines.append(f"**流程版本**: v3.0.0（4 阶段强制确认）\n")
     lines.append("")
     lines.append("---")
     lines.append("")

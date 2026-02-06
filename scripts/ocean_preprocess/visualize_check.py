@@ -425,19 +425,23 @@ def plot_summary_statistics(all_stats: list, save_path: str, dataset_name: str =
     ax1.set_ylabel('Mean Value')
     ax1.set_title(f'{dataset_name} - Mean Comparison')
     ax1.set_xticks(x)
-    ax1.set_xticklabels(var_names, rotation=45, ha='right')
+    ax1.set_xticklabels(var_names, rotation=0, ha='center')
     ax1.legend()
     ax1.grid(True, alpha=0.3, axis='y')
 
-    # 在条形图上添加数值标签
+    # 在条形图上添加数值标签（根据正负值调整位置）
     for bar, val in zip(bars1, hr_means):
         if not np.isnan(val):
-            ax1.text(bar.get_x() + bar.get_width()/2, bar.get_height(), f'{val:.2e}',
-                    ha='center', va='bottom', fontsize=7, rotation=90)
+            height = bar.get_height()
+            va = 'bottom' if height >= 0 else 'top'
+            ax1.text(bar.get_x() + bar.get_width()/2, height, f'{val:.4g}',
+                    ha='center', va=va, fontsize=7, rotation=90)
     for bar, val in zip(bars2, lr_means):
         if not np.isnan(val):
-            ax1.text(bar.get_x() + bar.get_width()/2, bar.get_height(), f'{val:.2e}',
-                    ha='center', va='bottom', fontsize=7, rotation=90)
+            height = bar.get_height()
+            va = 'bottom' if height >= 0 else 'top'
+            ax1.text(bar.get_x() + bar.get_width()/2, height, f'{val:.4g}',
+                    ha='center', va=va, fontsize=7, rotation=90)
 
     # 2. 标准差对比条形图
     ax2 = axes[1]
@@ -447,19 +451,23 @@ def plot_summary_statistics(all_stats: list, save_path: str, dataset_name: str =
     ax2.set_ylabel('Standard Deviation')
     ax2.set_title(f'{dataset_name} - Std Dev Comparison')
     ax2.set_xticks(x)
-    ax2.set_xticklabels(var_names, rotation=45, ha='right')
+    ax2.set_xticklabels(var_names, rotation=0, ha='center')
     ax2.legend()
     ax2.grid(True, alpha=0.3, axis='y')
 
-    # 在条形图上添加数值标签
+    # 在条形图上添加数值标签（根据正负值调整位置）
     for bar, val in zip(bars3, hr_stds):
         if not np.isnan(val):
-            ax2.text(bar.get_x() + bar.get_width()/2, bar.get_height(), f'{val:.2e}',
-                    ha='center', va='bottom', fontsize=7, rotation=90)
+            height = bar.get_height()
+            va = 'bottom' if height >= 0 else 'top'
+            ax2.text(bar.get_x() + bar.get_width()/2, height, f'{val:.4g}',
+                    ha='center', va=va, fontsize=7, rotation=90)
     for bar, val in zip(bars4, lr_stds):
         if not np.isnan(val):
-            ax2.text(bar.get_x() + bar.get_width()/2, bar.get_height(), f'{val:.2e}',
-                    ha='center', va='bottom', fontsize=7, rotation=90)
+            height = bar.get_height()
+            va = 'bottom' if height >= 0 else 'top'
+            ax2.text(bar.get_x() + bar.get_width()/2, height, f'{val:.4g}',
+                    ha='center', va=va, fontsize=7, rotation=90)
 
     plt.tight_layout()
 

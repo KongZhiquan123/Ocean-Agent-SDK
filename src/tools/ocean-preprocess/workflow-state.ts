@@ -188,17 +188,15 @@ export class PreprocessWorkflow {
 
     // ========== 阶段5: 执行完成 ==========
     // 只有 user_confirmed 为 true，且所有前置参数都有，且 token 正确，才算完成
-    if (params.user_confirmed === true) {
-      // 验证所有前置条件
-      if (this.hasAllRequiredParams()) {
-        // 🔐 关键：验证 confirmation_token
-        if (!params.confirmation_token) {
-          return {
-            currentState: WorkflowState.TOKEN_INVALID,
-            missingParams: ['confirmation_token'],
-            canProceed: false,
-            stageDescription: 'Token 缺失',
-            tokenError: `⚠️ 检测到跳步行为！
+    if (params.user_confirmed === true && this.hasAllRequiredParams()) {
+      // 🔐 关键：验证 confirmation_token
+      if (!params.confirmation_token) {
+        return {
+          currentState: WorkflowState.TOKEN_INVALID,
+          missingParams: ['confirmation_token'],
+          canProceed: false,
+          stageDescription: 'Token 缺失',
+          tokenError: `⚠️ 检测到跳步行为！
 
 您设置了 user_confirmed=true，但未提供 confirmation_token。
 
@@ -214,16 +212,16 @@ confirmation_token 是基于所有参数生成的签名，用于：
 - 确保用户看到了完整的参数汇总
 - 防止 Agent 自动跳过确认步骤
 - 防止参数在确认后被篡改`
-          }
         }
+      }
 
-        if (!this.validateConfirmationToken()) {
-          return {
-            currentState: WorkflowState.TOKEN_INVALID,
-            missingParams: [],
-            canProceed: false,
-            stageDescription: 'Token 验证失败',
-            tokenError: `⚠️ Token 验证失败！
+      if (!this.validateConfirmationToken()) {
+        return {
+          currentState: WorkflowState.TOKEN_INVALID,
+          missingParams: [],
+          canProceed: false,
+          stageDescription: 'Token 验证失败',
+          tokenError: `⚠️ Token 验证失败！
 
 提供的 confirmation_token 与当前参数不匹配。
 
@@ -238,16 +236,15 @@ confirmation_token 是基于所有参数生成的签名，用于：
 
 【当前 Token】: ${params.confirmation_token}
 【期望 Token】: ${this.generateConfirmationToken()}`
-          }
         }
+      }
 
-        // Token 验证通过
-        return {
-          currentState: WorkflowState.PASS,
-          missingParams: [],
-          canProceed: true,
-          stageDescription: '所有参数已确认，Token 验证通过，可以执行'
-        }
+      // Token 验证通过
+      return {
+        currentState: WorkflowState.PASS,
+        missingParams: [],
+        canProceed: true,
+        stageDescription: '所有参数已确认，Token 验证通过，可以执行'
       }
       // 如果 user_confirmed=true 但缺少参数，说明有问题
       // 回退到缺失参数的阶段（下面的逻辑会处理）

@@ -3,12 +3,13 @@
 validate_tensor.py - Step B: 张量约定验证
 
 @author leizheng
+@contributors kongzhiquan
 @date 2026-02-02
 @version 1.0.0
 
 功能:
 - 验证变量的张量形状是否符合约定
-- 动态变量: [T, H, W] 或 [T, D, H, W]
+- 动态变量: [D, H, W] 或 [T, D, H, W]
 - 静态变量: [H, W]
 - 掩码变量: [H, W] 且必须是 2D
 
@@ -105,8 +106,8 @@ def validate_tensor_convention(
 
             if ndim == 3:
                 convention["valid"] = True
-                convention["interpretation"] = "[T, H, W]"
-                convention["T"] = shape[0]
+                convention["interpretation"] = "[D, H, W]"
+                convention["D"] = shape[0]
                 convention["H"] = shape[1]
                 convention["W"] = shape[2]
             elif ndim == 4:
