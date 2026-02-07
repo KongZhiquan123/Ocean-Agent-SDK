@@ -7,10 +7,16 @@ generate_config.py - 根据参数生成训练配置 YAML 文件
     python generate_config.py --params '<JSON string>' --output /path/to/config.yaml
 
 @author Leizheng
+@contributors kongzhiquan
 @date 2026-02-06
-@version 2.0.0
+@version 3.1.0
 
 @changelog
+  - 2026-02-07 kongzhiquan: v3.1.0 use_amp 默认值改为 True（OOM 防护增强）
+  - 2026-02-07 kongzhiquan: v3.0.0 新增 compute_model_divisor() 自动对齐 image_size
+    - 根据模型架构计算输入尺寸的整除要求
+    - 扩散模型自动向上对齐 image_size（如 400→416）
+    - 将 model_divisor 写入 data config 供 OceanNPY 使用
   - 2026-02-07 Leizheng: v2.0.0 支持 OOM 防护参数
     - 新增 use_amp, gradient_checkpointing, patch_size 参数
     - 写入 train / data section 供 trainer 和 dataset 读取
@@ -70,6 +76,27 @@ MODEL_DEFAULTS = {
 DIFFUSION_MODELS = {"DDPM", "SR3", "MG-DDPM", "ReMiG"}
 
 
+def compute_model_divisor(model_name: str, model_config: dict) -> int:
+    """根据模型架构计算输入尺寸的整除要求。
+
+    Returns:
+        divisor (int): 输入空间尺寸必须能被此值整除。
+            - DDPM/SR3/ReMiG/ResShift: 2^(len(channel_mults)-1)，通常 = 32
+            - UNet2d: 16（4 次 MaxPool）
+            - SwinIR/FNO2d/EDSR/HiNOTE/M2NO2d: 1（无约束）
+    """
+    DIFFUSION_LIKE = {"ResShift"}
+
+    if model_name in DIFFUSION_MODELS or model_name in DIFFUSION_LIKE:
+        channel_mults = model_config.get("channel_mults", [1, 1, 2, 2, 4, 4])
+        num_downsamples = len(channel_mults) - 1
+        return 2 ** num_downsamples  # 通常 = 32
+    elif model_name == "UNet2d":
+        return 16  # 4 次 MaxPool (2^4)
+    else:
+        return 1  # FNO2d, EDSR, SwinIR, HiNOTE, M2NO2d 无约束
+
+
 def generate_config(params):
     """
     根据参数生成训练配置。
@@ -101,7 +128,7 @@ def generate_config(params):
         scheduler_gamma (float): 调度器衰减率 (默认 0.5)
         seed (int): 随机种子 (默认 42)
         hr_shape (list[int]): HR 尺寸 [H, W] (若不提供则自动检测)
-        use_amp (bool): 是否启用 AMP 混合精度 (默认 False)
+        use_amp (bool): 是否启用 AMP 混合精度 (默认 True)
         gradient_checkpointing (bool): 是否启用梯度检查点 (默认 False)
         patch_size (int): Patch 裁剪尺寸，None 表示全图训练 (默认 None)
     """
@@ -154,6 +181,19 @@ def generate_config(params):
         model_config["out_channel"] = n_channels
         model_config["image_size"] = hr_shape[0]
 
+    # 计算模型整除要求并自动对齐 image_size
+    divisor = compute_model_divisor(model_name, model_config)
+    if divisor > 1:
+        raw_size = hr_shape[0]
+        aligned_size = ((raw_size + divisor - 1) // divisor) * divisor
+        if aligned_size != raw_size:
+            print(f"[generate_config] 自动对齐 image_size: {raw_size} -> {aligned_size} "
+                  f"(模型 {model_name} 要求被 {divisor} 整除)", file=sys.stderr)
+        if model_name in DIFFUSION_MODELS:
+            model_config["image_size"] = aligned_size
+            model_config["raw_image_size"] = raw_size
+            model_config["scale"] = scale
+
     # 构建完整配置
     config = {
         "model": model_config,
@@ -168,6 +208,7 @@ def generate_config(params):
             "normalize": params.get("normalize", True),
             "normalizer_type": params.get("normalizer_type", "PGN"),
             "patch_size": params.get("patch_size", None),
+            "model_divisor": divisor,
         },
         "train": {
             "epochs": params.get("epochs", 500),
@@ -182,7 +223,7 @@ def generate_config(params):
             "saving_best": True,
             "saving_ckpt": params.get("saving_ckpt", False),
             "ckpt_freq": params.get("ckpt_freq", 100),
-            "use_amp": params.get("use_amp", False),
+            "use_amp": params.get("use_amp", True),   # AMP 默认开启
             "gradient_checkpointing": params.get("gradient_checkpointing", False),
         },
         "optimize": {

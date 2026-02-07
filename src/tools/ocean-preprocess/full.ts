@@ -6,9 +6,10 @@
  * @author leizheng
  * @contributors kongzhiquan
  * @date 2026-02-02
- * @version 3.4.0
+ * @version 3.5.0
  *
  * @changelog
+ *   - 2026-02-07 kongzhiquan: v3.5.0 新增 max_files 参数，限制处理的最大 NC 文件数量
  *   - 2026-02-06 Leizheng: v3.4.1 有 mask 变量时自动允许 NaN
  *     - 陆地掩码区域的 NaN 是海洋数据的正常特征，不应阻断转换
  *   - 2026-02-05 kongzhiquan: v3.4.0 日期文件名功能
@@ -321,6 +322,12 @@ export const oceanPreprocessFullTool = defineTool({
       type: 'string',
       description: '时间变量名（默认自动检测 time/ocean_time 等）',
       required: false
+    },
+    // ========== 文件数限制参数 ==========
+    max_files: {
+      type: 'number',
+      description: '可选：限制处理的最大 NC 文件数量（按排序后取前 N 个）',
+      required: false
     }
   },
 
@@ -368,7 +375,9 @@ export const oceanPreprocessFullTool = defineTool({
       // 日期文件名参数
       use_date_filename = true,
       date_format = 'auto',
-      time_var
+      time_var,
+      // 文件数限制参数
+      max_files
     } = args
 
     // 检测是否为粗网格模式（数值模型模式）
@@ -556,7 +565,9 @@ export const oceanPreprocessFullTool = defineTool({
       // 日期文件名参数
       use_date_filename,
       date_format,
-      time_var
+      time_var,
+      // 文件数限制
+      max_files
     }, ctx)
 
     result.step_c = stepCResult
@@ -616,7 +627,9 @@ export const oceanPreprocessFullTool = defineTool({
         // 日期文件名参数
         use_date_filename,
         date_format,
-        time_var
+        time_var,
+        // 文件数限制
+        max_files
       }, ctx)
 
       result.step_c2 = stepC2Result

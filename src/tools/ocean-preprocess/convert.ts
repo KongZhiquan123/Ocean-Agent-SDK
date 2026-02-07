@@ -6,9 +6,10 @@
  * @author leizheng
  * @contributors kongzhiquan
  * @date 2026-02-04
- * @version 3.5.0
+ * @version 3.6.0
  *
  * @changelog
+ *   - 2026-02-07 kongzhiquan: v3.6.0 新增 max_files 参数，限制处理的最大 NC 文件数量
  *   - 2026-02-07 Leizheng: v3.5.0 新增 nc_files 参数，支持显式指定文件列表
  *   - 2026-02-07 Leizheng: v3.4.0 智能路径处理，nc_folder 同时支持目录和单个文件路径
  *   - 2026-02-05 kongzhiquan: v3.3.0 日期文件名功能
@@ -317,6 +318,12 @@ export const oceanConvertNpyTool = defineTool({
       type: 'string',
       description: '时间变量名（默认自动检测 time/ocean_time 等）',
       required: false
+    },
+    // ========== 文件数限制参数（v3.6.0 新增）==========
+    max_files: {
+      type: 'number',
+      description: '可选：限制处理的最大 NC 文件数量（按排序后取前 N 个）',
+      required: false
     }
   },
 
@@ -363,7 +370,9 @@ export const oceanConvertNpyTool = defineTool({
       // 日期文件名参数（v3.2.0 新增）
       use_date_filename = true,
       date_format = 'auto',
-      time_var
+      time_var,
+      // 文件数限制参数（v3.6.0 新增）
+      max_files
     } = args
 
     // 智能路径处理：支持目录或单个 .nc 文件路径
@@ -448,7 +457,9 @@ export const oceanConvertNpyTool = defineTool({
       // 日期文件名参数（v3.2.0 新增）
       use_date_filename,
       date_format,
-      time_var: time_var || null
+      time_var: time_var || null,
+      // 文件数限制（v3.6.0 新增）
+      max_files: max_files || null
     }
 
     // 4. 创建临时目录并写入配置

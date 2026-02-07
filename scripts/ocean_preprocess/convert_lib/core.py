@@ -6,9 +6,10 @@ core.py - 核心转换函数
 @author leizheng
 @contributors kongzhiquan
 @date 2026-02-05
-@version 3.1.1
+@version 3.2.0
 
 @changelog
+  - 2026-02-07 kongzhiquan: v3.2.0 新增 max_files 支持，截断文件列表
   - 2026-02-05 kongzhiquan: v3.1.1 从 convert_npy.py 拆分为独立模块
 """
 
@@ -96,6 +97,9 @@ def convert_npy(config: Dict[str, Any]) -> Dict[str, Any]:
     scale = config.get("scale")  # 下采样倍数，用于验证
     workers = config.get("workers", DEFAULT_WORKERS)
 
+    # 文件数限制参数（v3.2.0 新增）
+    max_files = config.get("max_files")
+
     # 输出子目录（默认 'hr'，用于粗网格数据时设为 'lr'）
     output_subdir = config.get("output_subdir", "hr")
 
@@ -179,6 +183,12 @@ def convert_npy(config: Dict[str, Any]) -> Dict[str, Any]:
             search_path = os.path.join(nc_folder, dyn_file_pattern)
             nc_files = sorted(glob.glob(search_path))
             _safe_print(f"通过 glob 发现 {len(nc_files)} 个 NC 文件")
+
+        # max_files 截断（v3.2.0 新增）
+        if max_files and max_files > 0 and len(nc_files) > max_files:
+            _safe_print(f"已限制为前 {max_files} 个文件 (总共发现: {len(nc_files)})")
+            nc_files = nc_files[:max_files]
+
         if not nc_files:
             result["errors"].append(f"未找到匹配的 NC 文件: {search_path}")
             result["status"] = "error"

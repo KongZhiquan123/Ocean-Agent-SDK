@@ -5,11 +5,14 @@
  *
  * @author Leizheng
  * @date 2026-02-07
- * @version 2.0.0
+ * @version 2.1.0
  *
  * @changelog
+ *   - 2026-02-07 kongzhiquan: v2.1.0 适配 OOM 自动防护改动
+ *     - 移除 skip_memory_check 参数
+ *     - use_amp 默认值改为 true
  *   - 2026-02-07 Leizheng: v2.0.0 OOM 防护参数支持
- *     - TrainingWorkflowParams 新增 use_amp, gradient_checkpointing, patch_size, skip_memory_check
+ *     - TrainingWorkflowParams 新增 use_amp, gradient_checkpointing, patch_size
  *     - 阶段3 参数确认新增 OOM 防护参数展示
  *     - 阶段4 执行汇总新增 OOM 防护参数
  *     - Token 签名包含 OOM 参数
@@ -83,7 +86,6 @@ export interface TrainingWorkflowParams {
   use_amp?: boolean
   gradient_checkpointing?: boolean
   patch_size?: number | null
-  skip_memory_check?: boolean
 
   // ====== 阶段4: 执行确认 ======
   user_confirmed?: boolean
@@ -637,10 +639,9 @@ ${modelListStr}
     const currentSeed = params.seed ?? 42
 
     // OOM 防护参数
-    const currentUseAmp = params.use_amp ?? false
+    const currentUseAmp = params.use_amp ?? true
     const currentGradientCheckpointing = params.gradient_checkpointing ?? false
     const currentPatchSize = params.patch_size ?? null
-    const currentSkipMemoryCheck = params.skip_memory_check ?? false
 
     return {
       status: TrainingState.AWAITING_PARAMETERS,
@@ -687,13 +688,13 @@ ${gpuInfo && gpuInfo.gpu_count > 1 ? `💡 检测到 ${gpuInfo.gpu_count} 张 GP
 - wandb: ${params.wandb ?? false}（是否启用 WandB）
 ${params.ckpt_path ? `- ckpt_path: ${params.ckpt_path}（恢复训练检查点）` : ''}
 
-【OOM 防护参数】（v3.0.0 新增）
-- use_amp: ${currentUseAmp}（AMP 混合精度，减少约 40-50% 显存）
+【OOM 防护参数】
+- use_amp: ${currentUseAmp}（AMP 混合精度，减少约 40-50% 显存，默认开启）
 - gradient_checkpointing: ${currentGradientCheckpointing}（梯度检查点，减少约 60% 激活显存）
 - patch_size: ${currentPatchSize ?? '全图训练'}（Patch 裁剪尺寸，需为 scale 整数倍）
-- skip_memory_check: ${currentSkipMemoryCheck}（跳过训练前显存预估）
 
 💡 显存不足时，优先启用 use_amp=true，效果最显著且无精度损失。
+   训练前系统会自动进行显存预估并在必要时自动降低 batch_size。
 
 ================================================================================
 
@@ -738,7 +739,6 @@ ${params.ckpt_path ? `- ckpt_path: ${params.ckpt_path}（恢复训练检查点�
           use_amp: currentUseAmp,
           gradient_checkpointing: currentGradientCheckpointing,
           patch_size: currentPatchSize,
-          skip_memory_check: currentSkipMemoryCheck,
         },
         gpu_info: gpuInfo
       }
@@ -820,10 +820,10 @@ ${gpuNames ? `- GPU: ${gpuNames}` : ''}
 ${params.ckpt_path ? `- 检查点恢复: ${params.ckpt_path}` : ''}
 
 【OOM 防护】
-- AMP 混合精度: ${params.use_amp ?? false}
+- AMP 混合精度: ${params.use_amp ?? true}
 - 梯度检查点: ${params.gradient_checkpointing ?? false}
 - Patch 裁剪: ${params.patch_size ?? '全图训练'}
-- 显存预估: ${params.skip_memory_check ? '跳过' : '启用'}
+- 显存预估: 自动（预估 > 85% 时自动降低 batch_size）
 
 ================================================================================
 
@@ -865,7 +865,6 @@ ${params.ckpt_path ? `- 检查点恢复: ${params.ckpt_path}` : ''}
           use_amp: params.use_amp,
           gradient_checkpointing: params.gradient_checkpointing,
           patch_size: params.patch_size,
-          skip_memory_check: params.skip_memory_check,
         }
       }
     }

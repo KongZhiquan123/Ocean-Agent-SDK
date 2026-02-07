@@ -1,6 +1,6 @@
 # 工具参数参考
 
-> 版本: 2.0.0 | 最后更新: 2026-02-07
+> 版本: 4.0.0 | 最后更新: 2026-02-07
 
 ---
 
@@ -77,11 +77,26 @@
 | `wandb` | boolean | false | 是否启用 WandB 日志 |
 | `ckpt_path` | string | - | 恢复训练的检查点路径 |
 
-### OOM 防护参数（v3.0.0 新增）
+### OOM 防护参数（v4.0.0 更新）
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `use_amp` | boolean | false | 启用 AMP 混合精度训练（减少约 40-50% 显存） |
+| `use_amp` | boolean | true | 启用 AMP 混合精度训练（减少约 40-50% 显存，默认开启） |
 | `gradient_checkpointing` | boolean | false | 启用梯度检查点（减少约 60% 激活显存，增加约 30% 计算） |
 | `patch_size` | number | null | Patch 裁剪尺寸，null 为全图训练（需为 scale 整数倍） |
-| `skip_memory_check` | boolean | false | 跳过训练前显存预估 |
+
+> 注意：显存预估为强制步骤，不可跳过。预估 > 85% 时系统会自动降低 batch_size。
+
+### 模型尺寸自动适配（v3.0.0 新增）
+
+训练框架会自动处理数据尺寸与模型架构的兼容性问题，**用户无需手动配置**：
+
+| 模型 | 整除要求 | 自动处理方式 |
+|------|---------|-------------|
+| DDPM / SR3 / ReMiG | 32 (2^5) | `image_size` 自动向上对齐（如 400→416），推理后 crop 回原尺寸 |
+| ResShift | 32 (2^5) | 推理时 interpolate 到对齐尺寸，采样后 crop 回原尺寸 |
+| UNet2d | 16 (2^4) | 推理时 reflect pad 到对齐尺寸，输出后 crop 回原尺寸 |
+| SwinIR | 8 (window_size) | 模型内部自带 padding，无需处理 |
+| FNO2d / EDSR / HiNOTE / M2NO2d | 1 | 无约束，无需处理 |
+
+**自动 patch_size**：当数据尺寸不能被模型整除且用户未指定 `patch_size` 时，训练框架会自动计算一个合适的 `patch_size` 用于训练。

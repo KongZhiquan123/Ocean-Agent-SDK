@@ -430,10 +430,9 @@ async function testOceanSRTraining() {
 │    → Agent 展示完整参数列表（含 OOM 防护参数）               │
 │    → 你回复"确认"开始                                        │
 │                                                             │
-│  步骤 5: 显存预估（自动）                                    │
+│  步骤 5: 显存预估（自动，不可跳过）                           │
 │    → dry-run forward+backward 测量峰值显存                  │
-│    → 若 OOM → 给出建议（启用 AMP / 减小 batch_size 等）     │
-│    → 可通过 skip_memory_check=true 跳过                     │
+│    → 若 OOM → 自动降级（AMP → 减半 batch_size）           │
 │                                                             │
 │  步骤 6: 执行训练                                            │
 │    → 训练进度输出                                            │

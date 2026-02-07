@@ -77,6 +77,7 @@ class GaussianDiffusion(nn.Module):
         conditional = model_args.get('conditional', True)
         self.channels = channels
         self.image_size = image_size
+        self.raw_image_size = model_args.get('raw_image_size', image_size)
         self.denoise_fn = denoise_fn
         self.loss_type = loss_type
         self.conditional = conditional
@@ -212,7 +213,15 @@ class GaussianDiffusion(nn.Module):
     @torch.no_grad()
     def super_resolution(self, x_in, continous=False):
         x_in = F.interpolate(x_in, size=(self.image_size, self.image_size), mode='bilinear', align_corners=None)
-        return self.p_sample_loop(x_in, continous)
+        result = self.p_sample_loop(x_in, continous)
+        # crop 回原始尺寸（当 image_size 因对齐而大于 raw_image_size 时）
+        if self.raw_image_size != self.image_size:
+            raw = self.raw_image_size
+            if continous:
+                result = result[:, :, :raw, :raw]
+            else:
+                result = result[:, :, :raw, :raw]
+        return result
 
     def q_sample(self, x_start, continuous_sqrt_alpha_cumprod, noise=None):
         noise = default(noise, lambda: torch.randn_like(x_start))

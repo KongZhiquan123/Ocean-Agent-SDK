@@ -7,9 +7,14 @@
  * @author Leizheng
  * @contributors kongzhiquan
  * @date 2026-02-06
- * @version 3.0.0
+ * @version 4.0.0
  *
  * @changelog
+ *   - 2026-02-07 kongzhiquan: v4.0.0 OOM 自动防护 + 事件驱动启动监控
+ *     - 显存预估改为自动循环调参（AMP→减batch_size→报错），不可跳过
+ *     - 移除 skip_memory_check 参数，use_amp 默认改为 true
+ *     - 启动后等待 training_start 事件（最长 5 分钟），捕获早期崩溃
+ *     - 启动阶段崩溃时直接返回 error_summary + suggestions
  *   - 2026-02-07 kongzhiquan: v3.0.0 后台执行模式
  *     - 使用 TrainingProcessManager 启动后台训练进程
  *     - 训练启动后立即返回 process_id，不再阻塞等待
@@ -45,6 +50,14 @@ import {
   type GpuInfo,
   type ModelInfo,
 } from './workflow-state'
+
+/**
+ * 将 JSON 字符串转义为可以安全嵌入 shell 单引号的形式
+ * 策略：替换单引号为 '\'' (结束单引号 + 转义单引号 + 开始单引号)
+ */
+function shellSafeJson(json: string): string {
+  return json.replace(/'/g, "'\\''")
+}
 
 export const oceanSrTrainTool = defineTool({
   name: 'ocean_sr_train',
@@ -216,9 +229,9 @@ export const oceanSrTrainTool = defineTool({
     },
     use_amp: {
       type: 'boolean',
-      description: '是否启用 AMP 混合精度训练（减少约 40-50% 显存）',
+      description: '是否启用 AMP 混合精度训练（减少约 40-50% 显存，默认开启）',
       required: false,
-      default: false
+      default: true
     },
     gradient_checkpointing: {
       type: 'boolean',
@@ -230,12 +243,6 @@ export const oceanSrTrainTool = defineTool({
       type: 'number',
       description: 'HR Patch 裁剪尺寸（如 64, 128），设置后训练时随机裁剪小区域而非全图训练。必须能被 scale 整除。',
       required: false
-    },
-    skip_memory_check: {
-      type: 'boolean',
-      description: '跳过训练前显存预估',
-      required: false,
-      default: false
     },
     ckpt_path: {
       type: 'string',
@@ -408,7 +415,7 @@ export const oceanSrTrainTool = defineTool({
 
     const paramsJson = JSON.stringify(configParams)
     const genResult = await ctx.sandbox.exec(
-      `"${pythonPath}" "${generateScript}" --params '${paramsJson}' --output "${configPath}"`,
+      `"${pythonPath}" "${generateScript}" --params '${shellSafeJson(paramsJson)}' --output "${configPath}"`,
       { timeoutMs: 60000 }
     )
 
@@ -423,39 +430,59 @@ export const oceanSrTrainTool = defineTool({
 
     const genInfo = JSON.parse(genResult.stdout)
 
-    // ===== 3c. 训练前显存预估 =====
-    if (!args.skip_memory_check && mode === 'train') {
+    // ===== 3c. 自动显存预估 + 自动调参（不可跳过） =====
+    if (mode === 'train') {
       const estimateScript = path.join(workspaceDir, 'estimate_memory.py')
       const cudaDevice = device_ids[0]
-      const estimateResult = await ctx.sandbox.exec(
-        `cd "${workspaceDir}" && CUDA_VISIBLE_DEVICES=${cudaDevice} "${pythonPath}" "${estimateScript}" --config "${configPath}" --device 0`,
-        { timeoutMs: 120000 }
-      )
+      let currentBatchSize = configParams.batch_size ?? 32
+      let currentAmp = configParams.use_amp ?? true
+      const MAX_ATTEMPTS = 5
 
-      if (estimateResult.code === 0) {
+      for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+        // 每次调参后重新生成配置
+        if (attempt > 0) {
+          configParams.batch_size = currentBatchSize
+          configParams.use_amp = currentAmp
+          const regenJson = JSON.stringify(configParams)
+          const regenResult = await ctx.sandbox.exec(
+            `"${pythonPath}" "${generateScript}" --params '${shellSafeJson(regenJson)}' --output "${configPath}"`,
+            { timeoutMs: 60000 }
+          )
+          if (regenResult.code !== 0) break
+        }
+
+        const estimateResult = await ctx.sandbox.exec(
+          `cd "${workspaceDir}" && CUDA_VISIBLE_DEVICES=${cudaDevice} "${pythonPath}" "${estimateScript}" --config "${configPath}" --device 0`,
+          { timeoutMs: 120000 }
+        )
+        if (estimateResult.code !== 0) break
+
         try {
-          const memoryEstimate = JSON.parse(estimateResult.stdout)
-          if (memoryEstimate.status === 'oom') {
+          const mem = JSON.parse(estimateResult.stdout)
+          if (mem.status === 'success' && mem.utilization_pct <= 85) {
+            // 通过 → 跳出循环
+            break
+          }
+
+          // OOM 或 >85%：依次降级
+          if (!currentAmp) {
+            currentAmp = true
+          } else if (currentBatchSize > 1) {
+            currentBatchSize = Math.max(1, Math.floor(currentBatchSize / 2))
+          } else {
+            // 所有手段耗尽
             return {
               status: 'error',
-              error: 'GPU 显存不足（预估阶段已检测到 OOM）',
-              memory_estimate: memoryEstimate,
-              recommendations: memoryEstimate.recommendations,
-              config_path: configPath,
-              workspace_dir: workspaceDir,
-              suggestion: memoryEstimate.recommendations.join('\n')
-            }
-          }
-          // 记录预估信息（非 OOM 时不阻止训练）
-          if (memoryEstimate.status === 'success') {
-            const pct = memoryEstimate.utilization_pct
-            if (pct > 90) {
-              // 高风险但不阻止，只记录警告
-              console.warn(`[Memory] 显存使用率 ${pct}%，训练中可能因波动 OOM`)
+              error: 'GPU 显存不足，已尝试所有自动优化手段仍无法适配',
+              memory_estimate: mem,
+              applied_optimizations: { use_amp: currentAmp, batch_size: currentBatchSize },
+              recommendations: mem.recommendations,
+              suggestion: '请使用更大显存的 GPU，或手动设置更小的 patch_size'
             }
           }
         } catch {
           // 解析失败不阻止训练
+          break
         }
       }
     }
@@ -497,10 +524,55 @@ export const oceanSrTrainTool = defineTool({
       },
     })
 
-    // ===== 3f. 返回启动信息（不等待训练完成） =====
+    // ===== 3f. 等待训练启动成功（事件驱动） =====
+    const STARTUP_TIMEOUT_MS = 300000  // 5 分钟（数据加载可能很久）
+    const startupResult = await trainingProcessManager.waitForEvent(
+      processInfo.id, 'training_start', STARTUP_TIMEOUT_MS
+    )
+
+    if (startupResult.processStatus === 'failed' || startupResult.processStatus === 'killed') {
+      // 启动阶段崩溃 → 直接返回错误
+      const failedInfo = trainingProcessManager.getProcess(processInfo.id)
+      return {
+        status: 'error',
+        error: '训练在启动阶段崩溃（数据加载/模型构建失败）',
+        process_id: processInfo.id,
+        error_summary: failedInfo?.errorSummary ?? null,
+        error_log_tail: trainingProcessManager.readLogs(processInfo.id, { tail: 50 })?.content,
+        suggestions: failedInfo?.errorSummary?.suggestions ?? [],
+      }
+    }
+
+    if (startupResult.found) {
+      // training_start 事件收到 → 训练正常运行中
+      return {
+        status: 'started',
+        message: '训练已启动并正常运行中。使用 ocean_sr_train_status 工具监控进度。',
+        process_id: processInfo.id,
+        pid: processInfo.pid,
+        mode,
+        model: model_name,
+        config_path: genInfo.config_path,
+        log_dir,
+        log_file: processInfo.logFile,
+        distribute: distribute && device_ids.length > 1,
+        distribute_mode: distribute ? distribute_mode : 'single',
+        device_ids,
+        workspace_dir: workspaceDir,
+        workspace_info: prepareInfo,
+        next_steps: [
+          `调用 ocean_sr_train_status({ action: "wait", process_id: "${processInfo.id}", timeout: 120 }) 等待训练状态变化`,
+          `调用 ocean_sr_train_status({ process_id: "${processInfo.id}" }) 查看训练状态`,
+          `调用 ocean_sr_train_status({ action: "logs", process_id: "${processInfo.id}", tail: 50 }) 查看最新日志`,
+          `调用 ocean_sr_train_status({ action: "kill", process_id: "${processInfo.id}" }) 终止训练`,
+        ],
+      }
+    }
+
+    // 超时 → 进程仍在运行但还没开始训练（超大数据集加载中）
     return {
       status: 'started',
-      message: `训练已在后台启动。使用 ocean_sr_train_status 工具查询进度和日志。`,
+      message: '训练进程已启动，仍在初始化中（可能数据量较大）。使用 ocean_sr_train_status 监控。',
       process_id: processInfo.id,
       pid: processInfo.pid,
       mode,
@@ -514,9 +586,9 @@ export const oceanSrTrainTool = defineTool({
       workspace_dir: workspaceDir,
       workspace_info: prepareInfo,
       next_steps: [
+        `调用 ocean_sr_train_status({ action: "wait", process_id: "${processInfo.id}", timeout: 120 }) 等待训练状态变化`,
         `调用 ocean_sr_train_status({ process_id: "${processInfo.id}" }) 查看训练状态`,
-        `调用 ocean_sr_train_status({ process_id: "${processInfo.id}", tail: 50 }) 查看最新日志`,
-        `调用 ocean_sr_train_status({ action: "kill", process_id: "${processInfo.id}" }) 终止训练`,
+        `调用 ocean_sr_train_status({ action: "logs", process_id: "${processInfo.id}", tail: 50 }) 查看最新日志`,
       ],
     }
   }

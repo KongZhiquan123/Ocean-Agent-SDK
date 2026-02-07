@@ -13,10 +13,13 @@ OceanNPY Dataset - 适配 ocean-preprocess 预处理输出的数据集类（带�
 多个变量按 channels 维度堆叠: [N, H, W, C]
 
 @author Leizheng
+@contributors kongzhiquan
 @date 2026-02-06
-@version 3.0.0
+@version 4.0.0
 
 @changelog
+  - 2026-02-07 kongzhiquan: v4.0.0 读取 model_divisor，自动计算 patch_size
+    - 当数据尺寸不能被 model_divisor 整除且未指定 patch_size 时自动计算
   - 2026-02-07 Leizheng: v3.0.0 添加 Patch 训练支持
     - OceanNPYDatasetBase 支持 patch_size 参数，训练时随机裁剪 HR/LR patch
     - 裁剪同时裁剪对应的 mask，返回 (x, y, mask_hr_patch) 三元组
@@ -145,6 +148,18 @@ class OceanNPYDataset:
         # Patch 训练参数
         patch_size = data_args.get('patch_size', None)
         scale = data_args.get('sample_factor', 1)
+        divisor = data_args.get('model_divisor', 1)
+        H, W = train_hr.shape[1], train_hr.shape[2]
+
+        # 自动计算 patch_size：当数据尺寸不能被 divisor 整除且用户未指定 patch_size 时
+        if patch_size is None and divisor > 1:
+            if H % divisor != 0 or W % divisor != 0:
+                max_dim = min(H, W)
+                patch_size = (max_dim // divisor) * divisor
+                if patch_size < divisor:
+                    patch_size = divisor
+                print(f'[OceanNPY] 自动 patch_size={patch_size} '
+                      f'(数据 {H}x{W}, 模型要求被 {divisor} 整除)')
 
         if patch_size is not None:
             H, W = train_hr.shape[1], train_hr.shape[2]

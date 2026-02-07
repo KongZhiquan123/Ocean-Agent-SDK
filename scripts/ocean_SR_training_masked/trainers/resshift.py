@@ -2,10 +2,14 @@
 ResShift Trainer (masked version).
 
 @author Leizheng
+@contributors kongzhiquan
 @date 2026-02-06
-@version 3.0.0
+@version 4.0.0
 
 @changelog
+  - 2026-02-07 kongzhiquan: v4.0.0 inference 自动对齐尺寸 + crop 回原尺寸
+    - interpolate 到 model_divisor 对齐后的尺寸
+    - 采样完成后 crop 回原始 y 尺寸
   - 2026-02-07 Leizheng: v3.0.0 AMP 混合精度 + Gradient Checkpointing
     - train() 使用 autocast + GradScaler
     - gradient checkpointing 包装 training_losses forward
@@ -105,31 +109,49 @@ class ResshiftTrainer(BaseTrainer):
     def inference(self, x, y, **kwargs):
         x = x.permute(0, 3, 1, 2)
         y = y.permute(0, 3, 1, 2)
-        x = F.interpolate(x, size=y.shape[2:], mode='bicubic', align_corners=False)
-        
+
+        orig_h, orig_w = y.shape[2], y.shape[3]
+
+        # interpolate 到对齐后的尺寸（能被 model_divisor 整除）
+        d = self.model_divisor
+        if d > 1:
+            aligned_h = ((orig_h + d - 1) // d) * d
+            aligned_w = ((orig_w + d - 1) // d) * d
+        else:
+            aligned_h, aligned_w = orig_h, orig_w
+        x = F.interpolate(x, size=(aligned_h, aligned_w), mode='bicubic', align_corners=False)
+
+        B, C, H, W = x.shape
+
+        tt = torch.randint(
+                    0, self.base_diffusion.num_timesteps,
+                    size=(y.shape[0],),
+                    device=x.device,
+                    )
+
         indices = np.linspace(
                     0,
                     self.base_diffusion.num_timesteps,
                     self.base_diffusion.num_timesteps if self.base_diffusion.num_timesteps < 5 else 4,
                     endpoint=False,
                     dtype=np.int64,
-                    ).tolist()        
+                    ).tolist()
 
         if not (self.base_diffusion.num_timesteps-1) in indices:
-            indices.append(self.base_diffusion.num_timesteps-1)     
-            
-        im_lq = x  
-        
+            indices.append(self.base_diffusion.num_timesteps-1)
+
+        im_lq = x
+
         model_kwargs = {'lq':x,}
-        
+
         tt = torch.tensor(
                         [self.base_diffusion.num_timesteps, ]*im_lq.shape[0],
                         dtype=torch.int64,
                         device= x.device
                         )
-        
+
         self._unwrap()
-        
+
         y_pred = self.base_diffusion.p_sample_loop(
                         y=im_lq,
                         model=self.model,
@@ -140,8 +162,9 @@ class ResshiftTrainer(BaseTrainer):
                         device=x.device,
                         progress=True,
                         )
-        
-        # y_pred = self._unwrap().super_resolution(x, continous=False)
+
+        # crop 回原始尺寸
+        y_pred = y_pred[:, :, :orig_h, :orig_w]
         y_pred = y_pred.permute(0, 2, 3, 1)
         y = y.permute(0, 2, 3, 1)
         return y_pred

@@ -149,8 +149,8 @@ Agent: 好的，我先确认数据目录和 GPU...
 - Batch size: 64
 - GPU: 单卡 (GPU 0)
 
-是否需要启用 OOM 防护参数？
-- use_amp: false（AMP 混合精度，建议开启）
+是否需要调整 OOM 防护参数？
+- use_amp: true（AMP 混合精度，默认开启）
 - gradient_checkpointing: false（梯度检查点）
 - patch_size: null（全图训练）
 
