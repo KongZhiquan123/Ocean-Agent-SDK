@@ -522,6 +522,7 @@ export const oceanPreprocessFullTool = defineTool({
 
     const stepCResult = await oceanConvertNpyTool.exec({
       nc_folder: actualNcFolder,
+      nc_files: actualNcFiles,
       output_base,
       dyn_vars,
       static_file,

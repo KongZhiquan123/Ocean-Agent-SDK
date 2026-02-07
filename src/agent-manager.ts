@@ -4,9 +4,10 @@
  * @description 管理 Agent 实例的创建与消息处理
  * @author kongzhiquan
  * @date 2026-02-02
- * @version 1.2.0
+ * @version 1.3.0
  *
  * @changelog
+ *   - 2026-02-07 Leizheng: v1.3.0 修复 KODE SDK 内部处理超时（5分钟→2小时）
  *   - 2026-02-07 Leizheng: v1.2.0 sandbox 添加 allowPaths: ['/data'] 允许访问数据目录
  *   - 2026-02-05 kongzhiquan: v1.1.0 新增 tool:error 事件处理
  *     - 在 convertProgressToSSE 中添加 tool:error case
@@ -73,6 +74,9 @@ export async function createAgent(config: AgentConfig): Promise<Agent> {
     },
     deps,
   )
+
+  // 增大 KODE SDK 内部处理超时（默认 5 分钟，预处理/训练流水线可能需要数小时）
+  ;(agent as any).PROCESSING_TIMEOUT = 2 * 60 * 60 * 1000 // 2 小时
 
   return agent
 }

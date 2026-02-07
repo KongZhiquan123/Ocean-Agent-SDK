@@ -5,6 +5,16 @@ generate_config.py - 根据参数生成训练配置 YAML 文件
 
 用法:
     python generate_config.py --params '<JSON string>' --output /path/to/config.yaml
+
+@author Leizheng
+@date 2026-02-06
+@version 2.0.0
+
+@changelog
+  - 2026-02-07 Leizheng: v2.0.0 支持 OOM 防护参数
+    - 新增 use_amp, gradient_checkpointing, patch_size 参数
+    - 写入 train / data section 供 trainer 和 dataset 读取
+  - 原始版本: v1.0.0
 """
 
 import argparse
@@ -91,6 +101,9 @@ def generate_config(params):
         scheduler_gamma (float): 调度器衰减率 (默认 0.5)
         seed (int): 随机种子 (默认 42)
         hr_shape (list[int]): HR 尺寸 [H, W] (若不提供则自动检测)
+        use_amp (bool): 是否启用 AMP 混合精度 (默认 False)
+        gradient_checkpointing (bool): 是否启用梯度检查点 (默认 False)
+        patch_size (int): Patch 裁剪尺寸，None 表示全图训练 (默认 None)
     """
     model_name = params['model_name']
     dataset_root = params['dataset_root']
@@ -154,6 +167,7 @@ def generate_config(params):
             "eval_batchsize": params.get("eval_batch_size", 32),
             "normalize": params.get("normalize", True),
             "normalizer_type": params.get("normalizer_type", "PGN"),
+            "patch_size": params.get("patch_size", None),
         },
         "train": {
             "epochs": params.get("epochs", 500),
@@ -168,6 +182,8 @@ def generate_config(params):
             "saving_best": True,
             "saving_ckpt": params.get("saving_ckpt", False),
             "ckpt_freq": params.get("ckpt_freq", 100),
+            "use_amp": params.get("use_amp", False),
+            "gradient_checkpointing": params.get("gradient_checkpointing", False),
         },
         "optimize": {
             "optimizer": params.get("optimizer", "AdamW"),

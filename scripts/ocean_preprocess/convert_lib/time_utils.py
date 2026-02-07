@@ -5,16 +5,17 @@ time_utils.py - 时间处理工具函数
 
 @author kongzhiquan
 @date 2026-02-05
-@version 1.0.0
+@version 1.1.0
 
 功能:
-- 从多个 NC 文件提取时间戳
+- 从多个 NC 文件提取时间戳（支持并行）
 - 自动检测合适的日期格式
 - 生成无冲突的文件名
 - 验证时间单调性
 - 创建时间映射元数据
 
 @changelog
+  - 2026-02-07 Leizheng: v1.1.0 并行化 extract_timestamps_from_files，3206 文件从 ~5 分钟降至 ~30 秒
   - 2026-02-05 kongzhiquan: v1.0.0 初始版本
 """
 
@@ -25,6 +26,7 @@ import xarray as xr
 from datetime import datetime, timedelta
 from typing import List, Optional, Tuple, Dict, Any
 from collections import Counter
+from multiprocessing import Pool
 
 from .constants import TIME_COORD_CANDIDATES
 
@@ -45,6 +47,16 @@ DATE_FORMATS = {
     "YYYY-MM-DD": "%Y-%m-%d",
     "YYYY-MM-DD_HH": "%Y-%m-%d_%H",
 }
+
+
+def _safe_print(msg: str) -> None:
+    """向 stderr 输出日志，忽略 BrokenPipeError（父进程 pipe 关闭时）"""
+    try:
+        print(msg, file=sys.stderr, flush=True)
+    except BrokenPipeError:
+        pass
+    except OSError:
+        pass
 
 
 def _find_time_var(ds: xr.Dataset) -> Optional[str]:
@@ -153,18 +165,107 @@ def _extract_timestamps_with_cftime(
     return timestamps, warnings
 
 
+def _extract_timestamps_worker(args: Tuple) -> Dict[str, Any]:
+    """
+    并行 worker：从单个 NC 文件提取时间戳
+
+    在子进程中执行，不返回大数据，只返回时间戳列表和元数据。
+
+    Args:
+        args: (nc_file, time_var) 元组
+
+    Returns:
+        dict with keys:
+        - timestamps: List[datetime] 或 None（失败时）
+        - warnings: List[str]
+        - file: str（文件名）
+    """
+    nc_file, time_var = args
+    file_basename = os.path.basename(nc_file)
+    timestamps = []
+    warnings_list = []
+
+    try:
+        # 优先使用 decode_times=True
+        with xr.open_dataset(nc_file, decode_times=True) as ds:
+            if time_var not in ds.coords and time_var not in ds.variables:
+                return {
+                    'timestamps': None,
+                    'warnings': [f"文件 '{file_basename}' 中不存在时间变量 '{time_var}'"],
+                    'file': file_basename,
+                }
+
+            time_values = ds[time_var].values
+
+            for t_idx, t in enumerate(time_values):
+                try:
+                    if isinstance(t, np.datetime64):
+                        timestamps.append(_np_datetime64_to_datetime(t))
+                    elif hasattr(t, 'year'):  # cftime 日期对象
+                        timestamps.append(datetime(
+                            t.year, t.month, t.day,
+                            t.hour, t.minute, t.second
+                        ))
+                    else:
+                        return {
+                            'timestamps': None,
+                            'warnings': [
+                                f"文件 '{file_basename}' 时间步 {t_idx}: "
+                                f"无法解析时间值类型 {type(t)}"
+                            ],
+                            'file': file_basename,
+                        }
+                except Exception as e:
+                    return {
+                        'timestamps': None,
+                        'warnings': [
+                            f"文件 '{file_basename}' 时间步 {t_idx}: 解析失败 - {e}"
+                        ],
+                        'file': file_basename,
+                    }
+
+            return {
+                'timestamps': timestamps,
+                'warnings': warnings_list,
+                'file': file_basename,
+            }
+
+    except Exception:
+        # decode_times=True 失败，fallback 到 cftime
+        ts, warns = _extract_timestamps_with_cftime(nc_file, time_var)
+        warnings_list.extend(warns)
+
+        if not ts:
+            warnings_list.append(f"文件 '{file_basename}' 时间解析完全失败")
+            return {
+                'timestamps': None,
+                'warnings': warnings_list,
+                'file': file_basename,
+            }
+
+        return {
+            'timestamps': ts,
+            'warnings': warnings_list,
+            'file': file_basename,
+        }
+
+
 def extract_timestamps_from_files(
     nc_files: List[str],
-    time_var: Optional[str] = None
+    time_var: Optional[str] = None,
+    workers: int = 16
 ) -> Tuple[Optional[List[datetime]], Optional[str], List[str]]:
     """
-    从多个 NC 文件提取时间戳列表
+    从多个 NC 文件并行提取时间戳列表
 
-    按文件顺序提取所有时间步的时间戳，合并为一个列表。
+    Phase 0: 探测第一个文件，检测时间变量名
+    Phase 1: 并行提取所有文件的时间戳
+    Phase 2: 按文件顺序合并结果
 
     Args:
         nc_files: NC 文件路径列表（应已排序）
         time_var: 指定的时间变量名（None 则自动检测）
+        workers: 并行进程数（默认 16）
 
     Returns:
         (timestamps, detected_time_var, warnings)
@@ -173,97 +274,68 @@ def extract_timestamps_from_files(
         - warnings: 警告信息列表
     """
     warnings_list = []
-    all_timestamps = []
     detected_var = None
 
     if not nc_files:
         return None, None, ["NC 文件列表为空"]
 
-    for i, nc_file in enumerate(nc_files):
-        file_basename = os.path.basename(nc_file)
+    # ── Phase 0: 探测第一个文件，检测 time_var ──────────────────
+    first_file = nc_files[0]
+    first_basename = os.path.basename(first_file)
 
+    try:
+        with xr.open_dataset(first_file, decode_times=True) as ds:
+            detected_var = time_var if time_var else _find_time_var(ds)
+            if detected_var is None:
+                warnings_list.append(f"文件 '{first_basename}' 未找到时间变量")
+                return None, None, warnings_list
+    except Exception:
+        # decode_times 失败，用 decode_times=False 探测变量名
         try:
-            # 先尝试 decode_times=True（xarray 自动解析）
-            with xr.open_dataset(nc_file, decode_times=True) as ds:
-                # 查找时间变量
-                tv = time_var if time_var else _find_time_var(ds)
-
-                if tv is None:
-                    warnings_list.append(f"文件 '{file_basename}' 未找到时间变量")
-                    return None, None, warnings_list
-
+            with xr.open_dataset(first_file, decode_times=False) as ds:
+                detected_var = time_var if time_var else _find_time_var(ds)
                 if detected_var is None:
-                    detected_var = tv
-                elif detected_var != tv and time_var is None:
-                    warnings_list.append(
-                        f"文件 '{file_basename}' 时间变量不一致: "
-                        f"预期 '{detected_var}', 实际 '{tv}'"
-                    )
-
-                # 获取时间值
-                if tv not in ds.coords and tv not in ds.variables:
-                    warnings_list.append(f"文件 '{file_basename}' 中不存在时间变量 '{tv}'")
-                    return None, detected_var, warnings_list
-
-                time_values = ds[tv].values
-
-                # 转换为 datetime
-                for t_idx, t in enumerate(time_values):
-                    try:
-                        if isinstance(t, np.datetime64):
-                            dt = _np_datetime64_to_datetime(t)
-                            all_timestamps.append(dt)
-                        elif hasattr(t, 'year'):  # cftime 日期对象
-                            dt = datetime(t.year, t.month, t.day,
-                                         t.hour, t.minute, t.second)
-                            all_timestamps.append(dt)
-                        else:
-                            warnings_list.append(
-                                f"文件 '{file_basename}' 时间步 {t_idx}: "
-                                f"无法解析时间值类型 {type(t)}"
-                            )
-                            return None, detected_var, warnings_list
-                    except Exception as e:
-                        warnings_list.append(
-                            f"文件 '{file_basename}' 时间步 {t_idx}: 解析失败 - {e}"
-                        )
-                        return None, detected_var, warnings_list
-
-        except Exception as e:
-            # decode_times=True 失败，尝试手动解析
-            print(f"  [Info] 文件 '{file_basename}' xarray 自动解析失败，尝试 cftime...",
-                  file=sys.stderr)
-
-            # 确定时间变量名
-            tv = time_var if time_var else detected_var
-            if tv is None:
-                # 需要先检测时间变量名
-                try:
-                    with xr.open_dataset(nc_file, decode_times=False) as ds:
-                        tv = _find_time_var(ds)
-                        if tv is None:
-                            warnings_list.append(f"文件 '{file_basename}' 未找到时间变量")
-                            return None, None, warnings_list
-                        detected_var = tv
-                except Exception as e2:
-                    warnings_list.append(f"文件 '{file_basename}' 打开失败: {e2}")
+                    warnings_list.append(f"文件 '{first_basename}' 未找到时间变量")
                     return None, None, warnings_list
+        except Exception as e:
+            warnings_list.append(f"文件 '{first_basename}' 打开失败: {e}")
+            return None, None, warnings_list
 
-            # 使用 cftime 解析
-            ts, warns = _extract_timestamps_with_cftime(nc_file, tv)
-            warnings_list.extend(warns)
+    tv = detected_var
 
-            if not ts:
-                warnings_list.append(f"文件 '{file_basename}' 时间解析完全失败")
-                return None, detected_var, warnings_list
+    # ── Phase 1: 并行提取时间戳 ──────────────────────────────
+    tasks = [(nc_file, tv) for nc_file in nc_files]
+    actual_workers = min(workers, len(nc_files))
 
-            all_timestamps.extend(ts)
+    if actual_workers <= 1 or len(nc_files) <= 4:
+        # 文件很少，串行处理即可
+        results = [_extract_timestamps_worker(t) for t in tasks]
+    else:
+        _safe_print(
+            f"  [时间戳] 并行提取 {len(nc_files)} 个文件的时间戳 "
+            f"(workers={actual_workers})..."
+        )
+        with Pool(processes=actual_workers) as pool:
+            # 用 map 保持文件顺序（不能用 imap_unordered）
+            results = pool.map(_extract_timestamps_worker, tasks)
+        _safe_print(f"  [时间戳] 并行提取完成")
+
+    # ── Phase 2: 按文件顺序合并 ──────────────────────────────
+    all_timestamps = []
+    for result in results:
+        warnings_list.extend(result.get('warnings', []))
+        ts = result.get('timestamps')
+        if ts is None:
+            # 某个文件失败 → 整体失败
+            return None, tv, warnings_list
+        all_timestamps.extend(ts)
 
     if not all_timestamps:
         warnings_list.append("未能提取任何时间戳")
-        return None, detected_var, warnings_list
+        return None, tv, warnings_list
 
-    return all_timestamps, detected_var, warnings_list
+    _safe_print(f"  [时间戳] 共提取 {len(all_timestamps)} 个时间步")
+    return all_timestamps, tv, warnings_list
 
 
 def detect_date_format(timestamps: List[datetime]) -> str:

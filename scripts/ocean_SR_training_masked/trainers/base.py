@@ -3,9 +3,15 @@ Base trainer for ocean SR training (masked version).
 
 @author Leizheng
 @date 2026-02-06
-@version 2.0.0
+@version 3.0.0
 
 @changelog
+  - 2026-02-07 Leizheng: v3.0.0 AMP 混合精度 + Gradient Checkpointing
+    - 新增 use_amp / gradient_checkpointing 配置项
+    - train() 使用 torch.amp.autocast + GradScaler
+    - evaluate() 使用 autocast 加速推理
+    - gradient checkpointing 包装 model forward 降低激活显存
+    - save_ckpt / load_ckpt 保存/恢复 scaler 状态
   - 2026-02-06 Leizheng: v2.0.0 集成陆地掩码支持
     - build_data() 加载 mask_hr / mask_lr
     - build_loss() 改用 MaskedLpLoss
@@ -29,6 +35,7 @@ from utils.helper import save_code
 from utils.ddp import debug_barrier
 from utils.metrics import Evaluator, MaskedEvaluator
 from functools import partial
+import torch.utils.checkpoint
 from models import _model_dict
 from datasets import _dataset_dict
 
@@ -44,6 +51,11 @@ class BaseTrainer:
         self.log_args = args['log']
         
         self.set_distribute()
+
+        # AMP 混合精度 + Gradient Checkpointing
+        self.use_amp = self.train_args.get('use_amp', False) and torch.cuda.is_available()
+        self.gradient_checkpointing = self.train_args.get('gradient_checkpointing', False)
+        self.scaler = torch.amp.GradScaler(enabled=self.use_amp)
 
         self.logger = logging.info if self.log_args.get('log', True) else print
         self.wandb = self.log_args.get('wandb', False)
@@ -96,6 +108,10 @@ class BaseTrainer:
         self.main_log("Model parameters: {:.2f}M".format(sum(p.numel() for p in self.model.parameters()) / 1e6))
         self.main_log("Optimizer: {}".format(self.optimizer))
         self.main_log("Scheduler: {}".format(self.scheduler))
+        if self.use_amp:
+            self.main_log("AMP mixed precision: ENABLED")
+        if self.gradient_checkpointing:
+            self.main_log("Gradient checkpointing: ENABLED")
 
         self.data = self.data_args['name']
         self.main_log("Loading {} dataset".format(self.data))
@@ -284,6 +300,7 @@ class BaseTrainer:
             'model_state_dict': state_dict_cpu,
             'optimizer_state_dict': self.optimizer.state_dict(),
             'scheduler_state_dict': self.scheduler.state_dict(),
+            'scaler_state_dict': self.scaler.state_dict() if self.use_amp else None,
         }, os.path.join(self.saving_path, f"model_epoch_{epoch}.pth"))
         if self.ckpt_max is not None and self.ckpt_max > 0:
             ckpt_list = [f for f in os.listdir(self.saving_path) if f.startswith('model_epoch_') and f.endswith('.pth')]
@@ -317,6 +334,8 @@ class BaseTrainer:
                         state_tensor[k] = v.to(self.device)
         if 'scheduler_state_dict' in state and self.scheduler is not None:
             self.scheduler.load_state_dict(state['scheduler_state_dict'])
+        if 'scaler_state_dict' in state and state['scaler_state_dict'] is not None and self.use_amp:
+            self.scaler.load_state_dict(state['scaler_state_dict'])
         self.start_epoch = state.get('epoch', 0) + 1
         self.main_log("Load checkpoint from {}, epoch {}".format(ckpt_path, state.get('epoch', 'N/A')))
     
@@ -413,17 +432,31 @@ class BaseTrainer:
         if self.train_sampler is not None:
             self.train_sampler.set_epoch(epoch)
         self.model.train()
-        for i, (x, y) in enumerate(self.train_loader):
+        for i, batch in enumerate(self.train_loader):
+            # Patch 训练时 batch = (x, y, mask_hr_patch)，否则 (x, y)
+            if len(batch) == 3:
+                x, y, mask_hr = batch
+                mask_hr = mask_hr.to(self.device, non_blocking=True)
+            else:
+                x, y = batch
+                mask_hr = self.mask_hr
             x = x.to(self.device, non_blocking=True)
             y = y.to(self.device, non_blocking=True)
-            y_pred = self.model(x)
-            loss = self.loss_fn(y_pred, y, mask=self.mask_hr)
+            with torch.amp.autocast('cuda', enabled=self.use_amp):
+                if self.gradient_checkpointing:
+                    y_pred = torch.utils.checkpoint.checkpoint(
+                        self.model, x, use_reentrant=False
+                    )
+                else:
+                    y_pred = self.model(x)
+                loss = self.loss_fn(y_pred, y, mask=mask_hr)
             loss_record.update({"train_loss": loss.sum().item()}, n=x.size(0))
             loss = loss.mean()
             self.optimizer.zero_grad()
-            loss.backward()
-            self.optimizer.step()
-            
+            self.scaler.scale(loss).backward()
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+
         if self.scheduler is not None:
             self.scheduler.step()
         return loss_record
@@ -443,7 +476,7 @@ class BaseTrainer:
         all_y = []
         all_y_pred = []
         self.model.eval()
-        with torch.no_grad():
+        with torch.no_grad(), torch.amp.autocast('cuda', enabled=self.use_amp):
             for x, y in eval_loader:
                 x = x.to(self.device, non_blocking=True)
                 y = y.to(self.device, non_blocking=True)

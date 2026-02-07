@@ -2,6 +2,7 @@ import os
 import yaml
 import torch
 import shutil
+import inspect
 import logging
 import inspect
 import numpy as np
@@ -67,24 +68,36 @@ def set_up_logger(args):
 
 
 def save_code(module, saving_path, with_dir=False, with_path=False):
+    """将模块/类的源代码复制到 saving_path/code/ 下。
+
+    Args:
+        module: Python 模块、类或直接路径字符串
+        saving_path: 保存根目录
+        with_dir: True 时复制整个包目录，False 时只复制单文件
+        with_path: True 时 module 参数直接作为路径字符串使用
+    """
     os.makedirs(os.path.join(saving_path, 'code'), exist_ok=True)
 
     if with_path:
         src = module
     else:
-        # 获取源文件路径，支持模块和类
+        # 兼容模块和类：类没有 __file__，用 inspect.getfile 获取源文件路径
         if hasattr(module, '__file__'):
-            file_path = module.__file__
+            src_file = module.__file__
         else:
-            file_path = inspect.getfile(module)
+            src_file = inspect.getfile(module)
 
         if with_dir:
-            src = os.path.dirname(file_path)
+            src = os.path.dirname(src_file)
         else:
-            src = file_path
+            src = src_file
+
+
     dst = os.path.join(saving_path, 'code', os.path.basename(src))
-    
+
     if os.path.isdir(src):
+        if os.path.exists(dst):
+            shutil.rmtree(dst)
         shutil.copytree(src, dst)
     else:
         shutil.copy2(src, dst)

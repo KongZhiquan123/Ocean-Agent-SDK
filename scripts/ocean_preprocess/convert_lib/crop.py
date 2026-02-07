@@ -4,17 +4,30 @@ crop.py - 裁剪相关函数
 从 convert_npy.py 拆分
 
 @changelog
+  - 2026-02-07 Leizheng: 修复 BrokenPipeError — stderr 写入加保护
+  - 2026-02-07 Leizheng: 新增流式处理函数 _stream_extract_save_worker / parallel_stream_extract_save
   - 2026-02-06 Leizheng: 添加并行提取进度日志与耗时统计
 """
 
 import os
 import sys
 import time
+import signal
 import numpy as np
 import xarray as xr
 from typing import Any, Dict, List, Optional, Tuple
 from multiprocessing import Pool, cpu_count
 from functools import partial
+
+
+def _safe_print(msg: str) -> None:
+    """向 stderr 输出日志，忽略 BrokenPipeError（父进程 pipe 关闭时）"""
+    try:
+        print(msg, file=sys.stderr, flush=True)
+    except BrokenPipeError:
+        pass
+    except OSError:
+        pass
 
 
 def _extract_var_from_file(nc_file: str, var_name: str, h_slice: Optional[slice] = None, w_slice: Optional[slice] = None) -> Dict[str, Any]:
@@ -345,3 +358,176 @@ def load_coordinate_arrays(
         lat_arr = ds[lat_var].values
 
     return lon_arr, lat_arr
+
+
+# ---------------------------------------------------------------------------
+# 流式处理函数（读一个、处理一个、写一个）
+# ---------------------------------------------------------------------------
+
+
+def _stream_extract_save_worker(task: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    流式 worker：读取单个 NC 文件的一个变量 → 裁剪 → 直接保存 NPY → 返回元数据
+
+    task 字段:
+        nc_file:    str                          - NC 文件路径
+        var_name:   str                          - 变量名
+        output_map: List[Tuple[int, str]]        - [(local_t, output_path), ...]
+        h_slice:    Optional[Tuple[int|None, int|None]]  - 裁剪参数 (start, stop)
+        w_slice:    Optional[Tuple[int|None, int|None]]  - 裁剪参数 (start, stop)
+
+    返回:
+        { status, file, var_name, per_file_T, shape_per_step, dtype,
+          nan_count, inf_count, total_elements, saved_count }
+        注意: 不返回 data，数据直接写入磁盘
+    """
+    nc_file = task["nc_file"]
+    var_name = task["var_name"]
+    output_map = task["output_map"]  # [(local_t, output_path), ...]
+    h_slice_raw = task.get("h_slice")  # Tuple or None
+    w_slice_raw = task.get("w_slice")  # Tuple or None
+
+    # 重建 slice 对象（multiprocessing 不能 pickle slice）
+    h_sl = slice(*h_slice_raw) if h_slice_raw is not None else None
+    w_sl = slice(*w_slice_raw) if w_slice_raw is not None else None
+
+    try:
+        with xr.open_dataset(nc_file, decode_times=False) as ds:
+            if var_name not in ds.data_vars and var_name not in ds.coords:
+                return {
+                    "status": "error",
+                    "error": f"变量 '{var_name}' 不存在",
+                    "file": nc_file,
+                    "var_name": var_name,
+                }
+
+            data = ds[var_name].values
+
+            # 裁剪空间维度
+            if h_sl is not None or w_sl is not None:
+                h_s = h_sl if h_sl else slice(None)
+                w_s = w_sl if w_sl else slice(None)
+                ndim = data.ndim
+                if ndim == 2:
+                    data = data[h_s, w_s]
+                elif ndim == 3:
+                    data = data[:, h_s, w_s]
+                elif ndim == 4:
+                    data = data[:, :, h_s, w_s]
+
+        # NaN/Inf 全量检查（逐文件）
+        nan_count = int(np.count_nonzero(np.isnan(data)))
+        inf_count = int(np.count_nonzero(np.isinf(data)))
+        total_elements = int(data.size)
+
+        # 确定每文件时间步
+        if data.ndim >= 3:
+            per_file_T = data.shape[0]
+        else:
+            # 2D 静态形式，不应出现在动态变量流式处理中
+            per_file_T = 1
+
+        # 逐时间步保存
+        saved_count = 0
+        shape_per_step = None
+        for local_t, out_path in output_map:
+            # 确保目录存在
+            out_dir = os.path.dirname(out_path)
+            os.makedirs(out_dir, exist_ok=True)
+
+            if per_file_T == 1 and data.ndim == 2:
+                step_data = data
+            else:
+                step_data = data[local_t]
+
+            np.save(out_path, step_data)
+            saved_count += 1
+
+            if shape_per_step is None:
+                shape_per_step = list(step_data.shape)
+
+        return {
+            "status": "success",
+            "file": nc_file,
+            "var_name": var_name,
+            "per_file_T": per_file_T,
+            "shape_per_step": shape_per_step,
+            "dtype": str(data.dtype),
+            "nan_count": nan_count,
+            "inf_count": inf_count,
+            "total_elements": total_elements,
+            "saved_count": saved_count,
+        }
+
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e),
+            "file": nc_file,
+            "var_name": var_name,
+        }
+
+
+def parallel_stream_extract_save(
+    tasks: List[Dict[str, Any]],
+    workers: int,
+) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """
+    并行流式处理：读取 → 裁剪 → 保存，一步到位
+
+    Args:
+        tasks:   任务列表，每个元素传给 _stream_extract_save_worker
+        workers: 并行进程数
+
+    Returns:
+        (results_metadata, errors)
+        - results_metadata: 成功结果的元数据列表
+        - errors: 错误信息字符串列表
+    """
+    total = len(tasks)
+    actual_workers = min(workers, total, cpu_count())
+    results_metadata = []
+    errors = []
+
+    _safe_print(f"    流式处理，进程数: {actual_workers}，任务数: {total}")
+    t_start = time.time()
+
+    if actual_workers > 1:
+        done_count = 0
+        with Pool(processes=actual_workers) as pool:
+            for r in pool.imap_unordered(_stream_extract_save_worker, tasks):
+                done_count += 1
+                if r["status"] == "success":
+                    results_metadata.append(r)
+                else:
+                    errors.append(f"{r['file']}: {r.get('error', 'unknown error')}")
+
+                if done_count % 100 == 0 or done_count == total:
+                    elapsed = time.time() - t_start
+                    rate = done_count / elapsed if elapsed > 0 else 0
+                    eta = (total - done_count) / rate if rate > 0 else 0
+                    _safe_print(
+                        f"      流式进度: {done_count}/{total} ({done_count * 100 // total}%) "
+                        f"| {elapsed:.1f}s 已用 | {rate:.1f} files/s | ETA {eta:.0f}s"
+                    )
+    else:
+        for i, task in enumerate(tasks):
+            r = _stream_extract_save_worker(task)
+            if r["status"] == "success":
+                results_metadata.append(r)
+            else:
+                errors.append(f"{r['file']}: {r.get('error', 'unknown error')}")
+
+            if (i + 1) % 100 == 0 or (i + 1) == total:
+                elapsed = time.time() - t_start
+                _safe_print(
+                    f"      流式进度: {i + 1}/{total} ({(i + 1) * 100 // total}%) | {elapsed:.1f}s"
+                )
+
+    elapsed = time.time() - t_start
+    total_saved = sum(r.get("saved_count", 0) for r in results_metadata)
+    _safe_print(
+        f"    流式处理完成: {elapsed:.1f}s, 保存 {total_saved} 个 npy 文件, {len(errors)} 个错误"
+    )
+
+    return results_metadata, errors

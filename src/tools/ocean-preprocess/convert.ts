@@ -6,9 +6,10 @@
  * @author leizheng
  * @contributors kongzhiquan
  * @date 2026-02-04
- * @version 3.4.0
+ * @version 3.5.0
  *
  * @changelog
+ *   - 2026-02-07 Leizheng: v3.5.0 新增 nc_files 参数，支持显式指定文件列表
  *   - 2026-02-07 Leizheng: v3.4.0 智能路径处理，nc_folder 同时支持目录和单个文件路径
  *   - 2026-02-05 kongzhiquan: v3.3.0 日期文件名功能
  *     - 新增 use_date_filename, date_format, time_var 参数
@@ -120,6 +121,12 @@ export const oceanConvertNpyTool = defineTool({
     nc_folder: {
       type: 'string',
       description: '动态NC文件所在目录 (dyn_dir)，也可以直接传入单个 .nc 文件路径'
+    },
+    nc_files: {
+      type: 'array',
+      items: { type: 'string' },
+      description: '显式指定要处理的 NC 文件列表（文件名或完整路径）。提供时忽略 dyn_file_pattern',
+      required: false
     },
     output_base: {
       type: 'string',
@@ -321,6 +328,7 @@ export const oceanConvertNpyTool = defineTool({
   async exec(args, ctx) {
     const {
       nc_folder: rawNcFolder,
+      nc_files: rawNcFiles,
       output_base,
       dyn_vars,
       static_file,
@@ -403,6 +411,7 @@ export const oceanConvertNpyTool = defineTool({
     // 3. 准备配置
     const config = {
       nc_folder,
+      nc_files: rawNcFiles || null,  // 显式文件列表，提供时优先于 glob
       output_base,
       dyn_vars,
       static_file: static_file || null,
@@ -449,7 +458,7 @@ export const oceanConvertNpyTool = defineTool({
     // 5. 执行 Python 脚本
     const result = await ctx.sandbox.exec(
       `${pythonCmd} "${scriptPath}" --config "${configPath}" --output "${outputPath}"`,
-      { timeoutMs: 600000 }
+      { timeoutMs: 1800000 }
     )
 
     if (result.code !== 0) {

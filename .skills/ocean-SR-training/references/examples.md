@@ -1,6 +1,6 @@
 # 对话示例
 
-> 版本: 1.0.0 | 最后更新: 2026-02-06
+> 版本: 2.0.0 | 最后更新: 2026-02-07
 
 ---
 
@@ -118,9 +118,72 @@ Agent: [执行训练...]
 - 模型参数量大（如扩散模型），GPU 显存不够
 
 修改建议：
-1. 减小 batch_size（当前 64 → 建议 16 或 32）
-2. 使用多卡训练分摊显存
-3. 选择更轻量的模型（如 EDSR、FNO2d）
+1. 启用 AMP 混合精度 use_amp=true（减少约 40-50% 显存）
+2. 减小 batch_size（当前 64 → 建议 16 或 32）
+3. 启用梯度检查点 gradient_checkpointing=true
+4. 设置 patch_size=128 裁剪小区域训练
+5. 使用多卡训练分摊显存
+6. 选择更轻量的模型（如 EDSR、FNO2d）
 
 请问您希望如何调整？
+```
+
+---
+
+## 示例 4：OOM 防护完整流程
+
+```
+用户: 数据在 /data/ocean_hr，用 SwinIR 训练，GPU 0，batch 64
+
+Agent: 好的，我先确认数据目录和 GPU...
+
+[确认数据 + 查看 GPU]
+
+当前 GPU:
+- GPU 0: RTX 3090 (24GB, 空闲 23.5GB)
+
+参数确认：
+- 数据: /data/ocean_hr
+- 模型: SwinIR
+- Epochs: 500
+- Batch size: 64
+- GPU: 单卡 (GPU 0)
+
+是否需要启用 OOM 防护参数？
+- use_amp: false（AMP 混合精度，建议开启）
+- gradient_checkpointing: false（梯度检查点）
+- patch_size: null（全图训练）
+
+确认执行？
+
+用户: 确认
+
+Agent: [显存预估中...]
+
+⚠️ 显存预估结果：
+
+- GPU: RTX 3090 (24576 MB)
+- 峰值显存: 22100 MB
+- 使用率: 89.9%
+- 建议:
+  - 显存使用率接近上限，训练中可能因波动 OOM
+  - 建议启用 use_amp=true 可减少约 40-50% 显存
+  - 建议减小 batch_size（当前 64）
+
+建议调整为：use_amp=true，batch_size=32。是否按此调整？
+
+用户: 好的，按你说的来
+
+Agent: 已调整参数：
+- use_amp: true
+- batch_size: 32
+
+[重新预估显存...]
+
+✅ 显存预估通过：
+- 峰值显存: 8500 MB
+- 使用率: 34.6%
+- 余量充足
+
+[开始训练...]
 ```

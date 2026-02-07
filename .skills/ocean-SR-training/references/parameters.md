@@ -1,6 +1,6 @@
 # 工具参数参考
 
-> 版本: 1.0.0 | 最后更新: 2026-02-06
+> 版本: 2.0.0 | 最后更新: 2026-02-07
 
 ---
 
@@ -76,3 +76,12 @@
 | `normalizer_type` | string | "PGN" | 归一化类型: PGN / GN |
 | `wandb` | boolean | false | 是否启用 WandB 日志 |
 | `ckpt_path` | string | - | 恢复训练的检查点路径 |
+
+### OOM 防护参数（v3.0.0 新增）
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `use_amp` | boolean | false | 启用 AMP 混合精度训练（减少约 40-50% 显存） |
+| `gradient_checkpointing` | boolean | false | 启用梯度检查点（减少约 60% 激活显存，增加约 30% 计算） |
+| `patch_size` | number | null | Patch 裁剪尺寸，null 为全图训练（需为 scale 整数倍） |
+| `skip_memory_check` | boolean | false | 跳过训练前显存预估 |

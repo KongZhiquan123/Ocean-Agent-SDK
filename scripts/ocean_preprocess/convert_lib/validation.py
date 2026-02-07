@@ -12,6 +12,17 @@ import xarray as xr
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+
+def _safe_print(msg: str) -> None:
+    """向 stderr 输出日志，忽略 BrokenPipeError（父进程 pipe 关闭时）"""
+    try:
+        print(msg, file=sys.stderr, flush=True)
+    except BrokenPipeError:
+        pass
+    except OSError:
+        pass
+
+
 from .constants import (
     LAND_THRESHOLD_ABS,
     HEURISTIC_SAMPLE_SIZE
@@ -245,7 +256,7 @@ def validate_rule2(
             mask_arrays['mask_u'] = derived_u
             validation["details"]["mask_u_derived"] = True
             validation["details"]["mask_u_spatial_shape"] = list(derived_u.shape)
-            print(f"  从 mask_rho {rho_shape} 派生 mask_u {derived_u.shape}", file=sys.stderr)
+            _safe_print(f"  从 mask_rho {rho_shape} 派生 mask_u {derived_u.shape}")
 
         if 'mask_v' not in mask_spatial_shapes:
             derived_v = derive_staggered_mask(mask_rho, 'v')
@@ -254,7 +265,7 @@ def validate_rule2(
             mask_arrays['mask_v'] = derived_v
             validation["details"]["mask_v_derived"] = True
             validation["details"]["mask_v_spatial_shape"] = list(derived_v.shape)
-            print(f"  从 mask_rho {rho_shape} 派生 mask_v {derived_v.shape}", file=sys.stderr)
+            _safe_print(f"  从 mask_rho {rho_shape} 派生 mask_v {derived_v.shape}")
 
     def get_mask_for_var(var_name: str) -> Optional[str]:
         var_lower = var_name.lower()
@@ -358,14 +369,14 @@ def validate_rule2(
 
     # 2.5 启发式掩码验证
     if heuristic_check_var:
-        print(f"  执行启发式掩码验证: {heuristic_check_var}", file=sys.stderr)
+        _safe_print(f"  执行启发式掩码验证: {heuristic_check_var}")
 
         check_mask_name = get_mask_for_var(heuristic_check_var)
 
         if check_mask_name in mask_arrays:
             mask_arr = mask_arrays[check_mask_name]
             mask_source = "派生" if check_mask_name in derived_masks else "原始"
-            print(f"    使用掩码: {check_mask_name} ({mask_source}), shape={mask_arr.shape}", file=sys.stderr)
+            _safe_print(f"    使用掩码: {check_mask_name} ({mask_source}), shape={mask_arr.shape}")
 
             if heuristic_check_var in saved_files:
                 dyn_path = saved_files[heuristic_check_var]["path"]
@@ -387,8 +398,8 @@ def validate_rule2(
                     for warn in heuristic_result["warnings"]:
                         validation["warnings"].append(f"启发式检查: {warn}")
 
-                print(f"    陆地零值比例: {heuristic_result.get('land_zero_ratio', 'N/A')}", file=sys.stderr)
-                print(f"    海洋零值比例: {heuristic_result.get('ocean_zero_ratio', 'N/A')}", file=sys.stderr)
+                _safe_print(f"    陆地零值比例: {heuristic_result.get('land_zero_ratio', 'N/A')}")
+                _safe_print(f"    海洋零值比例: {heuristic_result.get('ocean_zero_ratio', 'N/A')}")
             else:
                 validation["warnings"].append(f"启发式检查变量 '{heuristic_check_var}' 未找到")
         else:
@@ -456,7 +467,7 @@ def validate_rule3(
         with open(manifest_path, 'w', encoding='utf-8') as f:
             json.dump(manifest, f, ensure_ascii=False, indent=2)
         validation["details"]["manifest_path"] = manifest_path
-        print(f"已生成 manifest: {manifest_path}", file=sys.stderr)
+        _safe_print(f"已生成 manifest: {manifest_path}")
     except Exception as e:
         validation["warnings"].append(f"生成 manifest 失败: {str(e)}")
 

@@ -15,6 +15,10 @@
  *     - 训练启动后立即返回 process_id，不再阻塞等待
  *     - 支持实时日志流（通过 ocean_sr_train_status 工具查询）
  *     - 服务器关闭时自动清理训练进程
+ *   - 2026-02-07 Leizheng: v3.0.0 OOM 防护三件套
+ *     - 新增 use_amp / gradient_checkpointing / patch_size 参数
+ *     - 训练前自动运行显存预估，OOM 提前拦截并给出建议
+ *     - 新参数通过 generate_config.py 写入 YAML 配置
  *   - 2026-02-07 Leizheng: v2.3.0 按模型选择性复制代码到用户输出目录执行，保持 SDK 源码不被修改
  *   - 2026-02-07 Leizheng: v2.2.0 使用 findPythonWithModule('torch') 自动查找带 PyTorch 的 Python
  *   - 2026-02-06 Leizheng: v2.1.0 指向 masked 版本训练框架
@@ -210,6 +214,29 @@ export const oceanSrTrainTool = defineTool({
       required: false,
       default: false
     },
+    use_amp: {
+      type: 'boolean',
+      description: '是否启用 AMP 混合精度训练（减少约 40-50% 显存）',
+      required: false,
+      default: false
+    },
+    gradient_checkpointing: {
+      type: 'boolean',
+      description: '是否启用 Gradient Checkpointing（减少约 60% 激活显存，增加约 30% 计算时间）',
+      required: false,
+      default: false
+    },
+    patch_size: {
+      type: 'number',
+      description: 'HR Patch 裁剪尺寸（如 64, 128），设置后训练时随机裁剪小区域而非全图训练。必须能被 scale 整除。',
+      required: false
+    },
+    skip_memory_check: {
+      type: 'boolean',
+      description: '跳过训练前显存预估',
+      required: false,
+      default: false
+    },
     ckpt_path: {
       type: 'string',
       description: '恢复训练的检查点路径',
@@ -396,7 +423,44 @@ export const oceanSrTrainTool = defineTool({
 
     const genInfo = JSON.parse(genResult.stdout)
 
-    // ===== 3c. 构建运行命令 =====
+    // ===== 3c. 训练前显存预估 =====
+    if (!args.skip_memory_check && mode === 'train') {
+      const estimateScript = path.join(workspaceDir, 'estimate_memory.py')
+      const cudaDevice = device_ids[0]
+      const estimateResult = await ctx.sandbox.exec(
+        `cd "${workspaceDir}" && CUDA_VISIBLE_DEVICES=${cudaDevice} "${pythonPath}" "${estimateScript}" --config "${configPath}" --device 0`,
+        { timeoutMs: 120000 }
+      )
+
+      if (estimateResult.code === 0) {
+        try {
+          const memoryEstimate = JSON.parse(estimateResult.stdout)
+          if (memoryEstimate.status === 'oom') {
+            return {
+              status: 'error',
+              error: 'GPU 显存不足（预估阶段已检测到 OOM）',
+              memory_estimate: memoryEstimate,
+              recommendations: memoryEstimate.recommendations,
+              config_path: configPath,
+              workspace_dir: workspaceDir,
+              suggestion: memoryEstimate.recommendations.join('\n')
+            }
+          }
+          // 记录预估信息（非 OOM 时不阻止训练）
+          if (memoryEstimate.status === 'success') {
+            const pct = memoryEstimate.utilization_pct
+            if (pct > 90) {
+              // 高风险但不阻止，只记录警告
+              console.warn(`[Memory] 显存使用率 ${pct}%，训练中可能因波动 OOM`)
+            }
+          }
+        } catch {
+          // 解析失败不阻止训练
+        }
+      }
+    }
+
+    // ===== 3d. 构建运行命令 =====
     // 注：代码快照由 Python 的 main.py / main_ddp.py 在训练开始前自动保存到 saving_path/code/
     let cmdPath: string
     let cmdArgs: string[]
@@ -417,7 +481,7 @@ export const oceanSrTrainTool = defineTool({
       cmdEnv = { CUDA_VISIBLE_DEVICES: cudaDevice }
     }
 
-    // ===== 3d. 启动后台训练进程 =====
+    // ===== 3e. 启动后台训练进程 =====
     const processInfo = trainingProcessManager.startProcess({
       cmd: cmdPath,
       args: cmdArgs,
@@ -433,7 +497,7 @@ export const oceanSrTrainTool = defineTool({
       },
     })
 
-    // ===== 3e. 返回启动信息（不等待训练完成） =====
+    // ===== 3f. 返回启动信息（不等待训练完成） =====
     return {
       status: 'started',
       message: `训练已在后台启动。使用 ocean_sr_train_status 工具查询进度和日志。`,

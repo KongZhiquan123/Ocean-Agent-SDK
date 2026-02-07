@@ -6,9 +6,12 @@
  * @author leizheng
  * @contributors kongzhiquan, Leizheng
  * @date 2026-02-02
- * @version 3.3.0
+ * @version 3.4.0
  *
  * @changelog
+ *   - 2026-02-07 Leizheng: v3.4.0 训练测试更新 OOM 防护流程
+ *     - testOceanSRTraining() 工作流更新为 9 步（含显存预估 + 报告生成）
+ *     - 新增 OOM 防护参数提示（use_amp, gradient_checkpointing, patch_size）
  *   - 2026-02-06 Leizheng: v3.3.0 新增超分训练测试入口
  *     - 新增 testOceanSRTraining() 交互式训练测试流程
  *     - 菜单新增选项 6、命令行参数 --train / -t
@@ -401,12 +404,12 @@ async function testOceanToolsQuick() {
 // 测试海洋超分辨率训练流程
 async function testOceanSRTraining() {
   console.log('\n' + '='.repeat(60))
-  console.log('海洋超分辨率训练测试 v1.0')
+  console.log('海洋超分辨率训练测试 v2.0（含 OOM 防护 + 显存预估）')
   console.log('='.repeat(60))
 
   console.log(`
 ┌─────────────────────────────────────────────────────────────┐
-│  训练工作流程                                                │
+│  训练工作流程（v3.0.0，9 步）                                │
 ├─────────────────────────────────────────────────────────────┤
 │  步骤 1: 确认数据目录和输出目录                              │
 │    → 提供 ocean-preprocess 预处理后的数据目录                │
@@ -420,14 +423,30 @@ async function testOceanSRTraining() {
 │    → epochs, lr, batch_size                                 │
 │    → GPU 选择：查看可用显卡，选择用哪些卡                    │
 │    → 多卡模式选择（DP / DDP）                                │
+│    → OOM 防护参数: use_amp, gradient_checkpointing,         │
+│      patch_size                                             │
 │                                                             │
 │  步骤 4: 参数汇总确认                                        │
-│    → Agent 展示完整参数列表                                  │
-│    → 你回复"确认"开始训练                                    │
+│    → Agent 展示完整参数列表（含 OOM 防护参数）               │
+│    → 你回复"确认"开始                                        │
 │                                                             │
-│  步骤 5: 执行训练                                            │
+│  步骤 5: 显存预估（自动）                                    │
+│    → dry-run forward+backward 测量峰值显存                  │
+│    → 若 OOM → 给出建议（启用 AMP / 减小 batch_size 等）     │
+│    → 可通过 skip_memory_check=true 跳过                     │
+│                                                             │
+│  步骤 6: 执行训练                                            │
 │    → 训练进度输出                                            │
-│    → 完成后展示测试指标                                      │
+│    → 陆地掩码自动处理（NaN → 0，mask 排除陆地格点）         │
+│                                                             │
+│  步骤 7: 查看结果                                            │
+│    → 训练日志、最佳模型路径、测试指标                        │
+│                                                             │
+│  步骤 8: 生成训练报告                                        │
+│    → Agent 读取报告，补充分析与建议                          │
+│                                                             │
+│  步骤 9: 完成                                                │
+│    → 向用户展示报告路径和关键结果                            │
 └─────────────────────────────────────────────────────────────┘
 
 【数据目录要求】（ocean-preprocess 预处理输出）
@@ -445,7 +464,9 @@ async function testOceanSRTraining() {
   console.log('  - "用 SwinIR 训练，数据在 /output，日志输出到 /logs"')
   console.log('  - "查看有哪些可用模型"')
   console.log('  - "看看当前 GPU 情况"')
-  console.log('\nAgent 会引导您完成模型选择、参数确认、训练执行。')
+  console.log('  - "显存不够，帮我开启 AMP 混合精度"')
+  console.log('  - "用 patch_size=128 裁剪训练"')
+  console.log('\nAgent 会引导您完成模型选择、参数确认、显存预估、训练执行。')
   console.log('-'.repeat(60))
 
   // 重置会话
@@ -468,6 +489,7 @@ async function testOceanSRTraining() {
   console.log('继续与 Agent 对话：')
   console.log('  - 选择模型（如"SwinIR"、"FNO2d"）')
   console.log('  - 确认参数（epochs, lr, batch_size, GPU 等）')
+  console.log('  - OOM 防护（"开启 AMP"、"用 patch_size=128"、"开启梯度检查点"）')
   console.log('  - 回复"确认"开始训练')
   console.log('')
   console.log('命令: "done" 结束测试, "reset" 重置会话')
@@ -537,7 +559,7 @@ async function runAutomatedTests() {
 
 // 主程序
 async function main() {
-  console.log('KODE Agent Service 交互式测试客户端 v3.3.0')
+  console.log('KODE Agent Service 交互式测试客户端 v3.4.0')
   console.log(`API URL: ${API_URL}`)
   console.log(`API Key: ${API_KEY.slice(0, 10)}...`)
 

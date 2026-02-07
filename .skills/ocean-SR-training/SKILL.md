@@ -1,6 +1,6 @@
 ---
 name: ocean-SR-training
-description: 海洋超分辨率模型训练技能 - 支持多种模型架构的训练、测试与推理（含陆地掩码处理）
+description: 海洋超分辨率模型训练技能 - 支持多种模型架构的训练、测试与推理（含陆地掩码处理 + OOM 防护）
 version: 3.0.0
 author: Leizheng
 last_modified: 2026-02-07
@@ -13,6 +13,12 @@ Changelog:
     - 新增 ocean_sr_train_status 工具查询训练状态和日志
     - 服务器关闭时自动清理训练进程
     - 工作流更新：启动训练后等待用户指令
+  - 2026-02-07 Leizheng: v3.0.0 OOM 防护 + 显存预估
+    - 新增训练前 GPU 显存预估步骤（estimate_memory.py）
+    - 支持 AMP 混合精度训练（use_amp）
+    - 支持梯度检查点（gradient_checkpointing）
+    - 支持 Patch 裁剪训练（patch_size）
+    - 工作流新增"显存预估"阶段（步骤 5）
   - 2026-02-06 Leizheng: v2.0.0 陆地掩码 + 训练报告
     - 训练框架升级为 masked 版本（ocean_SR_training_masked）
     - 损失函数/评估指标排除陆地像素
@@ -61,23 +67,30 @@ Changelog:
    │  → epochs, lr, batch_size
    │  → ocean_sr_check_gpu 查看可用 GPU
    │  → 用户选择用哪些卡、几张卡
+   │  → OOM 防护参数: use_amp, gradient_checkpointing, patch_size
    ↓
 4. 参数汇总 → 展示所有参数，等待"确认执行"
    │  → 生成 YAML 配置文件
    ↓
-5. 启动训练 → ocean_sr_train (mode=train)
+5. 显存预估 → 自动执行（estimate_memory.py）
+   │  → dry-run forward+backward 测量峰值显存
+   │  → 若预估 OOM → 向用户展示建议（启用 AMP / 减小 batch_size 等）
+   │  → 若显存充足 → 继续执行
+   │  → 可通过 skip_memory_check=true 跳过
+   ↓
+6. 启动训练 → ocean_sr_train (mode=train)
    │  → 【后台执行】立即返回 process_id，不阻塞等待
    │  → 单卡: main.py / 多卡 DDP: torchrun main_ddp.py
    │  → 陆地掩码自动处理（NaN → 0，mask 排除陆地格点）
    ↓
-6. 等待用户指令 → 【重要】训练启动后，告知用户训练已开始
+7. 等待用户指令 → 【重要】训练启动后，告知用户训练已开始
    │  → 告知用户可以：
    │     - 查看训练状态：ocean_sr_train_status({ process_id: "xxx" })
    │     - 查看最新日志：ocean_sr_train_status({ action: "logs", process_id: "xxx", tail: 50 })
    │     - 终止训练：ocean_sr_train_status({ action: "kill", process_id: "xxx" })
    │  → 【不要主动轮询】等待用户主动询问进度或给出下一步指令
    ↓
-7. 训练完成后 → 用户询问时检查状态
+8. 训练完成后 → 用户询问时检查状态
    │  → 如果 status="completed"，展示结果并询问是否生成报告
    │  → 如果 status="failed"，展示错误日志和修改建议
    ↓
@@ -150,6 +163,44 @@ ocean_sr_train(...)
 ### 评估时掩码使用
 - 所有模型评估统一使用 `MaskedEvaluator`
 - MSE/RMSE/PSNR/SSIM 只在海洋格点上计算
+
+---
+
+## OOM 防护机制（v3.0.0 新增）
+
+训练前自动进行 GPU 显存预估，防止训练过程中 OOM 崩溃。
+
+### 显存预估（estimate_memory.py）
+- 训练开始前自动执行 dry-run（一次 forward + backward）
+- 测量实际峰值显存占用（`torch.cuda.max_memory_allocated`）
+- 若预估 OOM，自动给出优化建议并阻止训练
+- 可通过 `skip_memory_check=true` 跳过预估
+
+### AMP 混合精度（use_amp）
+- 使用 `torch.amp.autocast` + `GradScaler` 进行混合精度训练
+- 减少约 40-50% 显存占用
+- 适用于所有模型架构（标准 + 扩散 + ResShift）
+- 默认关闭，建议显存紧张时启用
+
+### 梯度检查点（gradient_checkpointing）
+- 使用 `torch.utils.checkpoint` 在前向传播时释放中间激活
+- 减少约 60% 激活显存，代价是约 30% 额外计算
+- 适用于所有模型架构
+- 默认关闭，建议大模型或高分辨率场景启用
+
+### Patch 裁剪训练（patch_size）
+- 每个 batch 随机裁剪 `patch_size × patch_size` 的小区域训练
+- 显著减少单次 forward 的显存占用
+- 支持 per-patch mask（自动裁剪对应的陆地掩码）
+- 值为 `null` 时使用全图训练（默认）
+- 建议值：64、128、256（需为 scale 的整数倍）
+
+### OOM 时的建议优先级
+1. 启用 `use_amp=true`（最易操作，效果显著）
+2. 减小 `batch_size`（如 32 → 16）
+3. 启用 `gradient_checkpointing=true`（有计算代价）
+4. 设置 `patch_size`（如 64 或 128）
+5. 使用多卡训练分摊显存
 
 ---
 

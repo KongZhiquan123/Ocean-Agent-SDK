@@ -202,15 +202,15 @@ app.post('/api/chat/stream', requireAuth, async (req: Request, res: Response) =>
     }
   }, 2000)
 
-  // 请求超时（10 分钟）
-  const REQUEST_TIMEOUT = 10 * 60 * 1000
+  // 请求超时（2 小时，训练任务可能持续很长时间）
+  const REQUEST_TIMEOUT = 2 * 60 * 60 * 1000
   const timeoutTimer = setTimeout(() => {
     if (!res.writableEnded && !clientDisconnected) {
       console.warn(`[server] [req ${reqId}] 请求超时`)
       sendSSE(res, {
         type: 'error',
         error: 'REQUEST_TIMEOUT',
-        message: 'Request timeout after 10 minutes',
+        message: 'Request timeout after 2 hours',
         timestamp: Date.now(),
       })
       cleanup()

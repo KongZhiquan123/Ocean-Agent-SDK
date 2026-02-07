@@ -15,10 +15,22 @@ core.py - 核心转换函数
 import os
 import sys
 import glob
+import traceback
 
 import numpy as np
 import xarray as xr
 from typing import Any, Dict, List, Optional, Tuple
+
+
+def _safe_print(msg: str) -> None:
+    """向 stderr 输出日志，忽略 BrokenPipeError（父进程 pipe 关闭时）"""
+    try:
+        print(msg, file=sys.stderr, flush=True)
+    except BrokenPipeError:
+        pass
+    except OSError:
+        pass
+
 
 from .constants import (
     MASK_VARS_DEFAULT,
@@ -150,15 +162,29 @@ def convert_npy(config: Dict[str, Any]) -> Dict[str, Any]:
 
     try:
         # 1. 获取 NC 文件列表
-        search_path = os.path.join(nc_folder, dyn_file_pattern)
-        nc_files = sorted(glob.glob(search_path))
-
+        # 优先使用 config 中显式指定的 nc_files 列表（由 full.ts 传递），
+        # 否则回退到 glob 搜索目录
+        explicit_nc_files = config.get("nc_files")
+        if explicit_nc_files and isinstance(explicit_nc_files, list) and len(explicit_nc_files) > 0:
+            # 显式文件列表：如果是相对路径，加上 nc_folder 前缀
+            nc_files = []
+            for f in explicit_nc_files:
+                if os.path.isabs(f):
+                    nc_files.append(f)
+                else:
+                    nc_files.append(os.path.join(nc_folder, f))
+            nc_files = sorted(nc_files)
+            _safe_print(f"使用显式文件列表: {len(nc_files)} 个 NC 文件")
+        else:
+            search_path = os.path.join(nc_folder, dyn_file_pattern)
+            nc_files = sorted(glob.glob(search_path))
+            _safe_print(f"通过 glob 发现 {len(nc_files)} 个 NC 文件")
         if not nc_files:
             result["errors"].append(f"未找到匹配的 NC 文件: {search_path}")
             result["status"] = "error"
             return result
 
-        print(f"找到 {len(nc_files)} 个 NC 文件", file=sys.stderr)
+        _safe_print(f"找到 {len(nc_files)} 个 NC 文件")
         result["nc_file_count"] = len(nc_files)
 
         # 2. 创建输出目录
@@ -172,26 +198,26 @@ def convert_npy(config: Dict[str, Any]) -> Dict[str, Any]:
         region_crop_info = None
 
         if enable_region_crop and crop_lon_range and crop_lat_range:
-            print(f"\n--- 区域裁剪: 模式={crop_mode} ---", file=sys.stderr)
-            print(f"    经度范围: {crop_lon_range}", file=sys.stderr)
-            print(f"    纬度范围: {crop_lat_range}", file=sys.stderr)
+            _safe_print(f"\n--- 区域裁剪: 模式={crop_mode} ---")
+            _safe_print(f"    经度范围: {crop_lon_range}")
+            _safe_print(f"    纬度范围: {crop_lat_range}")
 
             try:
                 # 加载坐标数组
                 lon_arr, lat_arr = load_coordinate_arrays(
                     static_file, nc_files, lon_var, lat_var
                 )
-                print(f"    坐标形状: lon={lon_arr.shape}, lat={lat_arr.shape}", file=sys.stderr)
+                _safe_print(f"    坐标形状: lon={lon_arr.shape}, lat={lat_arr.shape}")
 
                 # 计算区域裁剪索引
                 h_start, h_end, w_start, w_end = compute_region_crop_indices(
                     lon_arr, lat_arr, crop_lon_range, crop_lat_range
                 )
-                print(f"    区域裁剪索引: H=[{h_start}:{h_end}], W=[{w_start}:{w_end}]", file=sys.stderr)
+                _safe_print(f"    区域裁剪索引: H=[{h_start}:{h_end}], W=[{w_start}:{w_end}]")
 
                 region_h = h_end - h_start
                 region_w = w_end - w_start
-                print(f"    区域尺寸: {region_h} x {region_w}", file=sys.stderr)
+                _safe_print(f"    区域尺寸: {region_h} x {region_w}")
 
                 if crop_mode == "two_step":
                     # 两步裁剪模式：先保存 raw，再做尺寸调整保存 hr
@@ -208,8 +234,8 @@ def convert_npy(config: Dict[str, Any]) -> Dict[str, Any]:
                         trim_w = region_w - final_w
                         hr_h_slice = slice(trim_h // 2, region_h - (trim_h - trim_h // 2))
                         hr_w_slice = slice(trim_w // 2, region_w - (trim_w - trim_w // 2))
-                        print(f"    HR 裁剪（相对于 raw）: H=[{hr_h_slice.start}:{hr_h_slice.stop}], W=[{hr_w_slice.start}:{hr_w_slice.stop}]", file=sys.stderr)
-                        print(f"    HR 尺寸: {final_h} x {final_w}", file=sys.stderr)
+                        _safe_print(f"    HR 裁剪（相对于 raw）: H=[{hr_h_slice.start}:{hr_h_slice.stop}], W=[{hr_w_slice.start}:{hr_w_slice.stop}]")
+                        _safe_print(f"    HR 尺寸: {final_h} x {final_w}")
 
                     region_crop_info = {
                         "mode": "two_step",
@@ -232,13 +258,13 @@ def convert_npy(config: Dict[str, Any]) -> Dict[str, Any]:
                         h_start, h_end, w_start, w_end = adjust_crop_for_scale(
                             h_start, h_end, w_start, w_end, scale, max_h, max_w
                         )
-                        print(f"    一步到位调整后: H=[{h_start}:{h_end}], W=[{w_start}:{w_end}]", file=sys.stderr)
+                        _safe_print(f"    一步到位调整后: H=[{h_start}:{h_end}], W=[{w_start}:{w_end}]")
 
                     hr_h_slice = slice(h_start, h_end)
                     hr_w_slice = slice(w_start, w_end)
                     final_h = h_end - h_start
                     final_w = w_end - w_start
-                    print(f"    HR 尺寸: {final_h} x {final_w}", file=sys.stderr)
+                    _safe_print(f"    HR 尺寸: {final_h} x {final_w}")
 
                     region_crop_info = {
                         "mode": "one_step",
@@ -252,12 +278,12 @@ def convert_npy(config: Dict[str, Any]) -> Dict[str, Any]:
                 result["errors"].append(f"区域裁剪计算失败: {str(e)}")
                 result["status"] = "error"
                 import traceback
-                print(f"区域裁剪错误: {traceback.format_exc()}", file=sys.stderr)
+                _safe_print(f"区域裁剪错误: {traceback.format_exc()}")
                 return result
 
         # ========== 3. 两步裁剪模式：先保存 raw ==========
         if enable_region_crop and crop_mode == "two_step" and raw_h_slice is not None:
-            print(f"\n--- Step 3a: 保存区域裁剪后的 raw 数据 ---", file=sys.stderr)
+            _safe_print(f"\n--- Step 3a: 保存区域裁剪后的 raw 数据 ---")
 
             # 保存动态变量到 raw/
             raw_dyn_saved = convert_dynamic_vars(
@@ -312,9 +338,9 @@ def convert_npy(config: Dict[str, Any]) -> Dict[str, Any]:
             else:
                 final_hr_w_slice = raw_w_slice
 
-            print(f"    HR 绝对裁剪: H=[{final_hr_h_slice.start}:{final_hr_h_slice.stop}], W=[{final_hr_w_slice.start}:{final_hr_w_slice.stop}]", file=sys.stderr)
+            _safe_print(f"    HR 绝对裁剪: H=[{final_hr_h_slice.start}:{final_hr_h_slice.stop}], W=[{final_hr_w_slice.start}:{final_hr_w_slice.stop}]")
 
-        print(f"\n--- Step 3b: 保存 HR 数据 ---", file=sys.stderr)
+        _safe_print(f"\n--- Step 3b: 保存 HR 数据 ---")
         dyn_saved = convert_dynamic_vars(
             nc_files, dyn_vars, output_base, result,
             allow_nan=allow_nan,
@@ -334,7 +360,7 @@ def convert_npy(config: Dict[str, Any]) -> Dict[str, Any]:
 
         # 4. 转换静态变量到 hr/
         if stat_vars:
-            print(f"\n--- Step 4: 保存静态变量到 HR ---", file=sys.stderr)
+            _safe_print(f"\n--- Step 4: 保存静态变量到 HR ---")
             sta_saved = convert_static_vars(
                 static_file, stat_vars, mask_vars, output_base, result,
                 allow_nan=allow_nan,
@@ -349,7 +375,7 @@ def convert_npy(config: Dict[str, Any]) -> Dict[str, Any]:
 
         # 5. 后置验证
         if run_validation:
-            print("\n--- 执行后置验证 (Rule 1/2/3) ---", file=sys.stderr)
+            _safe_print("\n--- 执行后置验证 (Rule 1/2/3) ---")
 
             # Rule 1
             rule1 = validate_rule1(
@@ -395,7 +421,7 @@ def convert_npy(config: Dict[str, Any]) -> Dict[str, Any]:
             result["status"] = "pass"
             result["message"] = f"转换完成，已保存 {len(result['saved_files'])} 个文件到 {output_base}"
 
-        print(f"\n{result['message']}", file=sys.stderr)
+        _safe_print(f"\n{result['message']}")
 
     except Exception as e:
         result["status"] = "error"

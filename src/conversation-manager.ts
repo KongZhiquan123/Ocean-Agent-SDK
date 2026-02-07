@@ -75,6 +75,9 @@ class ConversationManager {
         autoRun: false,  // 不自动运行，等待新消息
       })
 
+      // 增大 KODE SDK 内部处理超时（默认 5 分钟，预处理/训练流水线可能需要数小时）
+      ;(agent as any).PROCESSING_TIMEOUT = 2 * 60 * 60 * 1000 // 2 小时
+
       console.log(`[ConversationManager] 从磁盘加载会话 ${agentId}`)
       return agent
     } catch (error) {

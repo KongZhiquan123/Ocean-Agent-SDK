@@ -3,9 +3,12 @@ ResShift Trainer (masked version).
 
 @author Leizheng
 @date 2026-02-06
-@version 2.0.0
+@version 3.0.0
 
 @changelog
+  - 2026-02-07 Leizheng: v3.0.0 AMP 混合精度 + Gradient Checkpointing
+    - train() 使用 autocast + GradScaler
+    - gradient checkpointing 包装 training_losses forward
   - 2026-02-06 Leizheng: v2.0.0 masked 版本
     - 训练 loss 来自 base_diffusion.training_losses()，无法直接注入 mask
     - 评估阶段通过继承 BaseTrainer.evaluate() 使用 masked metrics
@@ -14,6 +17,7 @@ ResShift Trainer (masked version).
 
 import torch
 import torch.distributed as dist
+import torch.utils.checkpoint
 import functools
 import numpy as np
 from models import _ddpm_dict
@@ -26,14 +30,14 @@ from utils.metrics import get_obj_from_str
 class ResshiftTrainer(BaseTrainer):
     def __init__(self, args):
         super().__init__(args)
-        
+
     def build_model(self, **kwargs):
-        
+
         self.resshift_cfg = self.args['resshift']
-        
+
         params = self.resshift_cfg["model"]['params']
         model =get_obj_from_str(self.resshift_cfg['model']['target'])(**params)
-        
+
         params = self.resshift_cfg["diffusion"]['params']
         self.base_diffusion = get_obj_from_str(self.resshift_cfg['diffusion']['target'])(**params)
         return model
@@ -43,48 +47,57 @@ class ResshiftTrainer(BaseTrainer):
         if self.train_sampler is not None:
             self.train_sampler.set_epoch(epoch)
         self.model.train()
-        for i, (x, y) in enumerate(self.train_loader):
+        for i, batch in enumerate(self.train_loader):
+            # Patch 训练时 batch = (x, y, mask_hr_patch)，否则 (x, y)
+            if len(batch) == 3:
+                x, y, _mask_hr = batch
+            else:
+                x, y = batch
             x = x.to(self.device, non_blocking=True)
             y = y.to(self.device, non_blocking=True)
             x = x.permute(0, 3, 1, 2)
             y = y.permute(0, 3, 1, 2)
             x = F.interpolate(x, size=y.shape[2:], mode='bicubic', align_corners=False)
 
-            micro_data = {
-                'lq': x,
-                'gt': y
-            }
             B, C, H, W = x.shape
-            
+
             tt = torch.randint(
                     0, self.base_diffusion.num_timesteps,
-                    size=(micro_data['gt'].shape[0],),
-                    device= x.device,
+                    size=(y.shape[0],),
+                    device=x.device,
                     )
 
-            model_kwargs = {'lq':micro_data['lq'],}
+            with torch.amp.autocast('cuda', enabled=self.use_amp):
+                if self.gradient_checkpointing:
+                    def _forward(gt, lq, timesteps):
+                        model_kwargs = {'lq': lq}
+                        losses, z0, zt = self.base_diffusion.training_losses(
+                            self.model, gt, lq, timesteps,
+                            first_stage_model=None, model_kwargs=model_kwargs, noise=None,
+                        )
+                        return losses['mse'], z0, zt
+                    loss, z0_pred, z_t = torch.utils.checkpoint.checkpoint(
+                        _forward, y, x, tt, use_reentrant=False
+                    )
+                else:
+                    model_kwargs = {'lq': x}
+                    compute_losses = functools.partial(
+                        self.base_diffusion.training_losses,
+                        self.model, y, x, tt,
+                        first_stage_model=None,
+                        model_kwargs=model_kwargs,
+                        noise=None,
+                    )
+                    losses, z0_pred, z_t = compute_losses()
+                    loss = losses['mse']
 
-            compute_losses = functools.partial(
-                self.base_diffusion.training_losses,
-                self.model,
-                micro_data['gt'],
-                micro_data['lq'],
-                tt,
-                first_stage_model=None,
-                model_kwargs=model_kwargs,
-                noise=None,
-            )
-            
-            losses, z0_pred, z_t = compute_losses()
-            
-            loss = losses['mse']
-            # print(f"epoch:{epoch}, iter:{i}, loss:{loss.item():.6f}")
             loss_record.update({"train_loss": loss.item()}, n=B)
-            
+
             self.optimizer.zero_grad()
-            loss.backward()
-            self.optimizer.step()
-            
+            self.scaler.scale(loss).backward()
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+
         if self.scheduler is not None:
             self.scheduler.step()
         return loss_record

@@ -14,9 +14,13 @@ OceanNPY Dataset - 适配 ocean-preprocess 预处理输出的数据集类（带�
 
 @author Leizheng
 @date 2026-02-06
-@version 2.1.0
+@version 3.0.0
 
 @changelog
+  - 2026-02-07 Leizheng: v3.0.0 添加 Patch 训练支持
+    - OceanNPYDatasetBase 支持 patch_size 参数，训练时随机裁剪 HR/LR patch
+    - 裁剪同时裁剪对应的 mask，返回 (x, y, mask_hr_patch) 三元组
+    - 仅训练集裁剪，验证/测试集仍使用全图
   - 2026-02-06 Leizheng: v2.1.0 修复 PGN 归一化器 HR/LR 空间分辨率不匹配
     - PGN 模式下 HR 和 LR 使用各自独立的 normalizer（空间维度不同不能共用）
     - GN 模式下 HR 和 LR 共用同一个 normalizer（全局标量统计量）
@@ -138,7 +142,22 @@ class OceanNPYDataset:
         self.mask_hr = mask_hr_spatial  # [1, H, W, 1] bool
         self.mask_lr = mask_lr_spatial  # [1, h, w, 1] bool
 
-        self.train_dataset = OceanNPYDatasetBase(train_lr, train_hr, mode='train')
+        # Patch 训练参数
+        patch_size = data_args.get('patch_size', None)
+        scale = data_args.get('sample_factor', 1)
+
+        if patch_size is not None:
+            H, W = train_hr.shape[1], train_hr.shape[2]
+            assert patch_size <= H and patch_size <= W, (
+                f"patch_size ({patch_size}) must be <= HR spatial dims ({H}x{W})")
+            assert patch_size % scale == 0, (
+                f"patch_size ({patch_size}) must be divisible by scale ({scale})")
+            print(f'[OceanNPY] Patch training: HR patch {patch_size}x{patch_size}, '
+                  f'LR patch {patch_size//scale}x{patch_size//scale}')
+
+        self.train_dataset = OceanNPYDatasetBase(
+            train_lr, train_hr, mode='train',
+            patch_size=patch_size, scale=scale, mask_hr=mask_hr_spatial)
         self.valid_dataset = OceanNPYDatasetBase(valid_lr, valid_hr, mode='valid')
         self.test_dataset = OceanNPYDatasetBase(test_lr, test_hr, mode='test')
 
@@ -197,21 +216,54 @@ class OceanNPYDataset:
 
 class OceanNPYDatasetBase(Dataset):
     """
-    PyTorch Dataset wrapper。
+    PyTorch Dataset wrapper，支持可选的 Patch 随机裁剪。
 
     Args:
         x (Tensor): LR input [N, h, w, C]
         y (Tensor): HR target [N, H, W, C]
         mode (str): 'train', 'valid', or 'test'
+        patch_size (int|None): HR patch 尺寸，None 则不裁剪
+        scale (int): 超分辨率倍数（用于推导 LR patch 坐标）
+        mask_hr (Tensor|None): [1, H, W, 1] bool，HR 掩码
+
+    Returns:
+        训练且 patch_size 有效且 mask_hr 存在时: (x, y, mask_hr_patch)
+        其他情况: (x, y)
     """
 
-    def __init__(self, x, y, mode='train', **kwargs):
+    def __init__(self, x, y, mode='train', patch_size=None, scale=1, mask_hr=None, **kwargs):
         self.mode = mode
         self.x = x
         self.y = y
+        self.patch_size = patch_size
+        self.scale = scale
+        self.mask_hr = mask_hr  # [1, H, W, 1] bool or None
 
     def __len__(self):
         return len(self.x)
 
     def __getitem__(self, idx):
-        return self.x[idx], self.y[idx]
+        x = self.x[idx]  # [h, w, C]
+        y = self.y[idx]  # [H, W, C]
+
+        if self.patch_size is not None and self.mode == 'train':
+            H, W, C = y.shape
+            ps = self.patch_size
+
+            # 随机裁剪 HR patch
+            top = torch.randint(0, H - ps + 1, (1,)).item()
+            left = torch.randint(0, W - ps + 1, (1,)).item()
+            y = y[top:top+ps, left:left+ps, :]
+
+            # 推导对应的 LR patch 坐标
+            lr_ps = ps // self.scale
+            lr_top = top // self.scale
+            lr_left = left // self.scale
+            x = x[lr_top:lr_top+lr_ps, lr_left:lr_left+lr_ps, :]
+
+            # 裁剪对应的 mask patch
+            if self.mask_hr is not None:
+                mask_hr_patch = self.mask_hr[0, top:top+ps, left:left+ps, :]  # [ps, ps, 1]
+                return x, y, mask_hr_patch
+
+        return x, y
