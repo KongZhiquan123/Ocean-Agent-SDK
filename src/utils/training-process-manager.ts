@@ -7,9 +7,13 @@
  *              - 进程生命周期管理（服务器关闭时清理所有进程）
  * @author kongzhiquan
  * @date 2026-02-07
- * @version 1.1.0
+ * @version 1.2.0
  *
  * @changelog
+ *   - 2026-02-07 kongzhiquan: v1.2.0 增强错误处理
+ *     - 移除 EventEmitter 继承，避免未处理的 error 事件导致崩溃
+ *     - 日志流写入添加错误处理
+ *     - 文件读取操作添加 try-catch
  *   - 2026-02-07 kongzhiquan: v1.1.0 优化日志输出
  *     - stderr 中的正常日志（INFO/DEBUG）直接写入，不加前缀
  *     - 只有真正的错误（ERROR/WARNING/Traceback 等）才加 [STDERR] 前缀
@@ -17,9 +21,18 @@
  */
 
 import { spawn, ChildProcess } from 'child_process'
-import { createWriteStream, existsSync, mkdirSync, readFileSync, statSync } from 'fs'
+import {
+  createWriteStream,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  statSync,
+  openSync,
+  readSync,
+  closeSync,
+  WriteStream,
+} from 'fs'
 import path from 'path'
-import { EventEmitter } from 'events'
 
 export interface TrainingProcessInfo {
   id: string
@@ -46,11 +59,11 @@ export interface TrainingProcessInfo {
 interface ManagedProcess {
   info: TrainingProcessInfo
   process: ChildProcess
-  logStream: ReturnType<typeof createWriteStream>
-  errorLogStream: ReturnType<typeof createWriteStream>
+  logStream: WriteStream
+  errorLogStream: WriteStream
 }
 
-class TrainingProcessManager extends EventEmitter {
+class TrainingProcessManager {
   private processes: Map<string, ManagedProcess> = new Map()
   private isShuttingDown = false
 
@@ -91,6 +104,19 @@ class TrainingProcessManager extends EventEmitter {
   }
 
   /**
+   * 安全写入日志流
+   */
+  private safeWrite(stream: WriteStream, data: string): void {
+    try {
+      if (!stream.destroyed) {
+        stream.write(data)
+      }
+    } catch (err) {
+      console.error('[TrainingProcessManager] Failed to write to log stream:', err)
+    }
+  }
+
+  /**
    * 启动一个后台训练进程
    */
   startProcess(options: {
@@ -118,6 +144,14 @@ class TrainingProcessManager extends EventEmitter {
     const logStream = createWriteStream(logFile, { flags: 'a' })
     const errorLogStream = createWriteStream(errorLogFile, { flags: 'a' })
 
+    // 处理日志流错误，避免未捕获异常
+    logStream.on('error', (err) => {
+      console.error(`[TrainingProcessManager] Log stream error for ${id}:`, err)
+    })
+    errorLogStream.on('error', (err) => {
+      console.error(`[TrainingProcessManager] Error log stream error for ${id}:`, err)
+    })
+
     // 写入启动信息
     const startHeader = `
 ================================================================================
@@ -129,7 +163,7 @@ Start Time: ${new Date().toISOString()}
 ================================================================================
 
 `
-    logStream.write(startHeader)
+    this.safeWrite(logStream, startHeader)
 
     // 合并环境变量
     const processEnv = {
@@ -163,8 +197,7 @@ Start Time: ${new Date().toISOString()}
     // 管道 stdout 到日志文件
     if (childProcess.stdout) {
       childProcess.stdout.on('data', (data: Buffer) => {
-        logStream.write(data)
-        this.emit('stdout', { id, data: data.toString() })
+        this.safeWrite(logStream, data.toString())
       })
     }
 
@@ -175,12 +208,11 @@ Start Time: ${new Date().toISOString()}
         const text = data.toString()
         // 判断是否为真正的错误内容
         if (this.isErrorContent(text)) {
-          logStream.write(`[STDERR] ${text}`)
+          this.safeWrite(logStream, `[STDERR] ${text}`)
         } else {
-          logStream.write(text)
+          this.safeWrite(logStream, text)
         }
-        errorLogStream.write(text)
-        this.emit('stderr', { id, data: text })
+        this.safeWrite(errorLogStream, text)
       })
     }
 
@@ -209,13 +241,11 @@ End Time: ${new Date().toISOString()}
 Duration: ${((managed.info.endTime - managed.info.startTime) / 1000).toFixed(1)}s
 ================================================================================
 `
-        logStream.write(endFooter)
+        this.safeWrite(logStream, endFooter)
 
         // 关闭日志流
         logStream.end()
         errorLogStream.end()
-
-        this.emit('exit', { id, code, signal, status: managed.info.status })
       }
     })
 
@@ -224,11 +254,10 @@ Duration: ${((managed.info.endTime - managed.info.startTime) / 1000).toFixed(1)}
       if (managed) {
         managed.info.status = 'failed'
         managed.info.endTime = Date.now()
-        errorLogStream.write(`Process error: ${err.message}\n`)
-        logStream.write(`[ERROR] Process error: ${err.message}\n`)
+        this.safeWrite(errorLogStream, `Process error: ${err.message}\n`)
+        this.safeWrite(logStream, `[ERROR] Process error: ${err.message}\n`)
         logStream.end()
         errorLogStream.end()
-        this.emit('error', { id, error: err })
       }
     })
 
@@ -280,33 +309,42 @@ Duration: ${((managed.info.endTime - managed.info.startTime) / 1000).toFixed(1)}
     if (!managed) return undefined
 
     const { logFile } = managed.info
-    if (!existsSync(logFile)) {
-      return { content: '', size: 0, offset: 0 }
-    }
 
-    const stat = statSync(logFile)
-    const size = stat.size
+    try {
+      if (!existsSync(logFile)) {
+        return { content: '', size: 0, offset: 0 }
+      }
 
-    if (options?.tail) {
-      // 读取最后 N 行
+      const stat = statSync(logFile)
+      const size = stat.size
+
+      if (options?.tail) {
+        // 读取最后 N 行
+        const content = readFileSync(logFile, 'utf-8')
+        const lines = content.split('\n')
+        const tailLines = lines.slice(-options.tail).join('\n')
+        return { content: tailLines, size, offset: size }
+      }
+
+      if (options?.offset !== undefined && options.offset < size) {
+        // 增量读取
+        const buffer = Buffer.alloc(size - options.offset)
+        const fd = openSync(logFile, 'r')
+        try {
+          readSync(fd, buffer, 0, buffer.length, options.offset)
+        } finally {
+          closeSync(fd)
+        }
+        return { content: buffer.toString('utf-8'), size, offset: size }
+      }
+
+      // 读取全部
       const content = readFileSync(logFile, 'utf-8')
-      const lines = content.split('\n')
-      const tailLines = lines.slice(-options.tail).join('\n')
-      return { content: tailLines, size, offset: size }
+      return { content, size, offset: size }
+    } catch (err) {
+      console.error(`[TrainingProcessManager] Failed to read logs for ${id}:`, err)
+      return { content: `Error reading logs: ${(err as Error).message}`, size: 0, offset: 0 }
     }
-
-    if (options?.offset !== undefined && options.offset < size) {
-      // 增量读取
-      const buffer = Buffer.alloc(size - options.offset)
-      const fd = require('fs').openSync(logFile, 'r')
-      require('fs').readSync(fd, buffer, 0, buffer.length, options.offset)
-      require('fs').closeSync(fd)
-      return { content: buffer.toString('utf-8'), size, offset: size }
-    }
-
-    // 读取全部
-    const content = readFileSync(logFile, 'utf-8')
-    return { content, size, offset: size }
   }
 
   /**
