@@ -6,9 +6,11 @@
  * @author leizheng
  * @contributors kongzhiquan
  * @date 2026-02-04
- * @version 2.5.0
+ * @version 2.6.0
  *
  * @changelog
+ *   - 2026-02-07 Leizheng: v2.6.0 智能路径处理，nc_folder 同时支持目录和单个文件路径
+ *     - 传入 .nc 文件路径时自动拆分为目录+文件名，无需复制数据
  *   - 2026-02-05 kongzhiquan: v2.5.0 增强验证逻辑
  *     - 添加文件数量验证（file_count === 0 时抛出错误）
  *     - 添加动态变量候选验证（无动态变量时抛出错误）
@@ -95,7 +97,7 @@ export const oceanInspectDataTool = defineTool({
   params: {
     nc_folder: {
       type: 'string',
-      description: 'NC文件所在目录的绝对路径'
+      description: 'NC文件所在目录的绝对路径，也可以直接传入单个 .nc 文件路径（自动提取所在目录）'
     },
     nc_files: {
       type: 'array',
@@ -141,14 +143,30 @@ export const oceanInspectDataTool = defineTool({
 
   async exec(args, ctx) {
     const {
-      nc_folder,
-      nc_files,
+      nc_folder: rawNcFolder,
+      nc_files: rawNcFiles,
       static_file,
       file_filter = '',
       dyn_file_pattern = '*.nc',
       mask_vars,
       static_vars
     } = args
+
+    // 智能路径处理：支持目录或单个 .nc 文件路径
+    let nc_folder = rawNcFolder.trim()
+    let nc_files = rawNcFiles
+
+    if (nc_folder.endsWith('.nc') || nc_folder.endsWith('.NC')) {
+      const filePath = nc_folder
+      const lastSlash = filePath.lastIndexOf('/')
+      if (lastSlash === -1) {
+        nc_folder = '.'
+        nc_files = [filePath]
+      } else {
+        nc_folder = filePath.substring(0, lastSlash)
+        nc_files = [filePath.substring(lastSlash + 1)]
+      }
+    }
 
     // 1. 检查 Python 环境
     const pythonPath = findFirstPythonPath()

@@ -6,9 +6,10 @@
  * @author leizheng
  * @contributors kongzhiquan
  * @date 2026-02-04
- * @version 3.3.0
+ * @version 3.4.0
  *
  * @changelog
+ *   - 2026-02-07 Leizheng: v3.4.0 智能路径处理，nc_folder 同时支持目录和单个文件路径
  *   - 2026-02-05 kongzhiquan: v3.3.0 日期文件名功能
  *     - 新增 use_date_filename, date_format, time_var 参数
  *     - 支持从 NC 文件提取时间戳作为 NPY 文件名
@@ -118,7 +119,7 @@ export const oceanConvertNpyTool = defineTool({
   params: {
     nc_folder: {
       type: 'string',
-      description: '动态NC文件所在目录 (dyn_dir)'
+      description: '动态NC文件所在目录 (dyn_dir)，也可以直接传入单个 .nc 文件路径'
     },
     output_base: {
       type: 'string',
@@ -319,7 +320,7 @@ export const oceanConvertNpyTool = defineTool({
 
   async exec(args, ctx) {
     const {
-      nc_folder,
+      nc_folder: rawNcFolder,
       output_base,
       dyn_vars,
       static_file,
@@ -327,7 +328,7 @@ export const oceanConvertNpyTool = defineTool({
       mask_vars = [],  // P0 修复：默认为空数组，由调用方负责传入
       lon_var,         // P0 修复：移除硬编码默认值
       lat_var,         // P0 修复：移除硬编码默认值
-      dyn_file_pattern = '*.nc',
+      dyn_file_pattern: rawFilePattern = '*.nc',
       run_validation = true,
       mask_src_var,    // P0 修复：移除硬编码默认值
       mask_derive_op = 'identity',
@@ -356,6 +357,22 @@ export const oceanConvertNpyTool = defineTool({
       date_format = 'auto',
       time_var
     } = args
+
+    // 智能路径处理：支持目录或单个 .nc 文件路径
+    let nc_folder = rawNcFolder.trim()
+    let dyn_file_pattern = rawFilePattern
+
+    if (nc_folder.endsWith('.nc') || nc_folder.endsWith('.NC')) {
+      const filePath = nc_folder
+      const lastSlash = filePath.lastIndexOf('/')
+      if (lastSlash === -1) {
+        dyn_file_pattern = filePath
+        nc_folder = '.'
+      } else {
+        nc_folder = filePath.substring(0, lastSlash)
+        dyn_file_pattern = filePath.substring(lastSlash + 1)
+      }
+    }
 
     // 验证数据集划分比例（必须由用户指定）
     if (train_ratio === undefined || valid_ratio === undefined || test_ratio === undefined) {

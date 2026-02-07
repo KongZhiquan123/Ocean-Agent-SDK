@@ -127,7 +127,7 @@ export const oceanPreprocessFullTool = defineTool({
   params: {
     nc_folder: {
       type: 'string',
-      description: 'NC文件所在目录'
+      description: 'NC文件所在目录，也可以直接传入单个 .nc 文件路径'
     },
     nc_files: {
       type: 'array',
