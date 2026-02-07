@@ -237,7 +237,7 @@ When generating or modifying code files, always add/update a standardized header
  *   - YYYY-MM-DD kongzhiquan: version description
  */
 ```
-If the file already has a header, update the "Changelog" section and append `kongzhiquan`(your name should be here) to the "@contributors" list if not already present.
+If the file already has a header, update the "Changelog" section and append `kongzhiquan`(your name should be here) to the "@contributors" list if not already present. If '@contributors' is not present, add it below the author line.
 
 ## Python Command Execution
 If you need to use Bash tools to run Python, please use the executable file path /home/lz/miniconda3/envs/pytorch/bin/python to ensure the correct Python environment is used.
