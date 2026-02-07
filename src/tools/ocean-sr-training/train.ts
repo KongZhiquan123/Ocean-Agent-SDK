@@ -133,7 +133,7 @@ export const oceanSrTrainTool = defineTool({
     device_ids: {
       type: 'array',
       items: { type: 'number' },
-      description: '使用的 GPU 列表（如 [0, 1, 2, 3]）。必须由用户确认。',
+      description: '使用的 GPU 列表（如 [0, 1, 2, 3]）。必须由用户确认。若启用多卡训练，至少需要两个 GPU。',
       required: false
     },
     distribute: {

@@ -59,7 +59,7 @@ export async function createAgent(config: AgentConfig): Promise<Agent> {
   const sandboxConfig = {
     kind: 'local' as const,
     workDir: config.workingDir,
-    allowPaths: ['/data'],
+    allowPaths: ['/data', `${process.cwd()}/.skills`], // 允许访问数据目录和技能目录
   }
 
   const agent = await Agent.create(

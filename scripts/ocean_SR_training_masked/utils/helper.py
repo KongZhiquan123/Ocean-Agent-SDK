@@ -1,13 +1,8 @@
 import os
 import yaml
 import torch
-import shutil
-import inspect
 import logging
-import inspect
 import numpy as np
-
-from datetime import datetime
 
 
 def set_seed(seed):
@@ -37,15 +32,11 @@ def save_config(args, saving_path):
 
 
 def get_dir_path(args, create_dir=True):
-    model = args['model']['name']
-    dataset = args['data']['name']
+    """直接使用 log_dir 作为输出目录，不再创建子目录"""
     path = args['log']['log_dir']
-    timestamp = datetime.now().strftime("%m%d_%H%M%S")
-    dir_name = f"{dataset}_{model}_{timestamp}"
-    dir_path = os.path.join(path, dir_name)
     if create_dir:
-        os.makedirs(dir_path)
-    return dir_path, dir_name
+        os.makedirs(path, exist_ok=True)
+    return path, os.path.basename(path)
 
 
 def set_up_logger(args):
@@ -65,39 +56,3 @@ def set_up_logger(args):
     logging.info("Saving logs in: {}".format(log_dir))
 
     return log_dir, dir_name
-
-
-def save_code(module, saving_path, with_dir=False, with_path=False):
-    """将模块/类的源代码复制到 saving_path/code/ 下。
-
-    Args:
-        module: Python 模块、类或直接路径字符串
-        saving_path: 保存根目录
-        with_dir: True 时复制整个包目录，False 时只复制单文件
-        with_path: True 时 module 参数直接作为路径字符串使用
-    """
-    os.makedirs(os.path.join(saving_path, 'code'), exist_ok=True)
-
-    if with_path:
-        src = module
-    else:
-        # 兼容模块和类：类没有 __file__，用 inspect.getfile 获取源文件路径
-        if hasattr(module, '__file__'):
-            src_file = module.__file__
-        else:
-            src_file = inspect.getfile(module)
-
-        if with_dir:
-            src = os.path.dirname(src_file)
-        else:
-            src = src_file
-
-
-    dst = os.path.join(saving_path, 'code', os.path.basename(src))
-
-    if os.path.isdir(src):
-        if os.path.exists(dst):
-            shutil.rmtree(dst)
-        shutil.copytree(src, dst)
-    else:
-        shutil.copy2(src, dst)

@@ -2,16 +2,21 @@
 Loss functions for ocean SR training (masked version).
 
 @author Leizheng
+@contributors kongzhiquan
 @date 2026-02-06
-@version 2.0.0
+@version 2.1.0
 
 @changelog
+  - 2026-02-07 kongzhiquan: v2.1.0 添加结构化日志支持
+    - LossRecord 新增 to_json_event() 方法，输出 JSON 格式日志
+    - 支持事件类型标记，便于日志解析
   - 2026-02-06 Leizheng: v2.0.0 添加 MaskedLpLoss
     - 支持显式 mask 参数，只在海洋格点上计算 loss
     - 求平均时分母 = 海洋格点数（排除陆地格点）
   - 原始版本: v1.0.0
 """
 
+import json
 import torch
 import torch.nn.functional as F
 from time import time
@@ -264,8 +269,27 @@ class LossRecord:
                 self.loss_dict[loss].count = 0
                 self.loss_dict[loss].avg = 0.0
     
+    def to_json_event(self, event_type: str, **extra_fields) -> str:
+        """
+        生成结构化 JSON 日志事件。
+
+        Args:
+            event_type: 事件类型，如 "epoch_train", "epoch_valid", "test_metrics"
+            **extra_fields: 额外字段，如 epoch, lr, best_epoch 等
+
+        Returns:
+            JSON 格式字符串，包含 __event__ 标记便于解析
+        """
+        event_data = {
+            "event": event_type,
+            "metrics": {loss: self.loss_dict[loss].avg for loss in self.loss_list},
+            "elapsed_time": time() - self.start_time,
+        }
+        event_data.update(extra_fields)
+        return f"__event__{json.dumps(event_data, ensure_ascii=False)}__event__"
+
     def __str__(self):
         return self.format_metrics()
-    
+
     def __repr__(self):
         return self.loss_dict[self.loss_list[0]].avg

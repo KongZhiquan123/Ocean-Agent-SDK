@@ -2,6 +2,7 @@
 Base trainer for ocean SR training (masked version).
 
 @author Leizheng
+@contributors kongzhiquan
 @date 2026-02-06
 @version 3.0.0
 
@@ -12,6 +13,11 @@ Base trainer for ocean SR training (masked version).
     - evaluate() 使用 autocast 加速推理
     - gradient checkpointing 包装 model forward 降低激活显存
     - save_ckpt / load_ckpt 保存/恢复 scaler 状态
+  - 2026-02-07 kongzhiquan: v2.1.0 添加结构化日志输出
+    - 训练开始/结束时输出 training_start/training_end 事件
+    - 每个 epoch 输出 epoch_train/epoch_valid 事件
+    - 最终评估输出 final_valid/final_test 事件
+    - 所有事件使用 JSON 格式，便于报告生成脚本解析
   - 2026-02-06 Leizheng: v2.0.0 集成陆地掩码支持
     - build_data() 加载 mask_hr / mask_lr
     - build_loss() 改用 MaskedLpLoss
@@ -21,9 +27,11 @@ Base trainer for ocean SR training (masked version).
 """
 
 import os
+import json
 import torch
 import wandb
 import logging
+from datetime import datetime
 
 import torch.distributed as dist
 from torch import nn
@@ -31,7 +39,6 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 
 from tqdm import tqdm
 from utils.loss import LossRecord, LpLoss, MaskedLpLoss
-from utils.helper import save_code
 from utils.ddp import debug_barrier
 from utils.metrics import Evaluator, MaskedEvaluator
 from functools import partial
@@ -352,22 +359,70 @@ class BaseTrainer:
         if self.check_main_process():
             self.logger(msg)
     
+    def _log_json_event(self, event_type: str, **data):
+        """输出结构化 JSON 日志事件"""
+        event = {
+            "event": event_type,
+            "timestamp": datetime.now().isoformat(),
+            **data
+        }
+        self.main_log(f"__event__{json.dumps(event, ensure_ascii=False)}__event__")
+
     def process(self, **kwargs):
+        training_start_time = datetime.now()
         self.main_log("Start training")
+
+        # 输出训练开始事件
+        self._log_json_event(
+            "training_start",
+            model_name=self.model_name,
+            model_params=sum(p.numel() for p in self.model.parameters()) / 1e6,
+            dataset_name=self.data,
+            train_samples=len(self.train_loader.dataset),
+            valid_samples=len(self.valid_loader.dataset),
+            test_samples=len(self.test_loader.dataset),
+            total_epochs=self.epochs,
+            batch_size=self.data_args.get('train_batchsize', 10),
+            learning_rate=self.optim_args['lr'],
+            optimizer=self.optim_args['optimizer'],
+            patience=self.patience,
+            eval_freq=self.eval_freq,
+            device=str(self.device),
+            distribute=self.dist,
+            distribute_mode=getattr(self, 'dist_mode', None),
+            mask_hr_info={
+                "ocean_pixels": int(self.mask_hr.sum().item()) if self.mask_hr is not None else None,
+                "total_pixels": self.mask_hr.numel() if self.mask_hr is not None else None,
+            } if self.mask_hr is not None else None,
+        )
+
         best_epoch = 0
         best_metrics = None
         best_path = os.path.join(self.saving_path, "best_model.pth")
         counter = 0
+        early_stopped = False
+        epoch_history = []
+
         if dist.is_initialized():
             dist.barrier()
         bar = tqdm(total=self.epochs - self.start_epoch) if self.check_main_process() else None
 
         for epoch in range(self.start_epoch, self.epochs):
             train_loss_record = self.train(epoch)
-            self.main_log("Epoch {} | {} | lr: {:.4f}".format(epoch, train_loss_record, self.optimizer.param_groups[0]["lr"]))
+            lr = self.optimizer.param_groups[0]["lr"]
+            self.main_log("Epoch {} | {} | lr: {:.4f}".format(epoch, train_loss_record, lr))
+
+            # 输出 epoch 训练事件
+            self._log_json_event(
+                "epoch_train",
+                epoch=epoch,
+                metrics=train_loss_record.to_dict(),
+                lr=lr,
+            )
+
             if self.check_main_process() and self.wandb:
                 wandb.log(train_loss_record.to_dict())
-            
+
             if self.check_main_process() and self.saving_ckpt and (epoch + 1) % self.ckpt_freq == 0:
                 self.save_ckpt(epoch)
                 self.main_log("Epoch {} | save checkpoint in {}".format(epoch, self.saving_path))
@@ -376,10 +431,27 @@ class BaseTrainer:
                 valid_loss_record = self.evaluate(split="valid")
                 self.main_log("Epoch {} | {}".format(epoch, valid_loss_record))
                 valid_metrics = valid_loss_record.to_dict()
+
+                # 输出 epoch 验证事件
+                is_best = not best_metrics or valid_metrics['valid_loss'] < best_metrics['valid_loss']
+                self._log_json_event(
+                    "epoch_valid",
+                    epoch=epoch,
+                    metrics=valid_metrics,
+                    is_best=is_best,
+                )
+
+                # 记录历史
+                epoch_history.append({
+                    "epoch": epoch,
+                    "train_loss": train_loss_record.to_dict().get('train_loss'),
+                    "valid_metrics": valid_metrics,
+                })
+
                 if self.check_main_process() and self.wandb:
                     wandb.log(valid_loss_record.to_dict())
-                
-                if not best_metrics or valid_metrics['valid_loss'] < best_metrics['valid_loss']:
+
+                if is_best:
                     counter = 0
                     best_epoch = epoch
                     best_metrics = valid_metrics
@@ -388,7 +460,9 @@ class BaseTrainer:
                 elif self.patience != -1:
                     counter += 1
                     if counter >= self.patience:
+                        early_stopped = True
                         self.main_log("Early stop at epoch {}".format(epoch))
+                        self._log_json_event("early_stop", epoch=epoch, patience=self.patience)
                         if not self.dist:
                             break
                         stop_flag = torch.tensor(0, device=self.device)
@@ -398,32 +472,49 @@ class BaseTrainer:
                         if self.dist and dist.is_initialized():
                             dist.broadcast(stop_flag, src=0)
                         if stop_flag.item() > 0:
-                            break                       
+                            break
             if self.check_main_process():
                 bar.update(1)
         if self.check_main_process():
             if bar is not None:
                 bar.close()
         self.main_log("Optimization Finished!")
-        
+
         if self.check_main_process() and not best_metrics:
             self.save_model(best_path)
-        
+
         if self.dist and dist.is_initialized():
             dist.barrier()
-        
+
         self.load_model(best_path)
 
         valid_loss_record = self.evaluate(split="valid")
         self.main_log("Valid metrics: {}".format(valid_loss_record))
+        self._log_json_event("final_valid", metrics=valid_loss_record.to_dict(), best_epoch=best_epoch)
+
         test_loss_record = self.evaluate(split="test")
         self.main_log("Test metrics: {}".format(test_loss_record))
+        self._log_json_event("final_test", metrics=test_loss_record.to_dict(), best_epoch=best_epoch)
+
+        # 输出训练结束事件
+        training_end_time = datetime.now()
+        training_duration = (training_end_time - training_start_time).total_seconds()
+        actual_epochs = epoch + 1 if 'epoch' in dir() else self.epochs
+        self._log_json_event(
+            "training_end",
+            training_duration_seconds=training_duration,
+            actual_epochs=actual_epochs,
+            best_epoch=best_epoch,
+            early_stopped=early_stopped,
+            final_valid_metrics=valid_loss_record.to_dict(),
+            final_test_metrics=test_loss_record.to_dict(),
+        )
 
         if self.check_main_process() and self.wandb:
             wandb.run.summary["best_epoch"] = best_epoch
             wandb.run.summary.update(test_loss_record.to_dict())
             wandb.finish()
-        
+
         if self.dist and dist.is_initialized():
             dist.barrier()
 

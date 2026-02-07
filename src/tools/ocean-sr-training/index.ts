@@ -5,9 +5,10 @@
  * @author Leizheng
  * @contributors Leizheng, kongzhiquan
  * @date 2026-02-06
- * @version 2.1.0
+ * @version 2.2.0
  *
  * @changelog
+ *   - 2026-02-07 kongzhiquan: v2.2.0 新增训练可视化工具
  *   - 2026-02-07 kongzhiquan: v2.1.0 新增训练状态查询工具
  *   - 2026-02-06 Leizheng: v2.0.0 新增训练报告生成工具
  *   - 2026-02-06 Leizheng: v1.0.0 初始版本
@@ -18,13 +19,15 @@ import { oceanSrListModelsTool } from './list-models'
 import { oceanSrTrainTool } from './train'
 import { oceanSrTrainStatusTool } from './train-status'
 import { oceanSrReportTool } from './report'
+import { oceanSrVisualizeTool } from './visualize'
 
 export const oceanSrTrainingTools = [
   oceanSrCheckGpuTool,
   oceanSrListModelsTool,
   oceanSrTrainTool,
   oceanSrTrainStatusTool,
-  oceanSrReportTool
+  oceanSrReportTool,
+  oceanSrVisualizeTool
 ]
 
 export {
@@ -32,7 +35,8 @@ export {
   oceanSrListModelsTool,
   oceanSrTrainTool,
   oceanSrTrainStatusTool,
-  oceanSrReportTool
+  oceanSrReportTool,
+  oceanSrVisualizeTool
 }
 
 export default oceanSrTrainingTools
