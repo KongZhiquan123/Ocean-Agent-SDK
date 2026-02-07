@@ -11,7 +11,7 @@
  */
 
 import { defineTool } from '@shareai-lab/kode-sdk'
-import { findFirstPythonPath } from '@/utils/python-manager'
+import { findPythonWithModule, findFirstPythonPath } from '@/utils/python-manager'
 import path from 'node:path'
 
 export const oceanSrListModelsTool = defineTool({
@@ -29,9 +29,9 @@ export const oceanSrListModelsTool = defineTool({
   },
 
   async exec(_args, ctx) {
-    const pythonPath = findFirstPythonPath()
+    const pythonPath = findPythonWithModule('torch') || findFirstPythonPath()
     if (!pythonPath) {
-      throw new Error('未找到可用的 Python 解释器')
+      throw new Error('未找到可用的 Python 解释器（需要安装 torch）')
     }
 
     const scriptPath = path.resolve(process.cwd(), 'scripts/ocean_SR_training_masked/list_models.py')

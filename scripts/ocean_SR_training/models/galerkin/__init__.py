@@ -1,1 +1,0 @@
-from .Galerkin_Transformer import Galerkin_Transformer, Galerkin_Transformer_block

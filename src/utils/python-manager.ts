@@ -3,11 +3,17 @@
  *
  * Description: 管理和查找系统中可能的 Python 可执行文件路径
  * Author: kongzhiquan
+ * @contributors kongzhiquan, Leizheng
  * Time: 2026-02-01
- * Version: 1.0.0
+ * Version: 1.1.0
  *
+ * @changelog
+ *   - 2026-02-07 Leizheng: v1.1.0
+ *     - 扫描当前用户的 conda 环境 (miniconda3, anaconda3)
+ *     - 新增 findPythonWithModule(moduleName) 查找包含指定模块的 Python
  */
 import { existsSync, readdirSync, statSync } from 'fs'
+import { execSync } from 'child_process'
 import os from 'os'
 import path from 'path'
 
@@ -28,6 +34,30 @@ export function findPossiblePythonPaths(): string[] {
 // 返回第一个可用的 Python 路径，找不到则返回 undefined
 export function findFirstPythonPath(): string | undefined {
   return findPossiblePythonPaths()[0]
+}
+
+// 查找包含指定模块的 Python 路径（如 findPythonWithModule('torch')）
+// 会缓存结果避免重复检测
+const _moduleCache = new Map<string, string | undefined>()
+export function findPythonWithModule(moduleName: string): string | undefined {
+  if (_moduleCache.has(moduleName)) {
+    return _moduleCache.get(moduleName)
+  }
+  const allPaths = findPossiblePythonPaths()
+  for (const pyPath of allPaths) {
+    try {
+      execSync(`"${pyPath}" -c "import ${moduleName}"`, {
+        timeout: 10000,
+        stdio: 'pipe',
+      })
+      _moduleCache.set(moduleName, pyPath)
+      return pyPath
+    } catch {
+      // 该 Python 没有此模块，继续找
+    }
+  }
+  _moduleCache.set(moduleName, undefined)
+  return undefined
 }
 
 function collectFromEnv(): Array<string | undefined> {
@@ -81,9 +111,30 @@ function collectCommonLocations(home: string, pyenvRoot: string): Array<string |
     '/usr/bin/python',
     '/usr/local/bin/python',
     joinIf(pyenvRoot, 'shims', 'python'),
+    ...collectCondaEnvs(),
   ]
 
   return paths
+}
+
+// 扫描当前用户的 conda 环境 (miniconda3/envs, anaconda3/envs)
+function collectCondaEnvs(): string[] {
+  const home = os.homedir()
+  const results: string[] = []
+  for (const condaDir of ['miniconda3', 'anaconda3']) {
+    const envsDir = path.join(home, condaDir, 'envs')
+    try {
+      const envs = readdirSync(envsDir, { withFileTypes: true })
+      for (const env of envs) {
+        if (env.isDirectory()) {
+          results.push(path.join(envsDir, env.name, 'bin', 'python'))
+        }
+      }
+    } catch {
+      // 目录不存在或不可读
+    }
+  }
+  return results
 }
 
 function dedupeAndFilterExisting(paths: Array<string | undefined>): string[] {

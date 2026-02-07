@@ -4,9 +4,10 @@
  * @description 管理 Agent 实例的创建与消息处理
  * @author kongzhiquan
  * @date 2026-02-02
- * @version 1.1.0
+ * @version 1.2.0
  *
  * @changelog
+ *   - 2026-02-07 Leizheng: v1.2.0 sandbox 添加 allowPaths: ['/data'] 允许访问数据目录
  *   - 2026-02-05 kongzhiquan: v1.1.0 新增 tool:error 事件处理
  *     - 在 convertProgressToSSE 中添加 tool:error case
  *     - 返回 tool_error 类型的 SSE 事件
@@ -57,6 +58,7 @@ export async function createAgent(config: AgentConfig): Promise<Agent> {
   const sandboxConfig = {
     kind: 'local' as const,
     workDir: config.workingDir,
+    allowPaths: ['/data'],
   }
 
   const agent = await Agent.create(

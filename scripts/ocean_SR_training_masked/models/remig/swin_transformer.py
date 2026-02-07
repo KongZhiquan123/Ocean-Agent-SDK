@@ -432,12 +432,27 @@ class BasicLayer(nn.Module):
         Out:
             x: B x H x W x C
         '''
+        _, _, H0, W0 = x.shape
         x = self.patch_embed(x) # B x embed_dim x Ph x Pw
+        _, _, Ph, Pw = x.shape
+
+        # padding 到 window_size 的倍数
+        ws = self.blocks[0].window_size if len(self.blocks) > 0 else 1
+        pad_h = (ws - Ph % ws) % ws
+        pad_w = (ws - Pw % ws) % ws
+        if pad_h > 0 or pad_w > 0:
+            x = F.pad(x, (0, pad_w, 0, pad_h), mode='reflect')
+
         for blk in self.blocks:
             if self.use_checkpoint:
                 x = checkpoint.checkpoint(blk, x)
             else:
                 x = blk(x)
+
+        # 裁掉 padding
+        if pad_h > 0 or pad_w > 0:
+            x = x[:, :, :Ph, :Pw]
+
         x = self.patch_unembed(x) # B x C x Ph x Pw
         return x
 

@@ -435,16 +435,24 @@ class SwinSR(nn.Module):
         """
         # 【修改8】动态获取输入分辨率
         B, H, W, C = x.shape
-        
+
         assert C == self.in_channels, f"Input channels mismatch: {C} vs {self.in_channels}"
 
-        fx = x  # [B, H, W, 1] 取最后一个通道作为物理场
-        fx = fx.reshape(B, H * W, 1)  # [B, N, 1]
+        # padding 到 window_size 的倍数，避免 window_partition 整除失败
+        ws = self.window_size
+        pad_h = (ws - H % ws) % ws
+        pad_w = (ws - W % ws) % ws
+        if pad_h > 0 or pad_w > 0:
+            x = F.pad(x, (0, 0, 0, pad_w, 0, pad_h), mode='reflect')  # pad [H, W] dims
+        Hp, Wp = H + pad_h, W + pad_w
+
+        fx = x  # [B, Hp, Wp, C]
+        fx = fx.reshape(B, Hp * Wp, 1)  # [B, N, 1]
 
         fx = self.preprocess(fx)  # [B, N, n_hidden]
         fx = fx + self.placeholder[None, None, :]
-        
-        input_resolution = (H, W)
+
+        input_resolution = (Hp, Wp)
         if self.cached_layers is None or self.cached_input_resolution != input_resolution:
             self.cached_layers = self._build_layers(input_resolution).to(x.device)
             self.cached_input_resolution = input_resolution
@@ -453,24 +461,28 @@ class SwinSR(nn.Module):
             fx = layer(fx)  # [B, N, n_hidden]
 
         fx = self.norm(fx)
-        
+
         # 【修改10】动态上采样处理
         if self.upsample is not None and self.pixel_shuffle is not None:
             # 使用 Pixel Shuffle
             fx = self.upsample(fx)  # [B, N, n_hidden*scale^2]
-            fx = fx.view(B, H, W, -1)  # [B, H, W, n_hidden*scale^2]
-            fx = fx.permute(0, 3, 1, 2)  # [B, n_hidden*scale^2, H, W]
-            fx = self.pixel_shuffle(fx)  # [B, n_hidden, scale*H, scale*W]
-            fx = fx.permute(0, 2, 3, 1)  # [B, scale*H, scale*W, n_hidden]
+            fx = fx.view(B, Hp, Wp, -1)  # [B, Hp, Wp, n_hidden*scale^2]
+            fx = fx.permute(0, 3, 1, 2)  # [B, n_hidden*scale^2, Hp, Wp]
+            fx = self.pixel_shuffle(fx)  # [B, n_hidden, scale*Hp, scale*Wp]
+            fx = fx.permute(0, 2, 3, 1)  # [B, scale*Hp, scale*Wp, n_hidden]
         else:
             # 使用插值上采样（非对称情况）
             H_out = H * self.upsample_factor[0]
             W_out = W * self.upsample_factor[1]
-            fx = fx.view(B, H, W, -1)  # [B, H, W, n_hidden]
-            fx = fx.permute(0, 3, 1, 2)  # [B, n_hidden, H, W]
+            fx = fx.view(B, Hp, Wp, -1)  # [B, Hp, Wp, n_hidden]
+            fx = fx.permute(0, 3, 1, 2)  # [B, n_hidden, Hp, Wp]
             fx = F.interpolate(fx, size=(H_out, W_out), mode='bilinear', align_corners=False)
             fx = fx.permute(0, 2, 3, 1)  # [B, H_out, W_out, n_hidden]
-        
+
+        # 裁掉 padding 部分（按原始 H, W 的 scale 倍数裁剪）
+        scale_h, scale_w = self.upsample_factor
+        fx = fx[:, :H * scale_h, :W * scale_w, :]
+
         H_out, W_out = fx.shape[1], fx.shape[2]
         fx = fx.reshape(B, H_out * W_out, -1)  # [B, N_out, n_hidden]
 

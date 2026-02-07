@@ -1,1 +1,0 @@
-from .SwinIR import SwinIR_net

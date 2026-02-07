@@ -5,9 +5,11 @@
  *              集成状态机实现分阶段确认流程
  * @author Leizheng
  * @date 2026-02-06
- * @version 2.1.0
+ * @version 2.3.0
  *
  * @changelog
+ *   - 2026-02-07 Leizheng: v2.3.0 按模型选择性复制代码到用户输出目录执行，保持 SDK 源码不被修改
+ *   - 2026-02-07 Leizheng: v2.2.0 使用 findPythonWithModule('torch') 自动查找带 PyTorch 的 Python
  *   - 2026-02-06 Leizheng: v2.1.0 指向 masked 版本训练框架
  *     - trainingDir 改为 scripts/ocean_SR_training_masked
  *   - 2026-02-06 Leizheng: v2.0.0 集成训练工作流状态机
@@ -22,7 +24,7 @@
  */
 
 import { defineTool } from '@shareai-lab/kode-sdk'
-import { findFirstPythonPath } from '@/utils/python-manager'
+import { findPythonWithModule, findFirstPythonPath } from '@/utils/python-manager'
 import path from 'node:path'
 import {
   TrainingWorkflow,
@@ -214,9 +216,10 @@ export const oceanSrTrainTool = defineTool({
   },
 
   async exec(args, ctx) {
-    const pythonPath = findFirstPythonPath()
+    // 训练工具需要 torch，优先查找安装了 torch 的 Python
+    const pythonPath = findPythonWithModule('torch') || findFirstPythonPath()
     if (!pythonPath) {
-      throw new Error('未找到可用的 Python 解释器')
+      throw new Error('未找到可用的 Python 解释器（需要安装 torch）')
     }
 
     const trainingDir = path.resolve(process.cwd(), 'scripts/ocean_SR_training_masked')
@@ -316,9 +319,37 @@ export const oceanSrTrainTool = defineTool({
       ...restParams
     } = args
 
-    const generateScript = path.join(trainingDir, 'generate_config.py')
+    if (!log_dir) {
+      return {
+        status: 'error',
+        error: '未指定训练日志输出目录 (log_dir)',
+        suggestion: '请在参数中提供 log_dir'
+      }
+    }
 
-    // ===== 3a. 生成配置文件 =====
+    // ===== 3a. 准备训练工作空间（只复制所选模型相关代码） =====
+    // 训练在副本上执行，保持 Agent SDK 源码不被修改；
+    // Agent 运行时如需调整代码，可直接修改副本而不影响 SDK；
+    // 切换模型时会自动清理旧模型代码并替换为新模型代码
+    const workspaceDir = path.resolve(log_dir, '_ocean_sr_code')
+    const prepareScript = path.join(trainingDir, 'prepare_workspace.py')
+    const prepareResult = await ctx.sandbox.exec(
+      `"${pythonPath}" "${prepareScript}" --source_dir "${trainingDir}" --target_dir "${workspaceDir}" --model_name "${model_name}"`,
+      { timeoutMs: 60000 }
+    )
+    if (prepareResult.code !== 0) {
+      return {
+        status: 'error',
+        error: `工作空间准备失败: ${prepareResult.stderr}`,
+        reason: '无法将训练代码复制到输出目录',
+        suggestion: `请检查输出目录 ${log_dir} 是否存在且有写入权限`
+      }
+    }
+    const prepareInfo = JSON.parse(prepareResult.stdout)
+
+    const generateScript = path.join(workspaceDir, 'generate_config.py')
+
+    // ===== 3b. 生成配置文件 =====
     const configParams = {
       model_name,
       dataset_root,
@@ -332,10 +363,7 @@ export const oceanSrTrainTool = defineTool({
       ...restParams
     }
 
-    const tempDir = path.resolve(ctx.sandbox.workDir, 'ocean_sr_temp')
-    const configPath = path.join(tempDir, `${model_name}_config.yaml`)
-
-    await ctx.sandbox.exec(`mkdir -p "${tempDir}"`)
+    const configPath = path.join(workspaceDir, `${model_name}_config.yaml`)
 
     const paramsJson = JSON.stringify(configParams)
     const genResult = await ctx.sandbox.exec(
@@ -354,21 +382,22 @@ export const oceanSrTrainTool = defineTool({
 
     const genInfo = JSON.parse(genResult.stdout)
 
-    // ===== 3b. 构建运行命令 =====
+    // ===== 3c. 构建运行命令 =====
+    // 注：代码快照由 Python 的 main.py / main_ddp.py 在训练开始前自动保存到 saving_path/code/
     let runCmd: string
 
     if (distribute && distribute_mode === 'DDP' && device_ids.length > 1) {
       const nproc = device_ids.length
       const cudaDevices = device_ids.join(',')
-      const mainDdp = path.join(trainingDir, 'main_ddp.py')
-      runCmd = `cd "${trainingDir}" && CUDA_VISIBLE_DEVICES=${cudaDevices} "${pythonPath}" -m torch.distributed.launch --nproc_per_node=${nproc} "${mainDdp}" --mode ${mode} --config "${configPath}"`
+      const mainDdp = path.join(workspaceDir, 'main_ddp.py')
+      runCmd = `cd "${workspaceDir}" && CUDA_VISIBLE_DEVICES=${cudaDevices} "${pythonPath}" -m torch.distributed.run --nproc_per_node=${nproc} "${mainDdp}" --mode ${mode} --config "${configPath}"`
     } else {
       const cudaDevice = device_ids[0]
-      const mainPy = path.join(trainingDir, 'main.py')
-      runCmd = `cd "${trainingDir}" && CUDA_VISIBLE_DEVICES=${cudaDevice} "${pythonPath}" "${mainPy}" --mode ${mode} --config "${configPath}"`
+      const mainPy = path.join(workspaceDir, 'main.py')
+      runCmd = `cd "${workspaceDir}" && CUDA_VISIBLE_DEVICES=${cudaDevice} "${pythonPath}" "${mainPy}" --mode ${mode} --config "${configPath}"`
     }
 
-    // ===== 3c. 执行训练 =====
+    // ===== 3d. 执行训练 =====
     const trainResult = await ctx.sandbox.exec(runCmd, {
       timeoutMs: 72 * 3600 * 1000  // 最长 72 小时
     })
@@ -401,11 +430,12 @@ export const oceanSrTrainTool = defineTool({
         reason,
         suggestion,
         config_path: genInfo.config_path,
+        workspace_dir: workspaceDir,
         stdout_tail: (trainResult.stdout || '').slice(-1000)
       }
     }
 
-    // ===== 3d. 返回结果 =====
+    // ===== 3e. 返回结果 =====
     return {
       status: 'success',
       mode,
@@ -415,9 +445,11 @@ export const oceanSrTrainTool = defineTool({
       distribute: distribute && device_ids.length > 1,
       distribute_mode: distribute ? distribute_mode : 'single',
       device_ids,
+      workspace_dir: workspaceDir,
+      workspace_info: prepareInfo,
       stdout_tail: (trainResult.stdout || '').slice(-2000),
       message: mode === 'train'
-        ? `训练完成。最佳模型保存在日志目录下的 best_model.pth`
+        ? `训练完成。最佳模型和代码快照保存在日志目录下`
         : `测试完成。请查看输出指标。`
     }
   }

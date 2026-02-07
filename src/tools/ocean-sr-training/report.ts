@@ -14,7 +14,7 @@
  */
 
 import { defineTool } from '@shareai-lab/kode-sdk'
-import { findFirstPythonPath } from '@/utils/python-manager'
+import { findPythonWithModule, findFirstPythonPath } from '@/utils/python-manager'
 import path from 'node:path'
 
 export const oceanSrReportTool = defineTool({
@@ -63,9 +63,9 @@ export const oceanSrReportTool = defineTool({
     const { log_dir, user_confirmation, output_path } = args
 
     // 1. 检查 Python 环境
-    const pythonPath = findFirstPythonPath()
+    const pythonPath = findPythonWithModule('torch') || findFirstPythonPath()
     if (!pythonPath) {
-      throw new Error('未找到可用的 Python 解释器')
+      throw new Error('未找到可用的 Python 解释器（需要安装 torch）')
     }
 
     // 2. 准备路径
