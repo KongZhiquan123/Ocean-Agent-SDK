@@ -3,11 +3,18 @@
  *
  * @description 海洋超分辨率模型训练工具
  *              集成状态机实现分阶段确认流程
+ *              支持后台执行和实时日志流
  * @author Leizheng
+ * @contributors kongzhiquan
  * @date 2026-02-06
- * @version 2.3.0
+ * @version 3.0.0
  *
  * @changelog
+ *   - 2026-02-07 kongzhiquan: v3.0.0 后台执行模式
+ *     - 使用 TrainingProcessManager 启动后台训练进程
+ *     - 训练启动后立即返回 process_id，不再阻塞等待
+ *     - 支持实时日志流（通过 ocean_sr_train_status 工具查询）
+ *     - 服务器关闭时自动清理训练进程
  *   - 2026-02-07 Leizheng: v2.3.0 按模型选择性复制代码到用户输出目录执行，保持 SDK 源码不被修改
  *   - 2026-02-07 Leizheng: v2.2.0 使用 findPythonWithModule('torch') 自动查找带 PyTorch 的 Python
  *   - 2026-02-06 Leizheng: v2.1.0 指向 masked 版本训练框架
@@ -25,6 +32,7 @@
 
 import { defineTool } from '@shareai-lab/kode-sdk'
 import { findPythonWithModule, findFirstPythonPath } from '@/utils/python-manager'
+import { trainingProcessManager } from '@/utils/training-process-manager'
 import path from 'node:path'
 import {
   TrainingWorkflow,
@@ -46,7 +54,12 @@ export const oceanSrTrainTool = defineTool({
 
 **首次调用**：只传 dataset_root 和 log_dir，工具会自动检测数据并展示信息
 **逐步补充参数**：每次调用补充该阶段需要的参数，直到所有阶段通过
-**最终执行**：传入 user_confirmed=true 和 confirmation_token 后执行训练
+**最终执行**：传入 user_confirmed=true 和 confirmation_token 后启动后台训练
+
+**后台执行模式**：
+- 训练启动后立即返回 process_id，不会阻塞等待训练完成
+- 使用 ocean_sr_train_status 工具查询训练状态和实时日志
+- 服务器关闭时会自动终止训练进程
 
 **训练模式 (mode=train)**：执行完整训练流程，包含验证和早停
 **测试模式 (mode=test)**：加载最佳模型，在测试集上评估
@@ -223,7 +236,8 @@ export const oceanSrTrainTool = defineTool({
     }
 
     const trainingDir = path.resolve(process.cwd(), 'scripts/ocean_SR_training_masked')
-
+    args.log_dir = args.log_dir ? path.resolve(ctx.sandbox.workDir, args.log_dir) : undefined
+    args.dataset_root = args.dataset_root ? path.resolve(ctx.sandbox.workDir, args.dataset_root) : undefined
     // ===== 1. 构建工作流参数 =====
     const workflowParams = { ...args }
     const workflow = new TrainingWorkflow(workflowParams)
@@ -384,73 +398,62 @@ export const oceanSrTrainTool = defineTool({
 
     // ===== 3c. 构建运行命令 =====
     // 注：代码快照由 Python 的 main.py / main_ddp.py 在训练开始前自动保存到 saving_path/code/
-    let runCmd: string
+    let cmdPath: string
+    let cmdArgs: string[]
+    let cmdEnv: Record<string, string> = {}
 
     if (distribute && distribute_mode === 'DDP' && device_ids.length > 1) {
       const nproc = device_ids.length
       const cudaDevices = device_ids.join(',')
       const mainDdp = path.join(workspaceDir, 'main_ddp.py')
-      runCmd = `cd "${workspaceDir}" && CUDA_VISIBLE_DEVICES=${cudaDevices} "${pythonPath}" -m torch.distributed.run --nproc_per_node=${nproc} "${mainDdp}" --mode ${mode} --config "${configPath}"`
+      cmdPath = pythonPath
+      cmdArgs = ['-m', 'torch.distributed.run', `--nproc_per_node=${nproc}`, mainDdp, '--mode', mode, '--config', configPath]
+      cmdEnv = { CUDA_VISIBLE_DEVICES: cudaDevices }
     } else {
-      const cudaDevice = device_ids[0]
+      const cudaDevice = String(device_ids[0])
       const mainPy = path.join(workspaceDir, 'main.py')
-      runCmd = `cd "${workspaceDir}" && CUDA_VISIBLE_DEVICES=${cudaDevice} "${pythonPath}" "${mainPy}" --mode ${mode} --config "${configPath}"`
+      cmdPath = pythonPath
+      cmdArgs = [mainPy, '--mode', mode, '--config', configPath]
+      cmdEnv = { CUDA_VISIBLE_DEVICES: cudaDevice }
     }
 
-    // ===== 3d. 执行训练 =====
-    const trainResult = await ctx.sandbox.exec(runCmd, {
-      timeoutMs: 72 * 3600 * 1000  // 最长 72 小时
+    // ===== 3d. 启动后台训练进程 =====
+    const processInfo = trainingProcessManager.startProcess({
+      cmd: cmdPath,
+      args: cmdArgs,
+      cwd: workspaceDir,
+      logDir: log_dir,
+      env: cmdEnv,
+      metadata: {
+        modelName: model_name,
+        datasetRoot: dataset_root,
+        logDir: log_dir,
+        configPath: genInfo.config_path,
+        workspaceDir: workspaceDir,
+      },
     })
 
-    if (trainResult.code !== 0) {
-      const stderr = trainResult.stderr || ''
-      let reason = '训练过程中出现错误'
-      let suggestion = '请查看完整错误日志'
-
-      if (stderr.includes('CUDA out of memory')) {
-        reason = 'GPU 显存不足'
-        suggestion = '建议：1) 减小 batch_size  2) 使用多卡训练  3) 选择更轻量的模型'
-      } else if (stderr.includes('No such file or directory')) {
-        reason = '找不到数据文件或脚本'
-        suggestion = '请检查 dataset_root 路径是否正确，以及数据是否完整'
-      } else if (stderr.includes('NCCL')) {
-        reason = 'GPU 多卡通信失败 (NCCL)'
-        suggestion = '建议：1) 检查 GPU 是否都可用  2) 尝试 DP 模式替代 DDP  3) 减少 GPU 数量'
-      } else if (stderr.includes('NaN')) {
-        reason = '训练过程中出现 NaN（梯度爆炸）'
-        suggestion = '建议：1) 降低学习率  2) 检查数据是否包含异常值  3) 尝试不同的归一化方式'
-      } else if (stderr.includes('not implemented') || stderr.includes('NotImplementedError')) {
-        reason = '模型或功能未实现'
-        suggestion = '请调用 ocean_sr_list_models 确认模型名称是否正确'
-      }
-
-      return {
-        status: 'error',
-        error: stderr.slice(-2000),
-        reason,
-        suggestion,
-        config_path: genInfo.config_path,
-        workspace_dir: workspaceDir,
-        stdout_tail: (trainResult.stdout || '').slice(-1000)
-      }
-    }
-
-    // ===== 3e. 返回结果 =====
+    // ===== 3e. 返回启动信息（不等待训练完成） =====
     return {
-      status: 'success',
+      status: 'started',
+      message: `训练已在后台启动。使用 ocean_sr_train_status 工具查询进度和日志。`,
+      process_id: processInfo.id,
+      pid: processInfo.pid,
       mode,
       model: model_name,
       config_path: genInfo.config_path,
-      log_dir: genInfo.config_path ? path.dirname(genInfo.config_path) : log_dir,
+      log_dir,
+      log_file: processInfo.logFile,
       distribute: distribute && device_ids.length > 1,
       distribute_mode: distribute ? distribute_mode : 'single',
       device_ids,
       workspace_dir: workspaceDir,
       workspace_info: prepareInfo,
-      stdout_tail: (trainResult.stdout || '').slice(-2000),
-      message: mode === 'train'
-        ? `训练完成。最佳模型和代码快照保存在日志目录下`
-        : `测试完成。请查看输出指标。`
+      next_steps: [
+        `调用 ocean_sr_train_status({ process_id: "${processInfo.id}" }) 查看训练状态`,
+        `调用 ocean_sr_train_status({ process_id: "${processInfo.id}", tail: 50 }) 查看最新日志`,
+        `调用 ocean_sr_train_status({ action: "kill", process_id: "${processInfo.id}" }) 终止训练`,
+      ],
     }
   }
 })

@@ -198,7 +198,7 @@ source-maps/
 __pycache__/
 node_modules/
 work_ocean/
-
+test_reports/
 # Datasets files
 /datasets/
 /*_dataset/

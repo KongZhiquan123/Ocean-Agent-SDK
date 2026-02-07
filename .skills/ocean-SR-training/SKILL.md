@@ -1,13 +1,18 @@
 ---
 name: ocean-SR-training
 description: 海洋超分辨率模型训练技能 - 支持多种模型架构的训练、测试与推理（含陆地掩码处理）
-version: 2.0.0
+version: 3.0.0
 author: Leizheng
-last_modified: 2026-02-06
+last_modified: 2026-02-07
 ---
 
 <!--
 Changelog:
+  - 2026-02-07 kongzhiquan: v3.0.0 后台训练模式
+    - 训练启动后立即返回，不阻塞等待
+    - 新增 ocean_sr_train_status 工具查询训练状态和日志
+    - 服务器关闭时自动清理训练进程
+    - 工作流更新：启动训练后等待用户指令
   - 2026-02-06 Leizheng: v2.0.0 陆地掩码 + 训练报告
     - 训练框架升级为 masked 版本（ocean_SR_training_masked）
     - 损失函数/评估指标排除陆地像素
@@ -37,7 +42,8 @@ Changelog:
 |------|------|----------|
 | `ocean_sr_check_gpu` | 查看可用 GPU | 确认参数阶段，展示 GPU 供用户选择 |
 | `ocean_sr_list_models` | 列出可用模型 | 用户选择模型时 |
-| `ocean_sr_train` | 执行训练/测试 | 参数确认后执行 |
+| `ocean_sr_train` | 启动训练/测试 | 参数确认后启动（后台执行） |
+| `ocean_sr_train_status` | 查询训练状态/日志 | 训练启动后，查看进度或终止训练 |
 | `ocean_sr_generate_report` | 生成训练报告 | 训练完成后，生成 Markdown 报告 |
 
 ---
@@ -59,18 +65,71 @@ Changelog:
 4. 参数汇总 → 展示所有参数，等待"确认执行"
    │  → 生成 YAML 配置文件
    ↓
-5. 执行训练 → ocean_sr_train (mode=train)
+5. 启动训练 → ocean_sr_train (mode=train)
+   │  → 【后台执行】立即返回 process_id，不阻塞等待
    │  → 单卡: main.py / 多卡 DDP: torchrun main_ddp.py
    │  → 陆地掩码自动处理（NaN → 0，mask 排除陆地格点）
    ↓
-6. 查看结果 → 训练日志、最佳模型路径、测试指标
+6. 等待用户指令 → 【重要】训练启动后，告知用户训练已开始
+   │  → 告知用户可以：
+   │     - 查看训练状态：ocean_sr_train_status({ process_id: "xxx" })
+   │     - 查看最新日志：ocean_sr_train_status({ action: "logs", process_id: "xxx", tail: 50 })
+   │     - 终止训练：ocean_sr_train_status({ action: "kill", process_id: "xxx" })
+   │  → 【不要主动轮询】等待用户主动询问进度或给出下一步指令
    ↓
-7. 生成训练报告 → ocean_sr_generate_report
+7. 训练完成后 → 用户询问时检查状态
+   │  → 如果 status="completed"，展示结果并询问是否生成报告
+   │  → 如果 status="failed"，展示错误日志和修改建议
+   ↓
+8. 生成训练报告 → ocean_sr_generate_report
    │  → 传入 log_dir 和 user_confirmation
    │  → Agent 读取报告，补充"分析与建议"部分
    ↓
-8. 完成 → 向用户展示报告路径和关键结果
+9. 完成 → 向用户展示报告路径和关键结果
 ```
+
+---
+
+## 后台训练模式（v3.0.0 新增）
+
+### 工作原理
+
+训练任务在后台执行，`ocean_sr_train` 启动后立即返回，不会阻塞对话：
+
+```
+ocean_sr_train(...)
+  → 返回 { status: "started", process_id: "train-xxx-xxx", ... }
+  → 训练在后台持续运行
+  → Agent 可以继续与用户对话
+```
+
+### 状态查询工具
+
+使用 `ocean_sr_train_status` 查询训练状态：
+
+| 操作 | 调用方式 | 说明 |
+|------|----------|------|
+| 查询状态 | `ocean_sr_train_status({ process_id: "xxx" })` | 返回运行状态、耗时等 |
+| 查看日志 | `ocean_sr_train_status({ action: "logs", process_id: "xxx", tail: 50 })` | 返回最后 50 行日志 |
+| 增量日志 | `ocean_sr_train_status({ action: "logs", process_id: "xxx", offset: 12345 })` | 从上次位置继续读取 |
+| 终止训练 | `ocean_sr_train_status({ action: "kill", process_id: "xxx" })` | 发送终止信号 |
+| 列出所有 | `ocean_sr_train_status({ action: "list" })` | 列出所有训练进程 |
+
+### 训练状态
+
+| 状态 | 含义 |
+|------|------|
+| `running` | 训练进行中 |
+| `completed` | 训练成功完成（exit code = 0） |
+| `failed` | 训练失败（exit code != 0） |
+| `killed` | 被用户或系统终止 |
+
+### 重要行为准则
+
+1. **启动后不要主动轮询**：训练启动后，告知用户训练已开始，然后等待用户的下一步指令
+2. **用户询问时才查询**：只有当用户主动询问训练进度时，才调用 `ocean_sr_train_status`
+3. **保持对话可用**：训练在后台运行，Agent 可以继续回答用户的其他问题
+4. **服务器关闭自动清理**：如果服务器关闭，训练进程会被自动终止
 
 ---
 
@@ -188,6 +247,7 @@ dataset_root/
 | **参数决策** | 自动决定 epochs、lr、batch_size、GPU |
 | **流程控制** | 跳过参数确认 |
 | **错误处理** | 自动重试失败的训练、不给出修改建议 |
+| **训练监控** | 训练启动后主动轮询状态（应等待用户询问） |
 
 ---
 
@@ -206,10 +266,12 @@ dataset_root/
 
 ```
 log_dir/
-└── OceanNPY_SwinIR_0206_143025/
+├── train-1707123456-abc123.log    ← 进程管理器日志（实时输出）
+├── train-1707123456-abc123.error.log
+└── OceanNPY_SwinIR_0206_143025/   ← Python 训练框架创建
     ├── config.yaml          ← 完整配置备份
-    ├── train.log            ← 训练日志
+    ├── train.log            ← 训练日志（与进程日志内容相同）
     ├── best_model.pth       ← 最佳模型权重
-    ├── training_report.md   ← 训练报告（v2.0.0 新增）
+    ├── training_report.md   ← 训练报告
     └── code/                ← 代码快照
 ```

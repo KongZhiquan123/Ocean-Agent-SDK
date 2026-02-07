@@ -32,10 +32,7 @@ import {
   type AgentDependencies,
 } from '@shareai-lab/kode-sdk'
 
-// 导入海洋数据预处理工具
-import { oceanPreprocessTools } from './tools/ocean-preprocess'
-// 导入海洋超分训练工具
-import { oceanSrTrainingTools } from './tools/ocean-sr-training'
+import tools from './tools'
 import { findFirstPythonPath } from './utils/python-manager'
 
 // ========================================
@@ -51,8 +48,6 @@ export const config = {
   kodeStorePath: process.env.KODE_STORE_PATH ?? './.kode',
   skillsDir: process.env.SKILLS_DIR ?? './.skills',
 } as const
-
-console.log('[config] 环境变量 ANTHROPIC_MODEL_ID:', process.env.ANTHROPIC_MODEL_ID)
 console.log('[config] 最终使用模型:', config.anthropicModelId)
 
 const skillsWhiteList= ['ocean-preprocess', 'ocean-SR-training']
@@ -104,7 +99,7 @@ function createStore() {
 
 // 创建 SkillsManager
 const skillsManager = new SkillsManager(config.skillsDir, skillsWhiteList)
-const allTools = [...builtin.fs(), ...builtin.bash(), ...builtin.todo(), ...oceanPreprocessTools, ...oceanSrTrainingTools, createSkillsTool(skillsManager)]
+const allTools = [...builtin.fs(), ...builtin.bash(), ...builtin.todo(), ...tools, createSkillsTool(skillsManager)]
 
 function createToolRegistry() {
   const registry = new ToolRegistry()

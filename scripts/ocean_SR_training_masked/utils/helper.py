@@ -3,6 +3,7 @@ import yaml
 import torch
 import shutil
 import logging
+import inspect
 import numpy as np
 
 from datetime import datetime
@@ -67,14 +68,20 @@ def set_up_logger(args):
 
 def save_code(module, saving_path, with_dir=False, with_path=False):
     os.makedirs(os.path.join(saving_path, 'code'), exist_ok=True)
-    
+
     if with_path:
         src = module
     else:
-        if with_dir:
-            src = os.path.dirname(module.__file__)
+        # 获取源文件路径，支持模块和类
+        if hasattr(module, '__file__'):
+            file_path = module.__file__
         else:
-            src = module.__file__
+            file_path = inspect.getfile(module)
+
+        if with_dir:
+            src = os.path.dirname(file_path)
+        else:
+            src = file_path
     dst = os.path.join(saving_path, 'code', os.path.basename(src))
     
     if os.path.isdir(src):

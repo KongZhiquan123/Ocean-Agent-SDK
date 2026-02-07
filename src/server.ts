@@ -5,9 +5,10 @@
  *              支持 SSE 流式对话和多轮会话管理
  * Author: leizheng, kongzhiquan
  * Time: 2026-02-02
- * Version: 2.0.0
+ * Version: 2.1.0
  *
  * Changelog:
+ *   - 2026-02-07 kongzhiquan: v2.1.0 服务器关闭时清理训练进程
  *   - 2026-02-03 kongzhiquan: v2.0.0 适配持久化会话管理器
  *   - 2026-02-02 leizheng: v1.2.0 简化为直接使用 agentId 复用会话
  *   - 2026-02-02 leizheng: v1.1.0 添加多轮对话支持
@@ -25,6 +26,7 @@ import {
   type SSEEvent,
 } from './agent-manager'
 import { conversationManager } from './conversation-manager'
+import { trainingProcessManager } from './utils/training-process-manager'
 
 // ========================================
 // 初始化
@@ -309,18 +311,20 @@ const server = app.listen(config.port, () => {
 })
 
 // 关闭
-process.on('SIGTERM', () => {
+process.on('SIGTERM', async () => {
   console.log('[server] 收到 SIGTERM 信号，开始关闭...')
   conversationManager.shutdown()
+  await trainingProcessManager.shutdown()
   server.close(() => {
     console.log('[server] 服务器已关闭')
     process.exit(0)
   })
 })
 
-process.on('SIGINT', () => {
+process.on('SIGINT', async () => {
   console.log('[server] 收到 SIGINT 信号，开始关闭...')
   conversationManager.shutdown()
+  await trainingProcessManager.shutdown()
   server.close(() => {
     console.log('[server] 服务器已关闭')
     process.exit(0)
