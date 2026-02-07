@@ -1,7 +1,7 @@
 ---
 name: ocean-SR-training
 description: 海洋超分辨率模型训练技能 - 支持多种模型架构的训练、测试与推理（含陆地掩码处理）
-version: 3.1.0
+version: 3.2.0
 author: Leizheng
 contributors: kongzhiquan
 last_modified: 2026-02-07
@@ -9,6 +9,7 @@ last_modified: 2026-02-07
 
 <!--
 Changelog:
+  - 2026-02-07 kongzhiquan: v3.2.0 简化输出目录结构，移除子目录层级和代码快照
   - 2026-02-07 kongzhiquan: v3.1.0 可视化与报告增强
   - 2026-02-07 kongzhiquan: v3.0.0 后台训练模式
   - 2026-02-06 Leizheng: v2.0.0 陆地掩码 + 训练报告
@@ -102,21 +103,22 @@ dataset_root/
 
 ## 输出目录结构
 
+训练输出直接保存到 `log_dir` 指定的目录：
+
 ```
-log_dir/
+log_dir/                       ← 训练输出目录（由配置指定）
 ├── train-xxx.log              ← 进程日志
-└── OceanNPY_Model_DateTime/   ← 训练输出
-    ├── config.yaml
-    ├── train.log
-    ├── best_model.pth
-    ├── training_report.md
-    ├── plots/                 ← 可视化图表
-    │   ├── loss_curve.png
-    │   ├── metrics_curve.png
-    │   ├── lr_curve.png
-    │   ├── metrics_comparison.png
-    │   └── training_summary.png
-    └── code/
+├── train-xxx.error.log        ← 错误日志
+├── config.yaml                ← 训练配置
+├── train.log                  ← 训练日志
+├── best_model.pth             ← 最佳模型权重
+├── training_report.md         ← 训练报告
+└── plots/                     ← 可视化图表
+    ├── loss_curve.png
+    ├── metrics_curve.png
+    ├── lr_curve.png
+    ├── metrics_comparison.png
+    └── training_summary.png
 ```
 
 ---

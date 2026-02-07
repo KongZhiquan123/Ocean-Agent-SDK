@@ -29,8 +29,7 @@ export const oceanSrVisualizeTool = defineTool({
 4. **metrics_comparison.png** - 验证集与测试集指标对比柱状图
 5. **training_summary.png** - 训练总结表格（模型、参数、时长、最终指标）
 
-**输出目录**：
-- 默认: log_dir/plots/
+**输出目录**：固定为 log_dir/plots/
 
 **使用场景**：
 - 训练完成后生成可视化报告
@@ -41,16 +40,11 @@ export const oceanSrVisualizeTool = defineTool({
     log_dir: {
       type: 'string',
       description: '训练日志目录（包含 train.log）'
-    },
-    output_dir: {
-      type: 'string',
-      description: '图表输出目录（默认: log_dir/plots）',
-      required: false
     }
   },
 
   async exec(args, ctx) {
-    const { log_dir, output_dir } = args
+    const { log_dir } = args
 
     // 1. 检查 Python 环境（需要 matplotlib）
     const pythonPath = findPythonWithModule('matplotlib') || findFirstPythonPath()
@@ -63,13 +57,10 @@ export const oceanSrVisualizeTool = defineTool({
       process.cwd(),
       'scripts/ocean_SR_training_masked/generate_training_plots.py'
     )
-    const plotsDir = output_dir || path.join(log_dir, 'plots')
+    const plotsDir = path.join(log_dir, 'plots')
 
     // 3. 构建命令行参数
     let cmd = `"${pythonPath}" "${scriptPath}" --log_dir "${log_dir}"`
-    if (output_dir) {
-      cmd += ` --output_dir "${output_dir}"`
-    }
 
     // 4. 执行 Python 脚本
     const result = await ctx.sandbox.exec(cmd, { timeoutMs: 180000 })

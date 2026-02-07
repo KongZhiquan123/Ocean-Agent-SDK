@@ -367,37 +367,37 @@ def generate_report(log_dir: str, yaml_config: Optional[Dict], log_data: Dict) -
     if plot_files:
         # Loss curve
         if 'loss_curve.png' in plot_files:
-            lines.append("#### Training Loss Curve")
+            lines.append("#### 训练损失曲线")
             lines.append("")
-            lines.append("![Training Loss Curve](plots/loss_curve.png)")
+            lines.append("![训练损失曲线](plots/loss_curve.png)")
             lines.append("")
 
         # Metrics curve
         if 'metrics_curve.png' in plot_files:
-            lines.append("#### Validation Metrics Over Training")
+            lines.append("#### 验证集指标变化曲线")
             lines.append("")
-            lines.append("![Validation Metrics](plots/metrics_curve.png)")
+            lines.append("![验证集指标变化曲线](plots/metrics_curve.png)")
             lines.append("")
 
         # Learning rate curve
         if 'lr_curve.png' in plot_files:
-            lines.append("#### Learning Rate Schedule")
+            lines.append("#### 学习率变化曲线")
             lines.append("")
-            lines.append("![Learning Rate](plots/lr_curve.png)")
+            lines.append("![学习率变化曲线](plots/lr_curve.png)")
             lines.append("")
 
         # Metrics comparison
         if 'metrics_comparison.png' in plot_files:
-            lines.append("#### Validation vs Test Metrics Comparison")
+            lines.append("#### 验证集与测试集指标对比")
             lines.append("")
-            lines.append("![Metrics Comparison](plots/metrics_comparison.png)")
+            lines.append("![验证集与测试集指标对比](plots/metrics_comparison.png)")
             lines.append("")
 
         # Training summary
         if 'training_summary.png' in plot_files:
-            lines.append("#### Training Summary")
+            lines.append("#### 训练总结")
             lines.append("")
-            lines.append("![Training Summary](plots/training_summary.png)")
+            lines.append("![训练总结](plots/training_summary.png)")
             lines.append("")
     else:
         lines.append("*无可视化图表*")

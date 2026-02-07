@@ -33,7 +33,6 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 
 from tqdm import tqdm
 from utils.loss import LossRecord, LpLoss, MaskedLpLoss
-from utils.helper import save_code
 from utils.ddp import debug_barrier
 from utils.metrics import Evaluator, MaskedEvaluator
 from functools import partial

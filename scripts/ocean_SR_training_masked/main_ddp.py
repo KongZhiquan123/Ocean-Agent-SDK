@@ -4,7 +4,7 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 from config import parser
-from utils.helper import set_up_logger, set_seed, set_device, load_config, get_dir_path, save_config, save_code
+from utils.helper import set_up_logger, set_seed, set_device, load_config, get_dir_path, save_config
 from trainers import _trainer_dict
 from models import _model_dict
 from datasets import _dataset_dict
@@ -28,30 +28,13 @@ def main():
     if dist.get_rank() == 0:
         saving_path, saving_name = set_up_logger(args)
         save_config(args, saving_path)
-
-        # 保存本次训练用到的相关代码快照
-        model_name = args['model']['name']
-        data_name = args['data']['name']
-        if model_name in _model_dict:
-            model_entry = _model_dict[model_name]
-            if isinstance(model_entry, dict):
-                save_code(model_entry['model'], saving_path, with_dir=True)
-            else:
-                save_code(model_entry, saving_path, with_dir=True)
-        if data_name in _dataset_dict:
-            save_code(_dataset_dict[data_name], saving_path)
-        if model_name in _trainer_dict:
-            save_code(_trainer_dict[model_name], saving_path)
-        import utils.normalizer, utils.loss
-        save_code(utils.normalizer, saving_path)
-        save_code(utils.loss, saving_path)
     else:
         saving_path, saving_name = None, None
-    
+
     payload = [saving_path, saving_name]
     dist.broadcast_object_list(payload, src=0)
     saving_path, saving_name = payload
-        
+
     args['train']['saving_path'] = saving_path
     args['train']['saving_name'] = saving_name
 

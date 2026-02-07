@@ -32,7 +32,7 @@
 
 ```
 ocean_sr_visualize({
-  log_dir: "/path/to/OceanNPY_SwinIR_0206_143025"
+  log_dir: "/path/to/training_output"
 })
 ```
 
@@ -57,7 +57,7 @@ log_dir/plots/
 
 ```
 ocean_sr_generate_report({
-  log_dir: "/path/to/OceanNPY_SwinIR_0206_143025"
+  log_dir: "/path/to/training_output"
 })
 ```
 
