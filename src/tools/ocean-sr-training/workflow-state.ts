@@ -4,10 +4,13 @@
  *              核心思想：根据已有参数倒推当前阶段，防止跳步
  *
  * @author Leizheng
+ * @contributors kongzhiquan
  * @date 2026-02-07
- * @version 2.1.0
+ * @version 2.2.0
  *
  * @changelog
+ *   - 2026-02-08 kongzhiquan: v2.2.0 修复状态机死循环
+ *     - 构造函数统一填充 schema 默认值，消除展示层/判断层不一致
  *   - 2026-02-07 kongzhiquan: v2.1.0 适配 OOM 自动防护改动
  *     - 移除 skip_memory_check 参数
  *     - use_amp 默认值改为 true
@@ -175,7 +178,31 @@ export class TrainingWorkflow {
   private static readonly TOKEN_SALT = 'ocean-sr-training-v1'
 
   constructor(params: TrainingWorkflowParams) {
-    this.params = params
+    // 统一填充 schema 声明的默认值，消除展示层（??）和判断层（!== undefined）的不一致
+    this.params = {
+      mode: 'train',
+      epochs: 500,
+      lr: 0.001,
+      batch_size: 32,
+      eval_batch_size: 32,
+      distribute: false,
+      distribute_mode: 'DDP',
+      patience: 10,
+      eval_freq: 5,
+      normalize: true,
+      normalizer_type: 'PGN',
+      optimizer: 'AdamW',
+      weight_decay: 0.001,
+      scheduler: 'StepLR',
+      scheduler_step_size: 300,
+      scheduler_gamma: 0.5,
+      seed: 42,
+      wandb: false,
+      use_amp: true,
+      gradient_checkpointing: false,
+      user_confirmed: false,
+      ...params,
+    }
   }
 
   /**

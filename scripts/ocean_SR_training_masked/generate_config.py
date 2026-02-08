@@ -179,12 +179,18 @@ def generate_config(params):
     elif model_name in DIFFUSION_MODELS:
         model_config["in_channel"] = n_channels * 2  # LR + noise
         model_config["out_channel"] = n_channels
-        model_config["image_size"] = hr_shape[0]
+        # 扩散模型以 patch 为单位处理: 有 patch_size 时以 patch 为基准，否则用全图
+        if patch_size:
+            model_config["image_size"] = patch_size
+        else:
+            model_config["image_size"] = hr_shape[0]
 
     # 计算模型整除要求并自动对齐 image_size
     divisor = compute_model_divisor(model_name, model_config)
     if divisor > 1:
-        raw_size = hr_shape[0]
+        # 基准尺寸: 有 patch_size 时用 patch_size，否则用全图
+        base_size = patch_size if (patch_size and model_name in DIFFUSION_MODELS) else hr_shape[0]
+        raw_size = base_size
         aligned_size = ((raw_size + divisor - 1) // divisor) * divisor
         if aligned_size != raw_size:
             print(f"[generate_config] 自动对齐 image_size: {raw_size} -> {aligned_size} "

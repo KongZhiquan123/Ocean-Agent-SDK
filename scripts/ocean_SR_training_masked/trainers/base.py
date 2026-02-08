@@ -685,19 +685,25 @@ class BaseTrainer:
         loss_record = self.evaluator.init_record(["{}_loss".format(split)])
         self.model.eval()
         with torch.no_grad(), torch.amp.autocast('cuda', enabled=self.use_amp):
-            for x, y in eval_loader:
+            for batch in eval_loader:
+                # patch 模式返回 (x, y, mask_patch)，全图模式返回 (x, y)
+                if len(batch) == 3:
+                    x, y, mask_patch = batch
+                    mask_patch = mask_patch.to(self.device, non_blocking=True)
+                else:
+                    x, y = batch
+                    mask_patch = self.mask_hr  # 全局 mask（全图模式）
                 x = x.to(self.device, non_blocking=True)
                 y = y.to(self.device, non_blocking=True)
-                B = y.size(0)
                 y_pred = self.inference(x, y, **kwargs)
                 # normalizer 可能是 dict {'hr': ..., 'lr': ...} 或单个对象
                 _norm = self.normalizer['hr'] if isinstance(self.normalizer, dict) else self.normalizer
                 y_pred = _norm.decode(y_pred)
                 y = _norm.decode(y)
                 # 逐 batch 计算 loss 和指标，避免在 GPU 上累积全部验证结果
-                batch_loss = self.loss_fn(y_pred, y, mask=self.mask_hr)
+                batch_loss = self.loss_fn(y_pred, y, mask=mask_patch)
                 loss_record.update({"{}_loss".format(split): batch_loss.item()})
-                self.evaluator(y_pred, y, record=loss_record, mask=self.mask_hr)
+                self.evaluator(y_pred, y, record=loss_record, mask=mask_patch)
                 del y_pred, batch_loss  # 立即释放显存
         if self.dist and dist.is_initialized():
             loss_record.dist_reduce()

@@ -15,9 +15,14 @@ OceanNPY Dataset - 适配 ocean-preprocess 预处理输出的数据集类（带�
 @author Leizheng
 @contributors kongzhiquan
 @date 2026-02-06
-@version 4.0.0
+@version 5.0.0
 
 @changelog
+  - 2026-02-08 kongzhiquan: v5.0.0 验证/测试集也使用 patch 切片
+    - valid/test 数据集传入 patch_size、scale、mask_hr
+    - OceanNPYDatasetBase 非训练模式使用非重叠网格切片
+    - __len__ 返回 样本数 × 每样本 patch 数
+    - __getitem__ 按 (sample_idx, patch_idx) 解码
   - 2026-02-07 kongzhiquan: v4.0.0 读取 model_divisor，自动计算 patch_size
     - 当数据尺寸不能被 model_divisor 整除且未指定 patch_size 时自动计算
   - 2026-02-07 Leizheng: v3.0.0 添加 Patch 训练支持
@@ -173,8 +178,12 @@ class OceanNPYDataset:
         self.train_dataset = OceanNPYDatasetBase(
             train_lr, train_hr, mode='train',
             patch_size=patch_size, scale=scale, mask_hr=mask_hr_spatial)
-        self.valid_dataset = OceanNPYDatasetBase(valid_lr, valid_hr, mode='valid')
-        self.test_dataset = OceanNPYDatasetBase(test_lr, test_hr, mode='test')
+        self.valid_dataset = OceanNPYDatasetBase(
+            valid_lr, valid_hr, mode='valid',
+            patch_size=patch_size, scale=scale, mask_hr=mask_hr_spatial)
+        self.test_dataset = OceanNPYDatasetBase(
+            test_lr, test_hr, mode='test',
+            patch_size=patch_size, scale=scale, mask_hr=mask_hr_spatial)
 
     def _load_split(self, dataset_root, split, dyn_vars):
         """
@@ -231,7 +240,11 @@ class OceanNPYDataset:
 
 class OceanNPYDatasetBase(Dataset):
     """
-    PyTorch Dataset wrapper，支持可选的 Patch 随机裁剪。
+    PyTorch Dataset wrapper，支持可选的 Patch 裁剪。
+
+    - train 模式: 随机裁剪 patch（数据增强）
+    - valid/test 模式: 非重叠网格切片（确定性，覆盖大部分面积）
+    - 无 patch_size: 返回全图
 
     Args:
         x (Tensor): LR input [N, h, w, C]
@@ -242,7 +255,7 @@ class OceanNPYDatasetBase(Dataset):
         mask_hr (Tensor|None): [1, H, W, 1] bool，HR 掩码
 
     Returns:
-        训练且 patch_size 有效且 mask_hr 存在时: (x, y, mask_hr_patch)
+        有 patch_size 且有 mask_hr 时: (x, y, mask_hr_patch)
         其他情况: (x, y)
     """
 
@@ -254,7 +267,30 @@ class OceanNPYDatasetBase(Dataset):
         self.scale = scale
         self.mask_hr = mask_hr  # [1, H, W, 1] bool or None
 
+        # 非训练模式 + 有 patch_size：预计算非重叠网格位置
+        if patch_size is not None and mode != 'train':
+            H, W = y.shape[1], y.shape[2]
+            self._grid_positions = [
+                (top, left)
+                for top in range(0, H - patch_size + 1, patch_size)
+                for left in range(0, W - patch_size + 1, patch_size)
+            ]
+            if len(self._grid_positions) == 0:
+                # patch_size > 数据尺寸，退化为全图（不裁剪）
+                self._grid_positions = None
+            else:
+                covered_h = (H // patch_size) * patch_size
+                covered_w = (W // patch_size) * patch_size
+                if covered_h < H or covered_w < W:
+                    print(f'[OceanNPY] {mode} 网格切片: {len(self._grid_positions)} patches '
+                          f'({covered_h}x{covered_w} / {H}x{W}, '
+                          f'覆盖率 {covered_h*covered_w/(H*W)*100:.1f}%)')
+        else:
+            self._grid_positions = None
+
     def __len__(self):
+        if self._grid_positions is not None:
+            return len(self.x) * len(self._grid_positions)
         return len(self.x)
 
     def __getitem__(self, idx):
@@ -279,6 +315,28 @@ class OceanNPYDatasetBase(Dataset):
             # 裁剪对应的 mask patch
             if self.mask_hr is not None:
                 mask_hr_patch = self.mask_hr[0, top:top+ps, left:left+ps, :]  # [ps, ps, 1]
+                return x, y, mask_hr_patch
+
+        elif self._grid_positions is not None:
+            # 非训练模式的网格切片
+            n_patches = len(self._grid_positions)
+            sample_idx = idx // n_patches
+            patch_idx = idx % n_patches
+            top, left = self._grid_positions[patch_idx]
+
+            x = self.x[sample_idx]
+            y = self.y[sample_idx]
+            ps = self.patch_size
+
+            y = y[top:top+ps, left:left+ps, :]
+
+            lr_ps = ps // self.scale
+            lr_top = top // self.scale
+            lr_left = left // self.scale
+            x = x[lr_top:lr_top+lr_ps, lr_left:lr_left+lr_ps, :]
+
+            if self.mask_hr is not None:
+                mask_hr_patch = self.mask_hr[0, top:top+ps, left:left+ps, :]
                 return x, y, mask_hr_patch
 
         return x, y
