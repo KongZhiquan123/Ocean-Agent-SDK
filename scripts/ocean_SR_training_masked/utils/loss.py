@@ -2,12 +2,12 @@
 Loss functions for ocean SR training (masked version).
 
 @author Leizheng
-@contributors kongzhiquan
+@contributors Leizheng
 @date 2026-02-06
 @version 2.1.0
 
 @changelog
-  - 2026-02-07 kongzhiquan: v2.1.0 添加结构化日志支持
+  - 2026-02-07 Leizheng: v2.1.0 添加结构化日志支持
     - LossRecord 新增 to_json_event() 方法，输出 JSON 格式日志
     - 支持事件类型标记，便于日志解析
   - 2026-02-06 Leizheng: v2.0.0 添加 MaskedLpLoss

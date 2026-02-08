@@ -2,14 +2,14 @@
 """
 generate_training_plots.py - Ocean SR 训练可视化脚本
 
-@author kongzhiquan
+@author Leizheng
 @date 2026-02-07
 @version 1.2.0
 
 @changelog
-    - 2026-02-07 kongzhiquan: v1.2.0 美化图表样式，使用现代配色和视觉效果
-    - 2026-02-07 kongzhiquan: v1.1.0 移除中文标签，仅使用英文
-    - 2026-02-07 kongzhiquan: v1.0.0 初始版本
+    - 2026-02-07 Leizheng: v1.2.0 美化图表样式，使用现代配色和视觉效果
+    - 2026-02-07 Leizheng: v1.1.0 移除中文标签，仅使用英文
+    - 2026-02-07 Leizheng: v1.0.0 初始版本
 
 用法:
         python generate_training_plots.py --log_dir /path/to/log_dir

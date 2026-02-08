@@ -7,9 +7,12 @@
  * @author Leizheng
  * @contributors kongzhiquan
  * @date 2026-02-06
- * @version 4.0.0
+ * @version 4.1.0
  *
  * @changelog
+ *   - 2026-02-08 Leizheng: v4.1.0 修复参数传递 + 显式白名单
+ *     - configParams 改用显式白名单，避免 restParams 泄漏状态机内部字段
+ *     - 显式传递 ckpt_path（之前被解构后从 restParams 中丢失）
  *   - 2026-02-07 kongzhiquan: v4.0.0 OOM 自动防护 + 事件驱动启动监控
  *     - 显存预估改为自动循环调参（AMP→减batch_size→报错），不可跳过
  *     - 移除 skip_memory_check 参数，use_amp 默认改为 true
@@ -361,10 +364,6 @@ export const oceanSrTrainTool = defineTool({
       distribute = false,
       distribute_mode = 'DDP',
       ckpt_path,
-      // 排除状态机参数
-      user_confirmed: _uc,
-      confirmation_token: _ct,
-      ...restParams
     } = args
 
     if (!log_dir) {
@@ -398,7 +397,8 @@ export const oceanSrTrainTool = defineTool({
     const generateScript = path.join(workspaceDir, 'generate_config.py')
 
     // ===== 3b. 生成配置文件 =====
-    const configParams = {
+    // 显式白名单：只传递 generate_config.py 需要的参数，避免泄漏状态机内部字段
+    const configParams: Record<string, unknown> = {
       model_name,
       dataset_root,
       dyn_vars,
@@ -408,7 +408,25 @@ export const oceanSrTrainTool = defineTool({
       device_ids,
       distribute,
       distribute_mode,
-      ...restParams
+      ckpt_path,
+      epochs: args.epochs,
+      lr: args.lr,
+      batch_size: args.batch_size,
+      eval_batch_size: args.eval_batch_size,
+      patience: args.patience,
+      eval_freq: args.eval_freq,
+      normalize: args.normalize,
+      normalizer_type: args.normalizer_type,
+      optimizer: args.optimizer,
+      weight_decay: args.weight_decay,
+      scheduler: args.scheduler,
+      scheduler_step_size: args.scheduler_step_size,
+      scheduler_gamma: args.scheduler_gamma,
+      seed: args.seed,
+      wandb: args.wandb,
+      use_amp: args.use_amp,
+      gradient_checkpointing: args.gradient_checkpointing,
+      patch_size: args.patch_size,
     }
 
     const configPath = path.join(workspaceDir, `${model_name}_config.yaml`)
@@ -434,8 +452,8 @@ export const oceanSrTrainTool = defineTool({
     if (mode === 'train') {
       const estimateScript = path.join(workspaceDir, 'estimate_memory.py')
       const cudaDevice = device_ids[0]
-      let currentBatchSize = configParams.batch_size ?? 32
-      let currentAmp = configParams.use_amp ?? true
+      let currentBatchSize = (configParams.batch_size as number) ?? 32
+      let currentAmp = (configParams.use_amp as boolean) ?? true
       const MAX_ATTEMPTS = 5
 
       for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {

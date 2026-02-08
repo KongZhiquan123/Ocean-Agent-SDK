@@ -3,12 +3,12 @@
  *
  * @description 海洋超分辨率训练报告生成工具
  * @author Leizheng
- * @contributors kongzhiquan
+ * @contributors Leizheng
  * @date 2026-02-06
  * @version 2.0.0
  *
  * @changelog
- *   - 2026-02-07 kongzhiquan: v2.0.0 适配结构化日志解析
+ *   - 2026-02-07 Leizheng: v2.0.0 适配结构化日志解析
  *     - 简化参数，移除 user_confirmation（从结构化日志自动提取）
  *     - 改用 --log_dir 命令行参数
  *     - 移除临时配置文件，直接传参

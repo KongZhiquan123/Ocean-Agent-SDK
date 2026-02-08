@@ -2,12 +2,12 @@
 ResShift Trainer (masked version).
 
 @author Leizheng
-@contributors kongzhiquan
+@contributors Leizheng
 @date 2026-02-06
 @version 4.0.0
 
 @changelog
-  - 2026-02-07 kongzhiquan: v4.0.0 inference 自动对齐尺寸 + crop 回原尺寸
+  - 2026-02-07 Leizheng: v4.0.0 inference 自动对齐尺寸 + crop 回原尺寸
     - interpolate 到 model_divisor 对齐后的尺寸
     - 采样完成后 crop 回原始 y 尺寸
   - 2026-02-07 Leizheng: v3.0.0 AMP 混合精度 + Gradient Checkpointing

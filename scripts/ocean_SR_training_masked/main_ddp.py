@@ -2,15 +2,15 @@
 main_ddp.py - 多卡 DDP 训练入口
 
 @author Leizheng
-@contributors kongzhiquan
+@contributors Leizheng
 @date 2026-02-07
 @version 1.2.0
 
 @changelog
-  - 2026-02-07 kongzhiquan: v1.2.0 始终输出错误事件（不限 startup 阶段）
+  - 2026-02-07 Leizheng: v1.2.0 始终输出错误事件（不限 startup 阶段）
     - 训练阶段崩溃时 base.py 已输出详细 training_error，这里作为兜底
     - 区分 phase: startup / training，TypeScript 侧以最后收到的事件为准
-  - 2026-02-07 kongzhiquan: v1.1.0 添加顶层 try-catch + rank 信息，finally 清理 dist
+  - 2026-02-07 Leizheng: v1.1.0 添加顶层 try-catch + rank 信息，finally 清理 dist
   - 原始版本: v1.0.0
 """
 

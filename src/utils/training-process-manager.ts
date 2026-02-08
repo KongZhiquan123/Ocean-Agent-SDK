@@ -8,16 +8,16 @@
  *              - stderr 环形缓冲区 + stdout 事件解析
  *              - 失败分类 + 错误摘要
  *              - waitForStatusChange / waitForEvent 长轮询
- * @author kongzhiquan
+ * @author Leizheng
  * @date 2026-02-07
  * @version 2.1.0
  *
  * @changelog
- *   - 2026-02-07 kongzhiquan: v2.1.0 修复事件捕获通道
+ *   - 2026-02-07 Leizheng: v2.1.0 修复事件捕获通道
  *     - 新增 stderrEventBuffer + stderr 侧 __event__ 解析（兜底 Python logging → stderr 的事件）
  *     - FAILURE_PATTERNS 新增 ChildFailedError / torch.distributed.elastic 等 DDP 失败模式
  *     - parseStdoutEvents → parseEventMarkers，同时用于 stdout 和 stderr
- *   - 2026-02-07 kongzhiquan: v2.0.0 训练错误实时反馈增强
+ *   - 2026-02-07 Leizheng: v2.0.0 训练错误实时反馈增强
  *     - 新增 stderr 环形缓冲区（最后 100 行）
  *     - 新增 stdout __event__ 标记解析（training_error / epoch_train / training_start 等）
  *     - 新增 classifyFailure() 失败分类，填充 errorSummary
@@ -25,14 +25,14 @@
  *     - 新增 waitForEvent() 等待特定事件方法
  *     - TrainingProcessInfo 新增 errorSummary / progress 字段
  *     - ManagedProcess 新增 stderrRingBuffer / receivedEvents / lastTrainingError / lastEpochInfo / trainingMeta
- *   - 2026-02-07 kongzhiquan: v1.2.0 增强错误处理
+ *   - 2026-02-07 Leizheng: v1.2.0 增强错误处理
  *     - 移除 EventEmitter 继承，避免未处理的 error 事件导致崩溃
  *     - 日志流写入添加错误处理
  *     - 文件读取操作添加 try-catch
- *   - 2026-02-07 kongzhiquan: v1.1.0 优化日志输出
+ *   - 2026-02-07 Leizheng: v1.1.0 优化日志输出
  *     - stderr 中的正常日志（INFO/DEBUG）直接写入，不加前缀
  *     - 只有真正的错误（ERROR/WARNING/Traceback 等）才加 [STDERR] 前缀
- *   - 2026-02-07 kongzhiquan: v1.0.0 初始版本
+ *   - 2026-02-07 Leizheng: v1.0.0 初始版本
  */
 
 import { spawn, ChildProcess } from 'child_process'

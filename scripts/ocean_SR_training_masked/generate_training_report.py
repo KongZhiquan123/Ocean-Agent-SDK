@@ -2,15 +2,15 @@
 """
 generate_training_report.py - 海洋超分辨率训练报告生成脚本
 
-@author kongzhiquan
+@author Leizheng
 @date 2026-02-06
 @version 2.1.0
 
 @changelog
-  - 2026-02-07 kongzhiquan: v2.1.0 添加可视化结果章节
+  - 2026-02-07 Leizheng: v2.1.0 添加可视化结果章节
     - 新增第 4 节可视化结果，插入训练图表
     - 自动检测 plots/ 目录下的图表文件
-  - 2026-02-07 kongzhiquan: v2.0.0 重构为结构化日志解析
+  - 2026-02-07 Leizheng: v2.0.0 重构为结构化日志解析
     - 使用 __event__{}__event__ 格式解析 JSON 事件
     - 按照 train_report.md 模板生成报告
     - 移除正则表达式解析，改用结构化数据

@@ -6,9 +6,13 @@
  * @author Leizheng
  * @contributors kongzhiquan
  * @date 2026-02-07
- * @version 2.2.0
+ * @version 2.3.0
  *
  * @changelog
+ *   - 2026-02-08 Leizheng: v2.3.0 简化 Token 机制
+ *     - PASS 阶段移除 token 强校验，user_confirmed=true + hasAllRequiredParams() 即通过
+ *     - Token 降级为展示用途：awaiting_execution 阶段仍生成 token 供 Agent 展示给用户
+ *     - 解决 Agent 因修改参数导致 token 振荡死循环的问题
  *   - 2026-02-08 kongzhiquan: v2.2.0 修复状态机死循环
  *     - 构造函数统一填充 schema 默认值，消除展示层/判断层不一致
  *   - 2026-02-07 kongzhiquan: v2.1.0 适配 OOM 自动防护改动
@@ -247,61 +251,14 @@ export class TrainingWorkflow {
     const { params } = this
 
     // ========== 阶段5: PASS ==========
+    // 简化：user_confirmed=true + 所有必需参数齐全即通过
+    // Token 仅供展示参考，不做强校验（避免 Agent 修改参数后 token 振荡）
     if (params.user_confirmed === true && this.hasAllRequiredParams()) {
-      if (!params.confirmation_token) {
-        return {
-          currentState: TrainingState.TOKEN_INVALID,
-          missingParams: ['confirmation_token'],
-          canProceed: false,
-          stageDescription: 'Token 缺失',
-          tokenError: `⚠️ 检测到跳步行为！
-
-您设置了 user_confirmed=true，但未提供 confirmation_token。
-
-这表明您可能试图跳过 awaiting_execution 阶段直接执行。
-为了确保用户已经看到并确认了所有参数，必须：
-
-1. 先调用工具（不带 user_confirmed），进入 awaiting_execution 阶段
-2. 从返回结果中获取 confirmation_token
-3. 用户确认后，再次调用并携带 user_confirmed=true 和 confirmation_token
-
-【安全提示】
-confirmation_token 是基于所有参数生成的签名，用于：
-- 确保用户看到了完整的参数汇总
-- 防止 Agent 自动跳过确认步骤
-- 防止参数在确认后被篡改`
-        }
-      }
-
-      if (!this.validateConfirmationToken()) {
-        return {
-          currentState: TrainingState.TOKEN_INVALID,
-          missingParams: [],
-          canProceed: false,
-          stageDescription: 'Token 验证失败',
-          tokenError: `⚠️ Token 验证失败！
-
-提供的 confirmation_token 与当前参数不匹配。
-
-可能的原因：
-1. Token 是从之前的调用中获取的，但参数已经修改
-2. Token 被错误地复制或截断
-3. 试图使用伪造的 token
-
-【解决方法】
-请重新调用工具（不带 user_confirmed），获取新的 confirmation_token，
-然后让用户确认参数后再执行。
-
-【当前 Token】: ${params.confirmation_token}
-【期望 Token】: ${this.generateConfirmationToken()}`
-        }
-      }
-
       return {
         currentState: TrainingState.PASS,
         missingParams: [],
         canProceed: true,
-        stageDescription: '所有参数已确认，Token 验证通过，可以执行训练'
+        stageDescription: '所有参数已确认，可以执行训练'
       }
     }
 

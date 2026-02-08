@@ -2,22 +2,26 @@
 Base trainer for ocean SR training (masked version).
 
 @author Leizheng
-@contributors kongzhiquan
+@contributors Leizheng
 @date 2026-02-06
-@version 4.3.0
+@version 4.4.0
 
 @changelog
-  - 2026-02-08 kongzhiquan: v4.3.0 验证 OOM 防护
+  - 2026-02-08 Leizheng: v4.4.0 PGN+Patch 兼容 + dir() 修复
+    - evaluate() 中 patch 模式下跳过 PGN decode（避免空间维度不匹配）
+    - __init__ 新增 self.patch_mode 标志
+    - 修复 'epoch' in dir() → 'epoch' in locals()
+  - 2026-02-08 Leizheng: v4.3.0 验证 OOM 防护
     - evaluate() 前调用 torch.cuda.empty_cache() 释放碎片化缓存
     - evaluate() 改为逐 batch 计算 metrics，不再累积 all_y/all_y_pred
     - valid_loader/test_loader 在 DDP 模式下加 DistributedSampler
-  - 2026-02-07 kongzhiquan: v4.2.0 修复事件输出通道
+  - 2026-02-07 Leizheng: v4.2.0 修复事件输出通道
     - _log_json_event 直接 print 到 stdout（不再依赖 logging.info → stderr）
     - training_error 事件在所有 rank 输出（不限主进程），确保多卡崩溃可被捕获
-  - 2026-02-07 kongzhiquan: v4.1.0 process() 添加 try-catch 结构化错误输出
+  - 2026-02-07 Leizheng: v4.1.0 process() 添加 try-catch 结构化错误输出
     - 训练崩溃时输出 training_error 事件，包含错误类型/消息/traceback/epoch
     - 新增 _current_epoch 跟踪当前训练轮次
-  - 2026-02-07 kongzhiquan: v4.0.0 通用模型尺寸适配
+  - 2026-02-07 Leizheng: v4.0.0 通用模型尺寸适配
     - 新增 _pad_to_divisible() / _crop_to_original() 工具方法
     - 从 data_args 读取 model_divisor，inference() 自动 pad/crop
     - 覆盖 UNet2d 等标准模型，扩散模型由各自 diffusion.py 处理
@@ -27,7 +31,7 @@ Base trainer for ocean SR training (masked version).
     - evaluate() 使用 autocast 加速推理
     - gradient checkpointing 包装 model forward 降低激活显存
     - save_ckpt / load_ckpt 保存/恢复 scaler 状态
-  - 2026-02-07 kongzhiquan: v2.1.0 添加结构化日志输出
+  - 2026-02-07 Leizheng: v2.1.0 添加结构化日志输出
     - 训练开始/结束时输出 training_start/training_end 事件
     - 每个 epoch 输出 epoch_train/epoch_valid 事件
     - 最终评估输出 final_valid/final_test 事件
@@ -81,6 +85,9 @@ class BaseTrainer:
 
         # 模型整除要求（用于 inference pad/crop）
         self.model_divisor = self.data_args.get('model_divisor', 1)
+
+        # Patch 模式标志（影响验证时是否做 decode）
+        self.patch_mode = self.data_args.get('patch_size', None) is not None
 
         self.logger = logging.info if self.log_args.get('log', True) else print
         self.wandb = self.log_args.get('wandb', False)
@@ -550,7 +557,7 @@ class BaseTrainer:
             # 输出训练结束事件
             training_end_time = datetime.now()
             training_duration = (training_end_time - training_start_time).total_seconds()
-            actual_epochs = epoch + 1 if 'epoch' in dir() else self.epochs
+            actual_epochs = epoch + 1 if 'epoch' in locals() else self.epochs
             self._log_json_event(
                 "training_end",
                 training_duration_seconds=training_duration,
@@ -698,8 +705,12 @@ class BaseTrainer:
                 y_pred = self.inference(x, y, **kwargs)
                 # normalizer 可能是 dict {'hr': ..., 'lr': ...} 或单个对象
                 _norm = self.normalizer['hr'] if isinstance(self.normalizer, dict) else self.normalizer
-                y_pred = _norm.decode(y_pred)
-                y = _norm.decode(y)
+                # Patch 模式下 PGN 的 mean/std 形状是全图空间维度，与 patch 维度不匹配
+                # 此时在归一化空间中计算 metrics（仍然有效，因为值域一致）
+                # 全图模式下正常 decode 回原始数据空间
+                if not self.patch_mode and _norm is not None:
+                    y_pred = _norm.decode(y_pred)
+                    y = _norm.decode(y)
                 # 逐 batch 计算 loss 和指标，避免在 GPU 上累积全部验证结果
                 batch_loss = self.loss_fn(y_pred, y, mask=mask_patch)
                 loss_record.update({"{}_loss".format(split): batch_loss.item()})

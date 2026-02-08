@@ -2,13 +2,13 @@
 main.py - 单卡训练入口
 
 @author Leizheng
-@contributors kongzhiquan
+@contributors Leizheng
 @date 2026-02-07
 @version 1.2.0
 
 @changelog
-  - 2026-02-07 kongzhiquan: v1.2.0 始终输出错误事件（不限 startup 阶段）
-  - 2026-02-07 kongzhiquan: v1.1.0 添加顶层 try-catch，结构化错误输出
+  - 2026-02-07 Leizheng: v1.2.0 始终输出错误事件（不限 startup 阶段）
+  - 2026-02-07 Leizheng: v1.1.0 添加顶层 try-catch，结构化错误输出
   - 原始版本: v1.0.0
 """
 

@@ -80,6 +80,7 @@ def main():
         'main.py', 'main_ddp.py', 'config.py',
         'generate_config.py', 'generate_training_report.py',
         'validate_dataset.py', 'check_gpu.py', 'list_models.py',
+        'estimate_memory.py',
     ]
     for f in core_files:
         s = os.path.join(src, f)

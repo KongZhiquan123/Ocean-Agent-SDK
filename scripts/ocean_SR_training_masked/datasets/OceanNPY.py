@@ -13,17 +13,21 @@ OceanNPY Dataset - 适配 ocean-preprocess 预处理输出的数据集类（带�
 多个变量按 channels 维度堆叠: [N, H, W, C]
 
 @author Leizheng
-@contributors kongzhiquan
+@contributors Leizheng
 @date 2026-02-06
-@version 5.0.0
+@version 6.0.0
 
 @changelog
-  - 2026-02-08 kongzhiquan: v5.0.0 验证/测试集也使用 patch 切片
+  - 2026-02-08 Leizheng: v6.0.0 patch 训练默认开启
+    - 用户未指定 patch_size 时自动计算合理默认值（OOM 防护）
+    - patch_size 需同时满足 scale 和 model_divisor 的整除要求
+    - 数据过小时自动退化为全图训练
+  - 2026-02-08 Leizheng: v5.0.0 验证/测试集也使用 patch 切片
     - valid/test 数据集传入 patch_size、scale、mask_hr
     - OceanNPYDatasetBase 非训练模式使用非重叠网格切片
     - __len__ 返回 样本数 × 每样本 patch 数
     - __getitem__ 按 (sample_idx, patch_idx) 解码
-  - 2026-02-07 kongzhiquan: v4.0.0 读取 model_divisor，自动计算 patch_size
+  - 2026-02-07 Leizheng: v4.0.0 读取 model_divisor，自动计算 patch_size
     - 当数据尺寸不能被 model_divisor 整除且未指定 patch_size 时自动计算
   - 2026-02-07 Leizheng: v3.0.0 添加 Patch 训练支持
     - OceanNPYDatasetBase 支持 patch_size 参数，训练时随机裁剪 HR/LR patch
@@ -156,15 +160,25 @@ class OceanNPYDataset:
         divisor = data_args.get('model_divisor', 1)
         H, W = train_hr.shape[1], train_hr.shape[2]
 
-        # 自动计算 patch_size：当数据尺寸不能被 divisor 整除且用户未指定 patch_size 时
-        if patch_size is None and divisor > 1:
-            if H % divisor != 0 or W % divisor != 0:
-                max_dim = min(H, W)
-                patch_size = (max_dim // divisor) * divisor
-                if patch_size < divisor:
-                    patch_size = divisor
-                print(f'[OceanNPY] 自动 patch_size={patch_size} '
-                      f'(数据 {H}x{W}, 模型要求被 {divisor} 整除)')
+        # 默认开启 patch 训练（OOM 防护 + 尺寸对齐）
+        # 当用户未指定 patch_size 时，自动计算合理的默认值
+        if patch_size is None:
+            from math import gcd
+            max_dim = min(H, W)
+            # patch_size 必须同时被 scale 和 divisor 整除
+            lcm_factor = (scale * divisor) // gcd(scale, divisor)
+            # 目标: 不超过数据尺寸的 1/2，不超过 256
+            target = min(max_dim // 2, 256)
+            auto_patch = (target // lcm_factor) * lcm_factor
+            if auto_patch < lcm_factor and lcm_factor < max_dim:
+                auto_patch = lcm_factor
+            if 0 < auto_patch < max_dim:
+                patch_size = auto_patch
+                print(f'[OceanNPY] 默认开启 patch 训练: patch_size={patch_size} '
+                      f'(数据 {H}x{W}, scale={scale}, divisor={divisor}, '
+                      f'lcm={lcm_factor})')
+            else:
+                print(f'[OceanNPY] 数据尺寸 {H}x{W} 较小，使用全图训练')
 
         if patch_size is not None:
             H, W = train_hr.shape[1], train_hr.shape[2]

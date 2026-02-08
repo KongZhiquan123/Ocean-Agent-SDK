@@ -7,13 +7,14 @@ generate_config.py - 根据参数生成训练配置 YAML 文件
     python generate_config.py --params '<JSON string>' --output /path/to/config.yaml
 
 @author Leizheng
-@contributors kongzhiquan
+@contributors Leizheng
 @date 2026-02-06
-@version 3.1.0
+@version 3.2.0
 
 @changelog
-  - 2026-02-07 kongzhiquan: v3.1.0 use_amp 默认值改为 True（OOM 防护增强）
-  - 2026-02-07 kongzhiquan: v3.0.0 新增 compute_model_divisor() 自动对齐 image_size
+  - 2026-02-08 Leizheng: v3.2.0 新增 ckpt_path / load_ckpt 写入 train section
+  - 2026-02-07 Leizheng: v3.1.0 use_amp 默认值改为 True（OOM 防护增强）
+  - 2026-02-07 Leizheng: v3.0.0 新增 compute_model_divisor() 自动对齐 image_size
     - 根据模型架构计算输入尺寸的整除要求
     - 扩散模型自动向上对齐 image_size（如 400→416）
     - 将 model_divisor 写入 data config 供 OceanNPY 使用
@@ -141,6 +142,7 @@ def generate_config(params):
     n_channels = len(dyn_vars)
     lr_size = None
     hr_shape = params.get('hr_shape', None)
+    patch_size = params.get('patch_size', None)
 
     # 自动检测 HR shape
     if hr_shape is None:
@@ -234,6 +236,8 @@ def generate_config(params):
             "ckpt_freq": params.get("ckpt_freq", 100),
             "use_amp": params.get("use_amp", True),   # AMP 默认开启
             "gradient_checkpointing": params.get("gradient_checkpointing", False),
+            "load_ckpt": bool(params.get("ckpt_path")),
+            "ckpt_path": params.get("ckpt_path", ""),
         },
         "optimize": {
             "optimizer": params.get("optimizer", "AdamW"),
