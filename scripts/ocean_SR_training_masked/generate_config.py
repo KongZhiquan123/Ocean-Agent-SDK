@@ -7,11 +7,11 @@ generate_config.py - 根据参数生成训练配置 YAML 文件
     python generate_config.py --params '<JSON string>' --output /path/to/config.yaml
 
 @author Leizheng
-@contributors Leizheng
 @date 2026-02-06
-@version 3.2.0
+@version 3.3.0
 
 @changelog
+  - 2026-02-08 Leizheng: v3.3.0 自动写入 patch_size 并增加合法性校验
   - 2026-02-08 Leizheng: v3.2.0 新增 ckpt_path / load_ckpt 写入 train section
   - 2026-02-07 Leizheng: v3.1.0 use_amp 默认值改为 True（OOM 防护增强）
   - 2026-02-07 Leizheng: v3.0.0 新增 compute_model_divisor() 自动对齐 image_size
@@ -181,14 +181,44 @@ def generate_config(params):
     elif model_name in DIFFUSION_MODELS:
         model_config["in_channel"] = n_channels * 2  # LR + noise
         model_config["out_channel"] = n_channels
-        # 扩散模型以 patch 为单位处理: 有 patch_size 时以 patch 为基准，否则用全图
+
+    # 计算模型整除要求并自动对齐 image_size
+    divisor = compute_model_divisor(model_name, model_config)
+
+    # 自动计算 patch_size（与 OceanNPY 保持一致）
+    if patch_size is None:
+        from math import gcd
+        max_dim = min(hr_shape[0], hr_shape[1])
+        lcm_factor = (scale * divisor) // gcd(scale, divisor)
+        target = min(max_dim // 2, 256)
+        auto_patch = (target // lcm_factor) * lcm_factor
+        if auto_patch < lcm_factor and lcm_factor < max_dim:
+            auto_patch = lcm_factor
+        if 0 < auto_patch < max_dim:
+            patch_size = int(auto_patch)
+
+    if patch_size is not None:
+        max_dim = min(hr_shape[0], hr_shape[1])
+        if patch_size <= 0 or patch_size > max_dim:
+            raise ValueError(
+                f"patch_size ({patch_size}) must be within (0, {max_dim}]"
+            )
+        if patch_size % scale != 0:
+            raise ValueError(
+                f"patch_size ({patch_size}) must be divisible by scale ({scale})"
+            )
+        if patch_size % divisor != 0:
+            raise ValueError(
+                f"patch_size ({patch_size}) must be divisible by model_divisor ({divisor})"
+            )
+
+    # 扩散模型以 patch 为单位处理: 有 patch_size 时以 patch 为基准，否则用全图
+    if model_name in DIFFUSION_MODELS:
         if patch_size:
             model_config["image_size"] = patch_size
         else:
             model_config["image_size"] = hr_shape[0]
 
-    # 计算模型整除要求并自动对齐 image_size
-    divisor = compute_model_divisor(model_name, model_config)
     if divisor > 1:
         # 基准尺寸: 有 patch_size 时用 patch_size，否则用全图
         base_size = patch_size if (patch_size and model_name in DIFFUSION_MODELS) else hr_shape[0]
@@ -218,7 +248,7 @@ def generate_config(params):
                                          4 if model_name in DIFFUSION_MODELS else 32),
             "normalize": params.get("normalize", True),
             "normalizer_type": params.get("normalizer_type", "PGN"),
-            "patch_size": params.get("patch_size", None),
+            "patch_size": patch_size,
             "model_divisor": divisor,
         },
         "train": {

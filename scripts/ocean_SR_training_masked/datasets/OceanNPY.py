@@ -13,11 +13,11 @@ OceanNPY Dataset - 适配 ocean-preprocess 预处理输出的数据集类（带�
 多个变量按 channels 维度堆叠: [N, H, W, C]
 
 @author Leizheng
-@contributors Leizheng
 @date 2026-02-06
-@version 6.0.0
+@version 6.1.0
 
 @changelog
+  - 2026-02-08 Leizheng: v6.1.0 修复 valid/test 网格切片索引越界
   - 2026-02-08 Leizheng: v6.0.0 patch 训练默认开启
     - 用户未指定 patch_size 时自动计算合理默认值（OOM 防护）
     - patch_size 需同时满足 scale 和 model_divisor 的整除要求
@@ -308,6 +308,30 @@ class OceanNPYDatasetBase(Dataset):
         return len(self.x)
 
     def __getitem__(self, idx):
+        if self._grid_positions is not None:
+            # 非训练模式的网格切片
+            n_patches = len(self._grid_positions)
+            sample_idx = idx // n_patches
+            patch_idx = idx % n_patches
+            top, left = self._grid_positions[patch_idx]
+
+            x = self.x[sample_idx]
+            y = self.y[sample_idx]
+            ps = self.patch_size
+
+            y = y[top:top+ps, left:left+ps, :]
+
+            lr_ps = ps // self.scale
+            lr_top = top // self.scale
+            lr_left = left // self.scale
+            x = x[lr_top:lr_top+lr_ps, lr_left:lr_left+lr_ps, :]
+
+            if self.mask_hr is not None:
+                mask_hr_patch = self.mask_hr[0, top:top+ps, left:left+ps, :]
+                return x, y, mask_hr_patch
+
+            return x, y
+
         x = self.x[idx]  # [h, w, C]
         y = self.y[idx]  # [H, W, C]
 
@@ -329,28 +353,6 @@ class OceanNPYDatasetBase(Dataset):
             # 裁剪对应的 mask patch
             if self.mask_hr is not None:
                 mask_hr_patch = self.mask_hr[0, top:top+ps, left:left+ps, :]  # [ps, ps, 1]
-                return x, y, mask_hr_patch
-
-        elif self._grid_positions is not None:
-            # 非训练模式的网格切片
-            n_patches = len(self._grid_positions)
-            sample_idx = idx // n_patches
-            patch_idx = idx % n_patches
-            top, left = self._grid_positions[patch_idx]
-
-            x = self.x[sample_idx]
-            y = self.y[sample_idx]
-            ps = self.patch_size
-
-            y = y[top:top+ps, left:left+ps, :]
-
-            lr_ps = ps // self.scale
-            lr_top = top // self.scale
-            lr_left = left // self.scale
-            x = x[lr_top:lr_top+lr_ps, lr_left:lr_left+lr_ps, :]
-
-            if self.mask_hr is not None:
-                mask_hr_patch = self.mask_hr[0, top:top+ps, left:left+ps, :]
                 return x, y, mask_hr_patch
 
         return x, y

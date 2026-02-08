@@ -10,9 +10,10 @@
  *              - waitForStatusChange / waitForEvent 长轮询
  * @author Leizheng
  * @date 2026-02-07
- * @version 2.1.0
+ * @version 2.2.0
  *
  * @changelog
+ *   - 2026-02-08 Leizheng: v2.2.0 增加训练日志滚动，限制日志文件大小
  *   - 2026-02-07 Leizheng: v2.1.0 修复事件捕获通道
  *     - 新增 stderrEventBuffer + stderr 侧 __event__ 解析（兜底 Python logging → stderr 的事件）
  *     - FAILURE_PATTERNS 新增 ChildFailedError / torch.distributed.elastic 等 DDP 失败模式
@@ -41,10 +42,12 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  renameSync,
   statSync,
   openSync,
   readSync,
   closeSync,
+  unlinkSync,
   WriteStream,
 } from 'fs'
 import path from 'path'
@@ -115,9 +118,14 @@ interface ManagedProcess {
     totalEpochs: number
     startTimestamp: string
   } | null
+  // 日志滚动锁
+  rotatingLog: boolean
+  rotatingErrorLog: boolean
 }
 
 const RING_BUFFER_SIZE = 100
+const MAX_LOG_BYTES = Number(process.env.TRAIN_LOG_MAX_BYTES ?? 200 * 1024 * 1024)
+const MAX_LOG_ROTATIONS = Number(process.env.TRAIN_LOG_MAX_ROTATIONS ?? 5)
 
 class TrainingProcessManager {
   private processes: Map<string, ManagedProcess> = new Map()
@@ -218,6 +226,61 @@ class TrainingProcessManager {
     } catch (err) {
       console.error('[TrainingProcessManager] Failed to write to log stream:', err)
     }
+  }
+
+  private attachStreamErrorHandler(stream: WriteStream, id: string, kind: 'log' | 'error'): void {
+    stream.on('error', (err) => {
+      const label = kind === 'log' ? 'Log' : 'Error log'
+      console.error(`[TrainingProcessManager] ${label} stream error for ${id}:`, err)
+    })
+  }
+
+  private rotateLogIfNeeded(managed: ManagedProcess, kind: 'log' | 'error'): void {
+    if (MAX_LOG_ROTATIONS <= 0 || MAX_LOG_BYTES <= 0) return
+    const logFile = kind === 'log' ? managed.info.logFile : managed.info.errorLogFile
+    const rotatingKey = kind === 'log' ? 'rotatingLog' : 'rotatingErrorLog'
+    if (managed[rotatingKey]) return
+
+    try {
+      if (!existsSync(logFile)) return
+      const size = statSync(logFile).size
+      if (size < MAX_LOG_BYTES) return
+
+      managed[rotatingKey] = true
+
+      const stream = kind === 'log' ? managed.logStream : managed.errorLogStream
+      stream.end()
+
+      for (let i = MAX_LOG_ROTATIONS; i >= 1; i--) {
+        const src = i === 1 ? logFile : `${logFile}.${i - 1}`
+        const dest = `${logFile}.${i}`
+        if (i === MAX_LOG_ROTATIONS && existsSync(dest)) {
+          unlinkSync(dest)
+        }
+        if (existsSync(src)) {
+          renameSync(src, dest)
+        }
+      }
+
+      const newStream = createWriteStream(logFile, { flags: 'a' })
+      this.attachStreamErrorHandler(newStream, managed.info.id, kind)
+      if (kind === 'log') {
+        managed.logStream = newStream
+      } else {
+        managed.errorLogStream = newStream
+      }
+      this.safeWrite(newStream, `\n[Log rotated at ${new Date().toISOString()}]\n`)
+    } catch (err) {
+      console.error(`[TrainingProcessManager] Failed to rotate ${kind} log:`, err)
+    } finally {
+      managed[rotatingKey] = false
+    }
+  }
+
+  private writeLog(managed: ManagedProcess, kind: 'log' | 'error', data: string): void {
+    this.rotateLogIfNeeded(managed, kind)
+    const stream = kind === 'log' ? managed.logStream : managed.errorLogStream
+    this.safeWrite(stream, data)
   }
 
   /**
@@ -392,12 +455,8 @@ class TrainingProcessManager {
     const errorLogStream = createWriteStream(errorLogFile, { flags: 'a' })
 
     // 处理日志流错误，避免未捕获异常
-    logStream.on('error', (err) => {
-      console.error(`[TrainingProcessManager] Log stream error for ${id}:`, err)
-    })
-    errorLogStream.on('error', (err) => {
-      console.error(`[TrainingProcessManager] Error log stream error for ${id}:`, err)
-    })
+    this.attachStreamErrorHandler(logStream, id, 'log')
+    this.attachStreamErrorHandler(errorLogStream, id, 'error')
 
     // 写入启动信息
     const startHeader = `
@@ -453,13 +512,15 @@ Start Time: ${new Date().toISOString()}
       receivedEvents: new Set(),
       lastEpochInfo: null,
       trainingMeta: null,
+      rotatingLog: false,
+      rotatingErrorLog: false,
     }
 
     // 管道 stdout 到日志文件 + 解析事件
     if (childProcess.stdout) {
       childProcess.stdout.on('data', (data: Buffer) => {
         const text = data.toString()
-        this.safeWrite(logStream, text)
+        this.writeLog(managed, 'log', text)
         // 追加到缓冲区并解析事件
         managed.stdoutBuffer += text
         this.parseEventMarkers(managed, 'stdout')
@@ -473,11 +534,11 @@ Start Time: ${new Date().toISOString()}
         const text = data.toString()
         // 判断是否为真正的错误内容
         if (this.isErrorContent(text)) {
-          this.safeWrite(logStream, `[STDERR] ${text}`)
+          this.writeLog(managed, 'log', `[STDERR] ${text}`)
         } else {
-          this.safeWrite(logStream, text)
+          this.writeLog(managed, 'log', text)
         }
-        this.safeWrite(errorLogStream, text)
+        this.writeLog(managed, 'error', text)
 
         // 维护环形缓冲区
         const lines = text.split('\n').filter((l) => l.trim())
@@ -523,7 +584,7 @@ End Time: ${new Date().toISOString()}
 Duration: ${((managed.info.endTime - managed.info.startTime) / 1000).toFixed(1)}s
 ================================================================================
 `
-      this.safeWrite(logStream, endFooter)
+      this.writeLog(managed, 'log', endFooter)
 
       // 关闭日志流
       logStream.end()
@@ -534,8 +595,8 @@ Duration: ${((managed.info.endTime - managed.info.startTime) / 1000).toFixed(1)}
       managed.info.status = 'failed'
       managed.info.endTime = Date.now()
       managed.info.errorSummary = this.classifyFailure(managed)
-      this.safeWrite(errorLogStream, `Process error: ${err.message}\n`)
-      this.safeWrite(logStream, `[ERROR] Process error: ${err.message}\n`)
+      this.writeLog(managed, 'error', `Process error: ${err.message}\n`)
+      this.writeLog(managed, 'log', `[ERROR] Process error: ${err.message}\n`)
       logStream.end()
       errorLogStream.end()
     })
