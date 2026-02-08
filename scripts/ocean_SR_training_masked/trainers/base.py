@@ -4,9 +4,13 @@ Base trainer for ocean SR training (masked version).
 @author Leizheng
 @contributors kongzhiquan
 @date 2026-02-06
-@version 4.2.0
+@version 4.3.0
 
 @changelog
+  - 2026-02-08 kongzhiquan: v4.3.0 验证 OOM 防护
+    - evaluate() 前调用 torch.cuda.empty_cache() 释放碎片化缓存
+    - evaluate() 改为逐 batch 计算 metrics，不再累积 all_y/all_y_pred
+    - valid_loader/test_loader 在 DDP 模式下加 DistributedSampler
   - 2026-02-07 kongzhiquan: v4.2.0 修复事件输出通道
     - _log_json_event 直接 print 到 stdout（不再依赖 logging.info → stderr）
     - training_error 事件在所有 rank 输出（不限主进程），确保多卡崩溃可被捕获
@@ -261,11 +265,24 @@ class BaseTrainer:
                 shuffle=True,
                 drop_last=True,
                 )
+            # 验证/测试集也使用 DistributedSampler，避免每个 rank 重复处理全部数据
+            self.valid_sampler = torch.utils.data.distributed.DistributedSampler(
+                dataset.valid_dataset,
+                shuffle=False,
+                drop_last=False,
+                )
+            self.test_sampler = torch.utils.data.distributed.DistributedSampler(
+                dataset.test_dataset,
+                shuffle=False,
+                drop_last=False,
+                )
             shuffle = False
         else:
             self.train_sampler = None
+            self.valid_sampler = None
+            self.test_sampler = None
             shuffle = True
-        
+
         self.train_loader = torch.utils.data.DataLoader(
             dataset.train_dataset,
             batch_size=self.data_args.get('train_batchsize', 10),
@@ -279,12 +296,14 @@ class BaseTrainer:
             batch_size=self.data_args.get('eval_batchsize', 10),
             shuffle=False,
             num_workers=self.data_args.get('num_workers', 0),
+            sampler=self.valid_sampler,
             pin_memory=True)
         self.test_loader = torch.utils.data.DataLoader(
             dataset.test_dataset,
             batch_size=self.data_args.get('eval_batchsize', 10),
             shuffle=False,
             num_workers=self.data_args.get('num_workers', 0),
+            sampler=self.test_sampler,
             pin_memory=True)
         
         self.normalizer = dataset.normalizer
@@ -657,28 +676,29 @@ class BaseTrainer:
             eval_loader = self.test_loader
         else:
             raise ValueError("split must be 'valid' or 'test'")
+
+        # 释放训练阶段留下的碎片化 CUDA 缓存
+        # 验证（尤其是扩散模型采样）需要大块连续显存，碎片化会导致 OOM
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
         
         loss_record = self.evaluator.init_record(["{}_loss".format(split)])
-        all_y = []
-        all_y_pred = []
         self.model.eval()
         with torch.no_grad(), torch.amp.autocast('cuda', enabled=self.use_amp):
             for x, y in eval_loader:
                 x = x.to(self.device, non_blocking=True)
                 y = y.to(self.device, non_blocking=True)
+                B = y.size(0)
                 y_pred = self.inference(x, y, **kwargs)
                 # normalizer 可能是 dict {'hr': ..., 'lr': ...} 或单个对象
                 _norm = self.normalizer['hr'] if isinstance(self.normalizer, dict) else self.normalizer
                 y_pred = _norm.decode(y_pred)
                 y = _norm.decode(y)
-                all_y.append(y)
-                all_y_pred.append(y_pred)
-        y = torch.cat(all_y, dim=0)
-        y_pred = torch.cat(all_y_pred, dim=0)
-        loss = self.loss_fn(y_pred, y, mask=self.mask_hr)
-        total_samples = y.size(0)
-        loss_record.update({"{}_loss".format(split): loss.item()}, n=total_samples)
-        self.evaluator(y_pred, y, record=loss_record, mask=self.mask_hr)
+                # 逐 batch 计算 loss 和指标，避免在 GPU 上累积全部验证结果
+                batch_loss = self.loss_fn(y_pred, y, mask=self.mask_hr)
+                loss_record.update({"{}_loss".format(split): batch_loss.item()})
+                self.evaluator(y_pred, y, record=loss_record, mask=self.mask_hr)
+                del y_pred, batch_loss  # 立即释放显存
         if self.dist and dist.is_initialized():
             loss_record.dist_reduce()
         return loss_record

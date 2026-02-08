@@ -204,7 +204,10 @@ def generate_config(params):
             "sample_factor": scale,
             "shape": hr_shape,
             "train_batchsize": params.get("batch_size", 32),
-            "eval_batchsize": params.get("eval_batch_size", 32),
+            # 扩散模型验证需要完整采样循环（2000步），显存开销远大于训练
+            # 默认 eval_batchsize 对扩散模型设为 4，非扩散模型保持 32
+            "eval_batchsize": params.get("eval_batch_size",
+                                         4 if model_name in DIFFUSION_MODELS else 32),
             "normalize": params.get("normalize", True),
             "normalizer_type": params.get("normalizer_type", "PGN"),
             "patch_size": params.get("patch_size", None),
