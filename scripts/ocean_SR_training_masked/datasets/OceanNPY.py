@@ -8,15 +8,25 @@ OceanNPY Dataset - 适配 ocean-preprocess 预处理输出的数据集类（带�
     ├── valid/hr/{var}/*.npy
     ├── valid/lr/{var}/*.npy
     ├── test/hr/{var}/*.npy
-    └── test/lr/{var}/*.npy
+    ├── test/lr/{var}/*.npy
+    └── static_variables/       (经纬度等静态变量)
 
 多个变量按 channels 维度堆叠: [N, H, W, C]
 
 @author Leizheng
+@contributors kongzhiquan
 @date 2026-02-06
-@version 6.1.0
+@version 7.1.0
 
 @changelog
+  - 2026-02-09 kongzhiquan: v7.1.0 get_meta() 返回完整元数据
+    - filenames/dyn_vars 传入 OceanNPYDatasetBase
+    - get_coords() 重命名为 get_meta()，返回 dict 含经纬度、filename、dyn_vars
+    - get_meta() 正确计算 sample_idx 索引 filename
+  - 2026-02-09 kongzhiquan: v7.0.0 新增经纬度/日期/变量名元数据支持
+    - _load_static_coords() 从 static_variables/ 加载经纬度
+    - _load_split() 额外返回文件名列表
+    - OceanNPYDataset 存储 lon/lat/dyn_vars/test_filenames 元数据
   - 2026-02-08 Leizheng: v6.1.0 修复 valid/test 网格切片索引越界
   - 2026-02-08 Leizheng: v6.0.0 patch 训练默认开启
     - 用户未指定 patch_size 时自动计算合理默认值（OOM 防护）
@@ -51,6 +61,10 @@ import torch
 from torch.utils.data import Dataset
 from utils.normalizer import UnitGaussianNormalizer, GaussianNormalizer
 
+# 经纬度文件名匹配模式（与 base.py 一致）
+LON_PATTERNS = ['lon', 'longitude', 'lon_rho', 'lon_u', 'lon_v']
+LAT_PATTERNS = ['lat', 'latitude', 'lat_rho', 'lat_u', 'lat_v']
+
 
 class OceanNPYDataset:
     """
@@ -73,9 +87,9 @@ class OceanNPYDataset:
         normalizer_type = data_args.get('normalizer_type', 'PGN')
 
         # 加载三个 split 的数据
-        train_hr, train_lr = self._load_split(dataset_root, 'train', dyn_vars)
-        valid_hr, valid_lr = self._load_split(dataset_root, 'valid', dyn_vars)
-        test_hr, test_lr = self._load_split(dataset_root, 'test', dyn_vars)
+        train_hr, train_lr, train_filenames = self._load_split(dataset_root, 'train', dyn_vars)
+        valid_hr, valid_lr, valid_filenames = self._load_split(dataset_root, 'valid', dyn_vars)
+        test_hr, test_lr, test_filenames = self._load_split(dataset_root, 'test', dyn_vars)
 
         # 从训练集 HR 第一个样本生成 mask（陆地位置在所有时间步是固定的）
         # mask: True = 海洋（有效像素），False = 陆地（NaN 位置）
@@ -154,6 +168,16 @@ class OceanNPYDataset:
         self.mask_hr = mask_hr_spatial  # [1, H, W, 1] bool
         self.mask_lr = mask_lr_spatial  # [1, h, w, 1] bool
 
+        # 加载经纬度元数据（直接从 static_variables/hr/ 和 lr/ 加载）
+        lon_hr, lat_hr, lon_lr, lat_lr = self._load_static_coords(dataset_root)
+
+        self.lon_hr = lon_hr          # np.ndarray 1D/2D or None
+        self.lat_hr = lat_hr          # np.ndarray 1D/2D or None
+        self.lon_lr = lon_lr          # np.ndarray 1D/2D or None
+        self.lat_lr = lat_lr          # np.ndarray 1D/2D or None
+        self.dyn_vars = dyn_vars      # list[str]
+        self.test_filenames = test_filenames  # list[str]
+
         # Patch 训练参数
         patch_size = data_args.get('patch_size', None)
         scale = data_args.get('sample_factor', 1)
@@ -191,13 +215,19 @@ class OceanNPYDataset:
 
         self.train_dataset = OceanNPYDatasetBase(
             train_lr, train_hr, mode='train',
-            patch_size=patch_size, scale=scale, mask_hr=mask_hr_spatial)
+            patch_size=patch_size, scale=scale, mask_hr=mask_hr_spatial,
+            lon_hr=lon_hr, lat_hr=lat_hr, lon_lr=lon_lr, lat_lr=lat_lr,
+            filenames=train_filenames, dyn_vars=dyn_vars)
         self.valid_dataset = OceanNPYDatasetBase(
             valid_lr, valid_hr, mode='valid',
-            patch_size=patch_size, scale=scale, mask_hr=mask_hr_spatial)
+            patch_size=patch_size, scale=scale, mask_hr=mask_hr_spatial,
+            lon_hr=lon_hr, lat_hr=lat_hr, lon_lr=lon_lr, lat_lr=lat_lr,
+            filenames=valid_filenames, dyn_vars=dyn_vars)
         self.test_dataset = OceanNPYDatasetBase(
             test_lr, test_hr, mode='test',
-            patch_size=patch_size, scale=scale, mask_hr=mask_hr_spatial)
+            patch_size=patch_size, scale=scale, mask_hr=mask_hr_spatial,
+            lon_hr=lon_hr, lat_hr=lat_hr, lon_lr=lon_lr, lat_lr=lat_lr,
+            filenames=test_filenames, dyn_vars=dyn_vars)
 
     def _load_split(self, dataset_root, split, dyn_vars):
         """
@@ -206,6 +236,7 @@ class OceanNPYDataset:
         Returns:
             hr_data: [N, H, W, C] tensor
             lr_data: [N, h, w, C] tensor
+            filenames: list[str] 排序后的文件名（不含 .npy 扩展名）
         """
         hr_arrays = []
         lr_arrays = []
@@ -249,7 +280,71 @@ class OceanNPYDataset:
         hr_data = np.stack(hr_arrays, axis=-1)  # [N, H, W, C]
         lr_data = np.stack(lr_arrays, axis=-1)  # [N, h, w, C]
 
-        return torch.tensor(hr_data, dtype=torch.float32), torch.tensor(lr_data, dtype=torch.float32)
+        # 从第一个变量的 HR 文件列表提取文件名（所有变量文件名一致，已有校验保证）
+        first_hr_dir = os.path.join(dataset_root, split, 'hr', dyn_vars[0])
+        filenames = [
+            os.path.splitext(os.path.basename(f))[0]
+            for f in sorted(glob.glob(os.path.join(first_hr_dir, '*.npy')))
+        ]
+
+        return (torch.tensor(hr_data, dtype=torch.float32),
+                torch.tensor(lr_data, dtype=torch.float32),
+                filenames)
+
+    @staticmethod
+    def _find_lon_lat(npy_files):
+        """从 npy 文件列表中匹配经纬度文件并加载。"""
+        lon = None
+        lat = None
+        for fpath in npy_files:
+            basename = os.path.splitext(os.path.basename(fpath))[0]
+            # 文件名格式: xx_varname（xx 为两位数字前缀）
+            parts = basename.split('_', 1)
+            varname = parts[1] if len(parts) > 1 else parts[0]
+            varname_lower = varname.lower()
+
+            if lon is None and varname_lower in LON_PATTERNS:
+                lon = np.load(fpath)
+            elif lat is None and varname_lower in LAT_PATTERNS:
+                lat = np.load(fpath)
+
+            if lon is not None and lat is not None:
+                break
+        return lon, lat
+
+    @staticmethod
+    def _load_static_coords(dataset_root):
+        """
+        从 dataset_root/static_variables/hr/ 和 lr/ 子目录加载经纬度。
+
+        目录结构：
+          static_variables/
+          ├── hr/  (00_lon_rho.npy, 10_lat_rho.npy, ...)
+          └── lr/  (00_lon_rho.npy, 10_lat_rho.npy, ...)
+
+        Returns:
+            (lon_hr, lat_hr, lon_lr, lat_lr): 各为 np.ndarray (1D 或 2D) 或 None
+        """
+        static_dir = os.path.join(dataset_root, 'static_variables')
+        if not os.path.isdir(static_dir):
+            return None, None, None, None
+
+        hr_dir = os.path.join(static_dir, 'hr')
+        lr_dir = os.path.join(static_dir, 'lr')
+
+        if os.path.isdir(hr_dir):
+            hr_files = sorted(glob.glob(os.path.join(hr_dir, '*.npy')))
+            lon_hr, lat_hr = OceanNPYDataset._find_lon_lat(hr_files)
+        else:
+            lon_hr, lat_hr = None, None
+
+        if os.path.isdir(lr_dir):
+            lr_files = sorted(glob.glob(os.path.join(lr_dir, '*.npy')))
+            lon_lr, lat_lr = OceanNPYDataset._find_lon_lat(lr_files)
+        else:
+            lon_lr, lat_lr = None, None
+
+        return lon_hr, lat_hr, lon_lr, lat_lr
 
 
 class OceanNPYDatasetBase(Dataset):
@@ -267,20 +362,34 @@ class OceanNPYDatasetBase(Dataset):
         patch_size (int|None): HR patch 尺寸，None 则不裁剪
         scale (int): 超分辨率倍数（用于推导 LR patch 坐标）
         mask_hr (Tensor|None): [1, H, W, 1] bool，HR 掩码
+        lon_hr (np.ndarray|None): HR 经度，1D [W] 或 2D [H, W]
+        lat_hr (np.ndarray|None): HR 纬度，1D [H] 或 2D [H, W]
+        lon_lr (np.ndarray|None): LR 经度，1D [w] 或 2D [h, w]
+        lat_lr (np.ndarray|None): LR 纬度，1D [h] 或 2D [h, w]
+        filenames (list[str]|None): 样本文件名列表（不含扩展名）
+        dyn_vars (list[str]|None): 动态变量名列表
 
     Returns:
         有 patch_size 且有 mask_hr 时: (x, y, mask_hr_patch)
         其他情况: (x, y)
     """
 
-    def __init__(self, x, y, mode='train', patch_size=None, scale=1, mask_hr=None, **kwargs):
+    def __init__(self, x, y, mode='train', patch_size=None, scale=1, mask_hr=None,
+                 lon_hr=None, lat_hr=None, lon_lr=None, lat_lr=None,
+                 filenames=None, dyn_vars=None, **kwargs):
         self.mode = mode
         self.x = x
         self.y = y
         self.patch_size = patch_size
         self.scale = scale
         self.mask_hr = mask_hr  # [1, H, W, 1] bool or None
-
+        self.lon_hr = lon_hr    # np.ndarray 1D/2D or None
+        self.lat_hr = lat_hr    # np.ndarray 1D/2D or None
+        self.lon_lr = lon_lr    # np.ndarray 1D/2D or None
+        self.lat_lr = lat_lr    # np.ndarray 1D/2D or None
+        self.filenames = filenames  # list[str] or None
+        self.dyn_vars = dyn_vars    # list[str] or None
+        self.mode = mode
         # 非训练模式 + 有 patch_size：预计算非重叠网格位置
         if patch_size is not None and mode != 'train':
             H, W = y.shape[1], y.shape[2]
@@ -356,3 +465,57 @@ class OceanNPYDatasetBase(Dataset):
                 return x, y, mask_hr_patch
 
         return x, y
+
+    def get_meta(self, idx):
+        """
+        返回第 idx 个样本对应的元数据（经纬度、文件名、变量名）。
+        注意：
+        - 当 mode='train' 且 patch_size 不为 None 时，patch会是随机裁剪的，因此经纬度等元数据不适用
+        - 以及，分布式训练时同一 idx 可能对应不同 patch，元数据也不适用。因此在训练模式下不支持 get_meta()。
+        
+        Returns:
+            dict:
+                lon_hr, lat_hr, lon_lr, lat_lr — numpy 数组或 None（含 patch 裁剪）
+                filename — str or None（该样本对应的文件名）
+                dyn_vars — list[str] or None（变量名列表）
+        """
+        if self.mode == 'train':
+            raise NotImplementedError("get_meta() not supported in 'train' mode")
+        
+        lon_hr = self.lon_hr
+        lat_hr = self.lat_hr
+        lon_lr = self.lon_lr
+        lat_lr = self.lat_lr
+
+        if self._grid_positions is not None:
+            n_patches = len(self._grid_positions)
+            sample_idx = idx // n_patches
+            patch_idx = idx % n_patches
+            top, left = self._grid_positions[patch_idx]
+            ps = self.patch_size
+
+            lr_ps = ps // self.scale
+            lr_top = top // self.scale
+            lr_left = left // self.scale
+
+            if lon_hr is not None:
+                lon_hr = lon_hr[left:left+ps] if lon_hr.ndim == 1 else lon_hr[top:top+ps, left:left+ps]
+            if lat_hr is not None:
+                lat_hr = lat_hr[top:top+ps] if lat_hr.ndim == 1 else lat_hr[top:top+ps, left:left+ps]
+            if lon_lr is not None:
+                lon_lr = lon_lr[lr_left:lr_left+lr_ps] if lon_lr.ndim == 1 else lon_lr[lr_top:lr_top+lr_ps, lr_left:lr_left+lr_ps]
+            if lat_lr is not None:
+                lat_lr = lat_lr[lr_top:lr_top+lr_ps] if lat_lr.ndim == 1 else lat_lr[lr_top:lr_top+lr_ps, lr_left:lr_left+lr_ps]
+        else:
+            sample_idx = idx
+
+        filename = self.filenames[sample_idx] if self.filenames is not None else None
+
+        return {
+            'lon_hr': lon_hr,
+            'lat_hr': lat_hr,
+            'lon_lr': lon_lr,
+            'lat_lr': lat_lr,
+            'filename': filename,
+            'dyn_vars': self.dyn_vars,
+        }

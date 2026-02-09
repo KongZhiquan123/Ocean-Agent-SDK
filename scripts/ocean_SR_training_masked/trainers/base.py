@@ -7,6 +7,7 @@ Base trainer for ocean SR training (masked version).
 @version 4.5.1
 
 @changelog
+  - 2026-02-09 kongzhiquan: v4.5.1 test_samples.npz 追加经纬度/变量名/文件名元数据
   - 2026-02-09 kongzhiquan: v4.5.0 测试样本保存用于可视化
     - 新增 _save_test_samples() 方法，保存前 N 条测试样本的 LR/SR/HR 到 npz
     - process() 在加载最佳模型后自动调用，输出 test_samples.npz
@@ -741,7 +742,6 @@ class BaseTrainer:
             return
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-
         self.model.eval()
         saved_lr, saved_sr, saved_hr, saved_mask = [], [], [], []
         count = 0
@@ -759,7 +759,7 @@ class BaseTrainer:
                 y_pred = self.inference(x, y)
 
                 # 解码回原始数据空间
-                _norm_hr = self.normalizer['hr'] if isinstance(self.normalizer, dict) else self.normalizer
+                _norm_hr = self.normalizer.get('hr') if isinstance(self.normalizer, dict) else self.normalizer
                 if not self.patch_mode and _norm_hr is not None:
                     y_pred_dec = _norm_hr.decode(y_pred)
                     y_dec = _norm_hr.decode(y)
@@ -794,6 +794,23 @@ class BaseTrainer:
         # 保存 per-sample mask（与 lr/sr/hr 空间尺寸一致）
         if saved_mask:
             save_data['mask_hr'] = np.array(saved_mask)
+
+        # 保存元数据（经纬度、文件名、变量名）
+        test_ds = self.test_loader.dataset
+        if hasattr(test_ds, 'get_meta'):
+            meta = test_ds.get_meta(0)
+            if meta['lon_hr'] is not None:
+                save_data['lon_hr'] = meta['lon_hr']
+            if meta['lat_hr'] is not None:
+                save_data['lat_hr'] = meta['lat_hr']
+            if meta['lon_lr'] is not None:
+                save_data['lon_lr'] = meta['lon_lr']
+            if meta['lat_lr'] is not None:
+                save_data['lat_lr'] = meta['lat_lr']
+            if meta['dyn_vars'] is not None:
+                save_data['dyn_vars'] = np.array(meta['dyn_vars'])
+            if meta['filename'] is not None:
+                save_data['filename'] = np.array(meta['filename'])
 
         save_path = os.path.join(self.saving_path, 'test_samples.npz')
         np.savez(save_path, **save_data)
