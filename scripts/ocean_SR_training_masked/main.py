@@ -2,7 +2,7 @@
 main.py - 单卡训练入口
 
 @author Leizheng
-@contributors Leizheng
+@contributors kongzhiquan
 @date 2026-02-07
 @version 1.2.0
 

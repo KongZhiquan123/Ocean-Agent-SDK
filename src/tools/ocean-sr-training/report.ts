@@ -2,17 +2,16 @@
  * @file report.ts
  *
  * @description 海洋超分辨率训练报告生成工具
- * @author Leizheng
- * @contributors Leizheng
+ * @author kongzhiquan
  * @date 2026-02-06
  * @version 2.0.0
  *
  * @changelog
- *   - 2026-02-07 Leizheng: v2.0.0 适配结构化日志解析
+ *   - 2026-02-07 kongzhiquan: v2.0.0 适配结构化日志解析
  *     - 简化参数，移除 user_confirmation（从结构化日志自动提取）
  *     - 改用 --log_dir 命令行参数
  *     - 移除临时配置文件，直接传参
- *   - 2026-02-06 Leizheng: v1.0.0 初始版本
+ *   - 2026-02-06 kongzhiquan: v1.0.0 初始版本
  *     - 调用 Python 脚本生成训练报告 Markdown
  *     - 支持 4 阶段用户确认信息记录
  *     - 报告包含 Agent 分析占位符

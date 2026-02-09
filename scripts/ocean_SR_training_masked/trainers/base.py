@@ -2,11 +2,14 @@
 Base trainer for ocean SR training (masked version).
 
 @author Leizheng
-@contributors Leizheng
+@contributors kongzhiquan
 @date 2026-02-06
-@version 4.4.0
+@version 4.5.1
 
 @changelog
+  - 2026-02-09 kongzhiquan: v4.5.0 测试样本保存用于可视化
+    - 新增 _save_test_samples() 方法，保存前 N 条测试样本的 LR/SR/HR 到 npz
+    - process() 在加载最佳模型后自动调用，输出 test_samples.npz
   - 2026-02-08 Leizheng: v4.4.0 PGN+Patch 兼容 + dir() 修复
     - evaluate() 中 patch 模式下跳过 PGN decode（避免空间维度不匹配）
     - __init__ 新增 self.patch_mode 标志
@@ -31,7 +34,7 @@ Base trainer for ocean SR training (masked version).
     - evaluate() 使用 autocast 加速推理
     - gradient checkpointing 包装 model forward 降低激活显存
     - save_ckpt / load_ckpt 保存/恢复 scaler 状态
-  - 2026-02-07 Leizheng: v2.1.0 添加结构化日志输出
+  - 2026-02-07 kongzhiquan: v2.1.0 添加结构化日志输出
     - 训练开始/结束时输出 training_start/training_end 事件
     - 每个 epoch 输出 epoch_train/epoch_valid 事件
     - 最终评估输出 final_valid/final_test 事件
@@ -49,6 +52,7 @@ import json
 import torch
 import wandb
 import logging
+import numpy as np
 import torch.nn.functional as F
 from datetime import datetime
 
@@ -546,6 +550,9 @@ class BaseTrainer:
 
             self.load_model(best_path)
 
+            # 保存测试集前几条样本的 LR/SR/HR 用于可视化对比
+            self._save_test_samples(num_samples=2)
+
             valid_loss_record = self.evaluate(split="valid")
             self.main_log("Valid metrics: {}".format(valid_loss_record))
             self._log_json_event("final_valid", metrics=valid_loss_record.to_dict(), best_epoch=best_epoch)
@@ -719,3 +726,75 @@ class BaseTrainer:
         if self.dist and dist.is_initialized():
             loss_record.dist_reduce()
         return loss_record
+
+    def _save_test_samples(self, num_samples=2):
+        """保存测试集前 num_samples 条样本的 LR / SR / HR 数据用于可视化。
+
+        输出文件: {saving_path}/test_samples.npz
+        包含:
+            lr  - 低分辨率输入 [N, H_lr, W_lr, C]
+            sr  - 模型推理输出 [N, H_hr, W_hr, C]
+            hr  - 高分辨率真值 [N, H_hr, W_hr, C]
+            mask_hr - (可选) 陆地掩码 [N, H_hr, W_hr, 1]，per-sample patch mask
+        """
+        if not self.check_main_process():
+            return
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        self.model.eval()
+        saved_lr, saved_sr, saved_hr, saved_mask = [], [], [], []
+        count = 0
+
+        with torch.no_grad(), torch.amp.autocast('cuda', enabled=self.use_amp):
+            for batch in self.test_loader:
+                if len(batch) == 3:
+                    x, y, mask_patch = batch
+                else:
+                    x, y = batch
+                    mask_patch = None
+
+                x = x.to(self.device, non_blocking=True)
+                y = y.to(self.device, non_blocking=True)
+                y_pred = self.inference(x, y)
+
+                # 解码回原始数据空间
+                _norm_hr = self.normalizer['hr'] if isinstance(self.normalizer, dict) else self.normalizer
+                if not self.patch_mode and _norm_hr is not None:
+                    y_pred_dec = _norm_hr.decode(y_pred)
+                    y_dec = _norm_hr.decode(y)
+                else:
+                    y_pred_dec = y_pred
+                    y_dec = y
+
+                _norm_lr = self.normalizer.get('lr') if isinstance(self.normalizer, dict) else self.normalizer
+                if not self.patch_mode and _norm_lr is not None:
+                    x_dec = _norm_lr.decode(x)
+                else:
+                    x_dec = x
+
+                bs = x.size(0)
+                for i in range(bs):
+                    if count >= num_samples:
+                        break
+                    saved_lr.append(x_dec[i].detach().cpu().float().numpy())
+                    saved_sr.append(y_pred_dec[i].detach().cpu().float().numpy())
+                    saved_hr.append(y_dec[i].detach().cpu().float().numpy())
+                    if mask_patch is not None:
+                        saved_mask.append(mask_patch[i].detach().cpu().numpy())
+                    count += 1
+                if count >= num_samples:
+                    break
+
+        save_data = {
+            'lr': np.array(saved_lr),
+            'sr': np.array(saved_sr),
+            'hr': np.array(saved_hr),
+        }
+        # 保存 per-sample mask（与 lr/sr/hr 空间尺寸一致）
+        if saved_mask:
+            save_data['mask_hr'] = np.array(saved_mask)
+
+        save_path = os.path.join(self.saving_path, 'test_samples.npz')
+        np.savez(save_path, **save_data)
+        self.main_log("Saved {} test samples (LR/SR/HR) to {}".format(count, save_path))

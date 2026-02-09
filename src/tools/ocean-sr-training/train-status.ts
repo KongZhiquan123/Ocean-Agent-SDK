@@ -7,7 +7,8 @@
  *              - 终止训练进程
  *              - 列出所有训练进程
  *              - 等待状态变化（wait 模式）
- * @author Leizheng
+ * @author kongzhiquan
+ * @contributors Leizheng
  * @date 2026-02-07
  * @version 2.0.0
  *
@@ -17,7 +18,7 @@
  *     - 新增 timeout 参数（wait 模式超时秒数）
  *     - status 查询增强：running 时附加 progress，failed 时附加 error_summary
  *     - failed 时自动读取 error.log 最后 30 行作为 fallback
- *   - 2026-02-07 Leizheng: v1.0.0 初始版本
+ *   - 2026-02-07 kongzhiquan: v1.0.0 初始版本
  */
 
 import { defineTool } from '@shareai-lab/kode-sdk'

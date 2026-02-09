@@ -2,15 +2,18 @@
 """
 generate_training_report.py - 海洋超分辨率训练报告生成脚本
 
-@author Leizheng
+@author kongzhiquan
 @date 2026-02-06
-@version 2.1.0
+@version 2.2.0
 
 @changelog
-  - 2026-02-07 Leizheng: v2.1.0 添加可视化结果章节
+  - 2026-02-09 kongzhiquan: v2.2.0 新增测试样本对比图支持
+    - find_plot_files() 增加 sample_comparison.png 检测
+    - 报告可视化章节新增 LR/SR/HR 对比图嵌入
+  - 2026-02-07 kongzhiquan: v2.1.0 添加可视化结果章节
     - 新增第 4 节可视化结果，插入训练图表
     - 自动检测 plots/ 目录下的图表文件
-  - 2026-02-07 Leizheng: v2.0.0 重构为结构化日志解析
+  - 2026-02-07 kongzhiquan: v2.0.0 重构为结构化日志解析
     - 使用 __event__{}__event__ 格式解析 JSON 事件
     - 按照 train_report.md 模板生成报告
     - 移除正则表达式解析，改用结构化数据
@@ -134,6 +137,7 @@ def find_plot_files(log_dir: str) -> Dict[str, str]:
         'lr_curve.png': '学习率调度曲线',
         'metrics_comparison.png': '验证与测试指标对比',
         'training_summary.png': '训练摘要',
+        'sample_comparison.png': '测试样本 LR/SR/HR 对比',
     }
 
     for filename, description in expected_plots.items():
@@ -398,6 +402,15 @@ def generate_report(log_dir: str, yaml_config: Optional[Dict], log_data: Dict) -
             lines.append("#### 训练总结")
             lines.append("")
             lines.append("![训练总结](plots/training_summary.png)")
+            lines.append("")
+
+        # Sample comparison (LR / SR / HR)
+        if 'sample_comparison.png' in plot_files:
+            lines.append("#### 测试样本对比 (LR / SR / HR)")
+            lines.append("")
+            lines.append("下图展示了测试集样本的低分辨率输入、模型超分辨率输出、高分辨率真值以及绝对误差分布：")
+            lines.append("")
+            lines.append("![测试样本对比](plots/sample_comparison.png)")
             lines.append("")
     else:
         lines.append("*无可视化图表*")

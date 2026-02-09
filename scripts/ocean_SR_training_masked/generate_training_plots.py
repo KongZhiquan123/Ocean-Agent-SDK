@@ -2,14 +2,18 @@
 """
 generate_training_plots.py - Ocean SR 训练可视化脚本
 
-@author Leizheng
+@author kongzhiquan
 @date 2026-02-07
-@version 1.2.0
+@version 1.3.1
 
 @changelog
-    - 2026-02-07 Leizheng: v1.2.0 美化图表样式，使用现代配色和视觉效果
-    - 2026-02-07 Leizheng: v1.1.0 移除中文标签，仅使用英文
-    - 2026-02-07 Leizheng: v1.0.0 初始版本
+    - 2026-02-09 kongzhiquan: v1.3.1 修复 mask_hr 维度/尺寸不匹配导致 IndexError
+    - 2026-02-09 kongzhiquan: v1.3.0 新增测试样本 LR/SR/HR 对比可视化
+        - 新增 plot_sample_comparison()，从 test_samples.npz 生成对比图
+        - 每通道一行，列为 LR、SR、HR、|SR-HR| 误差
+    - 2026-02-07 kongzhiquan: v1.2.0 美化图表样式，使用现代配色和视觉效果
+    - 2026-02-07 kongzhiquan: v1.1.0 移除中文标签，仅使用英文
+    - 2026-02-07 kongzhiquan: v1.0.0 初始版本
 
 用法:
         python generate_training_plots.py --log_dir /path/to/log_dir
@@ -21,6 +25,7 @@ generate_training_plots.py - Ocean SR 训练可视化脚本
             - lr_curve.png
             - metrics_comparison.png
             - training_summary.png
+            - sample_comparison.png
 """
 
 import os
@@ -539,6 +544,90 @@ def plot_metrics_comparison(log_data: Dict, output_dir: str) -> Optional[str]:
     return output_path
 
 
+def plot_sample_comparison(log_dir: str, output_dir: str) -> Optional[str]:
+    """绘制测试样本 LR / SR / HR 对比图 + 误差图
+
+    从 log_dir/test_samples.npz 加载数据，每个通道一行，
+    列依次为 LR、SR、HR、|SR - HR| 误差。
+    """
+    npz_path = os.path.join(log_dir, 'test_samples.npz')
+    if not os.path.exists(npz_path):
+        return None
+
+    data = np.load(npz_path)
+    lr = data['lr']   # [N, H_lr, W_lr, C]
+    sr = data['sr']   # [N, H_hr, W_hr, C]
+    hr = data['hr']   # [N, H_hr, W_hr, C]
+    mask_hr = data['mask_hr'] if 'mask_hr' in data else None
+
+    # 只可视化第一条样本
+    lr0 = lr[0]  # [H_lr, W_lr, C]
+    sr0 = sr[0]  # [H_hr, W_hr, C]
+    hr0 = hr[0]  # [H_hr, W_hr, C]
+    # mask: [N, H, W, 1] -> 取第一条并 squeeze 到 [H, W]
+    mask0 = mask_hr[0].squeeze() if mask_hr is not None else None
+
+    n_channels = hr0.shape[-1]
+    col_titles = ['LR (input)', 'SR (prediction)', 'HR (ground truth)', '|SR - HR| error']
+    n_cols = 4
+
+    fig, axes = plt.subplots(n_channels, n_cols, figsize=(4.2 * n_cols, 3.6 * n_channels + 0.8))
+    if n_channels == 1:
+        axes = axes[np.newaxis, :]
+
+    for ch in range(n_channels):
+        lr_ch = lr0[..., ch]
+        sr_ch = sr0[..., ch]
+        hr_ch = hr0[..., ch]
+
+        err = np.abs(sr_ch - hr_ch)
+
+        # 统一色标范围（LR/SR/HR 共享）
+        vmin = min(lr_ch.min(), sr_ch.min(), hr_ch.min())
+        vmax = max(lr_ch.max(), sr_ch.max(), hr_ch.max())
+
+        panels = [lr_ch, sr_ch, hr_ch, err]
+        cmaps = ['viridis', 'viridis', 'viridis', 'cividis']
+        vmins = [vmin, vmin, vmin, 0]
+        vmaxs = [vmax, vmax, vmax, err.max() if err.max() > 0 else 1]
+
+        for col, (panel, cmap, lo, hi) in enumerate(zip(panels, cmaps, vmins, vmaxs)):
+            ax = axes[ch, col]
+            display = np.copy(panel).astype(float)
+            # 对 mask 区域（陆地）设为 NaN 以透明显示
+            if mask0 is not None:
+                ph, pw = display.shape
+                mh, mw = mask0.shape
+                if (mh, mw) != (ph, pw):
+                    # LR panel 尺寸与 HR mask 不同，最近邻下采样
+                    row_idx = (np.arange(ph) * mh / ph).astype(int)
+                    col_idx = (np.arange(pw) * mw / pw).astype(int)
+                    m = mask0[np.ix_(row_idx, col_idx)]
+                else:
+                    m = mask0
+                display[m == 0] = np.nan
+
+            im = ax.imshow(display, cmap=cmap, vmin=lo, vmax=hi,
+                           aspect='equal', interpolation='nearest')
+            fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+
+            if ch == 0:
+                ax.set_title(col_titles[col], fontsize=11, fontweight='bold', pad=8)
+            if col == 0:
+                ax.set_ylabel(f'Channel {ch}', fontsize=11, fontweight='medium')
+            ax.set_xticks([])
+            ax.set_yticks([])
+
+    fig.suptitle('Test Sample: LR vs SR vs HR Comparison',
+                 fontsize=15, fontweight='bold', y=1.0)
+    add_figure_border(fig)
+    plt.tight_layout(pad=1.2, rect=[0, 0, 1, 0.97])
+    output_path = os.path.join(output_dir, 'sample_comparison.png')
+    plt.savefig(output_path, dpi=180, bbox_inches='tight')
+    plt.close()
+    return output_path
+
+
 def plot_training_summary(log_data: Dict, output_dir: str) -> Optional[str]:
     """绘制训练总结卡片式布局"""
     start_event = log_data.get('training_start', {})
@@ -795,6 +884,11 @@ def main():
     if path:
         generated_plots.append(path)
         print(f"  - Training summary: {path}")
+
+    path = plot_sample_comparison(log_dir, output_dir)
+    if path:
+        generated_plots.append(path)
+        print(f"  - Sample comparison: {path}")
 
     if generated_plots:
         print(f"\n[Success] Generated {len(generated_plots)} plots in: {output_dir}")
