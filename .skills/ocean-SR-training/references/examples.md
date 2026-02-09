@@ -1,6 +1,6 @@
 # 对话示例
 
-> 版本: 2.1.0 | 最后更新: 2026-02-09
+> 版本: 2.2.0 | 最后更新: 2026-02-09
 
 ---
 
@@ -50,7 +50,7 @@ Agent: 好的，选择 SwinIR。现在确认训练参数：
 请确认以下参数：
 1. 训练轮数 (epochs)？默认 500
 2. 学习率 (lr)？默认 0.001
-3. Batch size？默认 16
+3. Batch size？默认 4
 4. 使用哪些 GPU？（可选单卡或多卡）
 
 用户: 500 epochs，lr 0.001，batch 64，用 0 和 1 两张卡
@@ -119,8 +119,8 @@ Agent: [执行训练...]
 
 修改建议：
 1. 启用 AMP 混合精度 use_amp=true（减少约 40-50% 显存）
-2. 减小 batch_size（当前 64 → 建议 16 或 8）
-3. 启用梯度检查点 gradient_checkpointing=true（如未自动开启）
+2. 减小 batch_size（当前 64 → 建议 8 或 4）
+3. 确认梯度检查点 gradient_checkpointing=true（默认已开启）
 4. 设置 patch_size=128 裁剪小区域训练
 5. 使用多卡训练分摊显存
 6. 选择更轻量的模型（如 EDSR、FNO2d）
@@ -150,8 +150,8 @@ Agent: 好的，我先确认数据目录和 GPU...
 - GPU: 单卡 (GPU 0)
 
 是否需要调整 OOM 防护参数？
-- use_amp: true（AMP 混合精度，默认开启）
-- gradient_checkpointing: true（梯度检查点，自动开启）
+- use_amp: true（非 FFT 默认开启；FFT/频域模型默认关闭）
+- gradient_checkpointing: true（梯度检查点，默认开启）
 - patch_size: null（全图训练）
 
 确认执行？
@@ -168,15 +168,15 @@ Agent: [显存预估中...]
 - 建议:
   - 显存使用率接近上限，训练中可能因波动 OOM
   - 建议启用 use_amp=true 可减少约 40-50% 显存
-  - 建议减小 batch_size（当前 64 → 建议 16 或 8）
+  - 建议减小 batch_size（当前 64 → 建议 8 或 4）
 
-建议调整为：use_amp=true，batch_size=16。是否按此调整？
+建议调整为：use_amp=true，batch_size=4。是否按此调整？
 
 用户: 好的，按你说的来
 
 Agent: 已调整参数：
 - use_amp: true
-- batch_size: 16
+- batch_size: 4
 
 [重新预估显存...]
 

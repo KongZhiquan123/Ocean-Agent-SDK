@@ -1,7 +1,7 @@
 ---
 name: ocean-SR-training
 description: 海洋超分辨率模型训练技能 - 支持多种模型架构的训练、测试与推理（含陆地掩码处理 + OOM 自动防护 + 错误实时反馈）
-version: 4.1.0
+version: 4.2.0
 author: Leizheng
 contributors: kongzhiquan
 last_modified: 2026-02-09
@@ -9,6 +9,11 @@ last_modified: 2026-02-09
 
 <!--
 Changelog:
+  - 2026-02-09 Leizheng: v4.2.0 默认参数与模型接入策略对齐
+    - batch_size / eval_batch_size 默认值调整为 4
+    - gradient_checkpointing 默认开启（允许用户手动关闭）
+    - use_amp 默认策略改为：非 FFT 模型开启，FFT/频域模型关闭（允许 override 并强提示）
+    - 模型列表以 list_models.py 为准；idm/wdno/remg 不再作为可训练模型
   - 2026-02-09 Leizheng: v4.1.0 默认参数更新
     - batch_size / eval_batch_size 默认下调为 16
     - gradient_checkpointing 改为按模型/全图训练自动开启
@@ -67,8 +72,8 @@ Changelog:
    ↓
 2. 选择模型 → ocean_sr_list_models，用户选择
    ↓
-3. 确认参数 → epochs, lr, batch_size(默认16), GPU 选择
-   │  → OOM 防护参数: use_amp（默认开启）, gradient_checkpointing（大模型/全图自动开启）, patch_size
+3. 确认参数 → epochs, lr, batch_size(默认4), GPU 选择
+   │  → OOM 防护参数: use_amp（非 FFT 默认开启 / FFT 默认关闭）, gradient_checkpointing（默认开启）, patch_size
    ↓
 4. 参数汇总 → 展示所有参数，等待"确认执行"
    ↓
@@ -111,7 +116,7 @@ Changelog:
 训练前自动进行 GPU 显存预估并自动调参，防止训练过程中 OOM 崩溃。
 
 ### 自动防护流程
-1. AMP 默认开启（use_amp=true）
+1. use_amp 按模型默认：非 FFT 默认开启；FFT/频域模型默认关闭（可手动 override）
 2. 显存预估 > 85% 时自动降级：
    - 第一步：开启 AMP（如果未开启）
    - 第二步：batch_size 减半（直到 1）
@@ -120,8 +125,8 @@ Changelog:
 
 ### OOM 时的手动建议优先级
 1. 启用 `use_amp=true`（最易操作，效果显著）
-2. 减小 `batch_size`（如 16 → 8）
-3. 启用 `gradient_checkpointing=true`（有计算代价；默认会在大模型/全图训练自动开启）
+2. 减小 `batch_size`（如 4 → 2 或 1）
+3. 启用 `gradient_checkpointing=true`（有计算代价；默认已开启，可显式确认）
 4. 设置 `patch_size`（如 64 或 128）
 5. 使用多卡训练分摊显存
 

@@ -428,8 +428,6 @@ export class TrainingWorkflow {
     if (!params.dataset_root) missingData.push('dataset_root')
     if (!params.log_dir) missingData.push('log_dir')
 
-    const effectiveGradientCheckpointing = resolveGradientCheckpointing(params, datasetInfo)
-
     return {
       currentState: TrainingState.AWAITING_DATA_CONFIRMATION,
       missingParams: missingData,
@@ -672,7 +670,7 @@ Agent 可以进入下一阶段（阶段2：模型选择）。`,
         '【标准模型】（BaseTrainer）',
         formatGroup(standardModels),
         '',
-        '【扩散模型】（DDPMTrainer / ResshiftTrainer）',
+        '【扩散模型】（DDPMTrainer / ReMiGTrainer / ResshiftTrainer）',
         formatGroup(diffusionModels),
       ].join('\n')
 
@@ -893,6 +891,7 @@ ${params.ckpt_path ? `- ckpt_path: ${params.ckpt_path}（恢复训练检查点�
 
     const confirmationToken = this.generateConfirmationToken()
     const effectiveUseAmp = resolveUseAmp(params)
+    const effectiveGradientCheckpointing = resolveGradientCheckpointing(params, datasetInfo)
 
     // GPU 模式描述
     const deviceIds = params.device_ids || [0]
@@ -1001,7 +1000,7 @@ ${params.ckpt_path ? `- 检查点恢复: ${params.ckpt_path}` : ''}
           wandb: params.wandb,
           ckpt_path: params.ckpt_path,
           use_amp: effectiveUseAmp,
-          gradient_checkpointing: params.gradient_checkpointing,
+          gradient_checkpointing: effectiveGradientCheckpointing,
           patch_size: params.patch_size,
         }
       }

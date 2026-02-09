@@ -1,9 +1,9 @@
 model:
-  name: 'ReMG'
+  name: 'ReMiG'
 
 resshift: 
   model:
-    target: models.remg.models.unet.UNetModelSwin
+    target: models.remig.unet.UNetModelSwin
     ckpt_path: ~
     params:
       image_size: 64
@@ -28,7 +28,7 @@ resshift:
       lq_size: 64
 
   diffusion:
-    target: models.remg.models.script_util.create_gaussian_diffusion
+    target: models.remig.script_util.create_gaussian_diffusion
     params:
       sf: 4
       schedule_name: exponential

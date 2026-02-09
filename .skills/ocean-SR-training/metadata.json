@@ -1,12 +1,19 @@
 {
   "name": "ocean-SR-training",
-  "description": "海洋超分辨率模型训练技能 - 支持多种模型架构的训练、测试与推理（含陆地掩码处理 + OOM 防护）",
-  "version": "3.0.0",
+  "description": "海洋超分辨率模型训练技能 - 支持多种模型架构的训练、测试与推理（含陆地掩码处理 + OOM 防护 + FFT/AMP 默认策略）",
+  "version": "4.2.0",
   "author": "Leizheng",
   "contributors": [],
-  "last_modified": "2026-02-07",
+  "last_modified": "2026-02-09",
   "baseDir": "./.skills/ocean-SR-training",
-  "tags": ["ocean", "super-resolution", "training", "deep-learning", "diffusion", "oom-protection"],
+  "tags": [
+    "ocean",
+    "super-resolution",
+    "training",
+    "deep-learning",
+    "diffusion",
+    "oom-protection"
+  ],
   "references": [
     "references/models.md",
     "references/parameters.md",

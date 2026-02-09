@@ -4,9 +4,11 @@
 @description 根据参数生成训练配置 YAML 文件
 @author Leizheng
 @date 2026-02-09
-@version 3.8.2
+@version 3.8.4
 
 @changelog
+  - 2026-02-09 Leizheng: v3.8.4 ReMiG 模板改为 remig.yaml
+  - 2026-02-09 Leizheng: v3.8.3 FFT 模型 AMP 默认关闭
   - 2026-02-09 Leizheng: v3.8.2 gradient_checkpointing 默认开启
   - 2026-02-09 Leizheng: v3.8.1 默认 batch_size 下调为 4 + 默认开启 gradient_checkpointing
   - 2026-02-09 Leizheng: v3.8.0 修复 Galerkin/SRNO 多变量通道映射
@@ -84,6 +86,7 @@ DIFFUSION_MODELS = {"DDPM", "SR3", "MG-DDPM", "ReMiG"}
 RESSHIFT_MODELS = {"Resshift", "ResShift"}
 # FNO/FFT 类模型默认不切 patch（显存充足且全图更稳定）
 NO_PATCH_MODELS = {"FNO2d", "HiNOTE", "MWT2d", "M2NO2d"}
+AMP_AUTO_DISABLE_MODELS = {"FNO2d", "HiNOTE", "MWT2d", "M2NO2d", "MG-DDPM"}
 HEAVY_MODELS = {
     "Galerkin_Transformer",
     "MWT2d",
@@ -114,7 +117,7 @@ TEMPLATE_MAP = {
     "MG-DDPM": "mg_ddpm.yaml",
     "Resshift": "resshift.yaml",
     "ResShift": "resshift.yaml",
-    "ReMiG": "remg.yaml",
+    "ReMiG": "remig.yaml",
 }
 
 
@@ -194,7 +197,7 @@ def generate_config(params):
         scheduler_gamma (float): 调度器衰减率 (默认 0.5)
         seed (int): 随机种子 (默认 42)
         hr_shape (list[int]): HR 尺寸 [H, W] (若不提供则自动检测)
-        use_amp (bool): 是否启用 AMP 混合精度 (默认 True)
+        use_amp (bool): 是否启用 AMP 混合精度 (默认按模型: FFT 关闭)
         gradient_checkpointing (bool): 是否启用梯度检查点 (默认开启，可手动关闭)
         patch_size (int): Patch 裁剪尺寸，None 表示全图训练 (默认 None)
     """
@@ -380,6 +383,12 @@ def generate_config(params):
     else:
         gradient_checkpointing = True
 
+    # use_amp 默认策略：FFT 模型关闭，其余开启（允许用户显式覆盖）
+    if "use_amp" in params:
+        use_amp = bool(params.get("use_amp"))
+    else:
+        use_amp = model_name not in AMP_AUTO_DISABLE_MODELS
+
     # 构建完整配置
     config = {
         "model": model_config,
@@ -412,7 +421,7 @@ def generate_config(params):
             "saving_best": True,
             "saving_ckpt": params.get("saving_ckpt", False),
             "ckpt_freq": params.get("ckpt_freq", 100),
-            "use_amp": params.get("use_amp", True),   # AMP 默认开启
+            "use_amp": use_amp,   # AMP 默认按模型策略
             "gradient_checkpointing": gradient_checkpointing,
             "load_ckpt": bool(params.get("ckpt_path")),
             "ckpt_path": params.get("ckpt_path", ""),
