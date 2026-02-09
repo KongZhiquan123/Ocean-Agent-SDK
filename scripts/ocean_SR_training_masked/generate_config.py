@@ -1,16 +1,14 @@
 """
-generate_config.py - 根据参数生成训练配置 YAML 文件
+@file generate_config.py
 
-接收 JSON 格式参数，生成适配 OceanNPY 数据集的 YAML 配置文件。
-
-用法:
-    python generate_config.py --params '<JSON string>' --output /path/to/config.yaml
-
+@description 根据参数生成训练配置 YAML 文件
 @author Leizheng
-@date 2026-02-06
-@version 3.3.0
+@date 2026-02-09
+@version 3.5.0
 
 @changelog
+  - 2026-02-09 Leizheng: v3.5.0 FNO 类模型默认关闭自动 patch
+  - 2026-02-09 Leizheng: v3.4.0 补充标准模型 scale 参数映射
   - 2026-02-08 Leizheng: v3.3.0 自动写入 patch_size 并增加合法性校验
   - 2026-02-08 Leizheng: v3.2.0 新增 ckpt_path / load_ckpt 写入 train section
   - 2026-02-07 Leizheng: v3.1.0 use_amp 默认值改为 True（OOM 防护增强）
@@ -22,6 +20,9 @@ generate_config.py - 根据参数生成训练配置 YAML 文件
     - 新增 use_amp, gradient_checkpointing, patch_size 参数
     - 写入 train / data section 供 trainer 和 dataset 读取
   - 原始版本: v1.0.0
+
+用法:
+    python generate_config.py --params '<JSON string>' --output /path/to/config.yaml
 """
 
 import argparse
@@ -75,6 +76,8 @@ MODEL_DEFAULTS = {
 }
 
 DIFFUSION_MODELS = {"DDPM", "SR3", "MG-DDPM", "ReMiG"}
+# FNO/FFT 类模型默认不切 patch（显存充足且全图更稳定）
+NO_PATCH_MODELS = {"FNO2d", "HiNOTE", "MWT2d", "M2NO2d"}
 
 
 def compute_model_divisor(model_name: str, model_config: dict) -> int:
@@ -143,6 +146,11 @@ def generate_config(params):
     lr_size = None
     hr_shape = params.get('hr_shape', None)
     patch_size = params.get('patch_size', None)
+    user_auto_patch = params.get('auto_patch', None)
+    if user_auto_patch is None:
+        auto_patch = False if (patch_size is None and model_name in NO_PATCH_MODELS) else True
+    else:
+        auto_patch = bool(user_auto_patch)
 
     # 自动检测 HR shape
     if hr_shape is None:
@@ -175,9 +183,15 @@ def generate_config(params):
         model_config["in_dim"] = n_channels
         model_config["out_dim"] = n_channels
         model_config["upsample_factor"] = [scale, scale]
+    elif model_name in {"Galerkin_Transformer", "MWT2d", "Swin_Transformer", "SRNO"}:
+        model_config["upsample_factor"] = [scale, scale]
+    elif model_name == "EDSR":
+        model_config["upscale_factor"] = scale
     elif model_name == "SwinIR":
         model_config["img_size"] = lr_size
         model_config["upscale_factor"] = scale
+    elif model_name == "HiNOTE":
+        model_config["scale_factor"] = scale
     elif model_name in DIFFUSION_MODELS:
         model_config["in_channel"] = n_channels * 2  # LR + noise
         model_config["out_channel"] = n_channels
@@ -186,16 +200,18 @@ def generate_config(params):
     divisor = compute_model_divisor(model_name, model_config)
 
     # 自动计算 patch_size（与 OceanNPY 保持一致）
-    if patch_size is None:
+    if patch_size is None and auto_patch:
         from math import gcd
         max_dim = min(hr_shape[0], hr_shape[1])
         lcm_factor = (scale * divisor) // gcd(scale, divisor)
         target = min(max_dim // 2, 256)
-        auto_patch = (target // lcm_factor) * lcm_factor
-        if auto_patch < lcm_factor and lcm_factor < max_dim:
-            auto_patch = lcm_factor
-        if 0 < auto_patch < max_dim:
-            patch_size = int(auto_patch)
+        auto_patch_size = (target // lcm_factor) * lcm_factor
+        if auto_patch_size < lcm_factor and lcm_factor < max_dim:
+            auto_patch_size = lcm_factor
+        if 0 < auto_patch_size < max_dim:
+            patch_size = int(auto_patch_size)
+    elif patch_size is None and not auto_patch:
+        print(f"[generate_config] 自动 patch 已关闭（模型 {model_name}），使用全图训练", file=sys.stderr)
 
     if patch_size is not None:
         max_dim = min(hr_shape[0], hr_shape[1])
@@ -249,6 +265,7 @@ def generate_config(params):
             "normalize": params.get("normalize", True),
             "normalizer_type": params.get("normalizer_type", "PGN"),
             "patch_size": patch_size,
+            "auto_patch": auto_patch,
             "model_divisor": divisor,
         },
         "train": {

@@ -5,10 +5,11 @@
  *
  * @author Leizheng
  * @contributors kongzhiquan
- * @date 2026-02-07
- * @version 2.3.0
+ * @date 2026-02-09
+ * @version 2.4.0
  *
  * @changelog
+ *   - 2026-02-09 Leizheng: v2.4.0 FNO 类模型默认全图训练提示
  *   - 2026-02-08 Leizheng: v2.3.0 简化 Token 机制
  *     - PASS 阶段移除 token 强校验，user_confirmed=true + hasAllRequiredParams() 即通过
  *     - Token 降级为展示用途：awaiting_execution 阶段仍生成 token 供 Agent 展示给用户
@@ -31,6 +32,23 @@
  */
 
 import * as crypto from 'crypto'
+
+const NO_PATCH_MODELS = new Set([
+  'FNO2d',
+  'HiNOTE',
+  'MWT2d',
+  'M2NO2d',
+])
+
+function formatPatchStrategy(params: TrainingWorkflowParams): string {
+  if (params.patch_size !== undefined && params.patch_size !== null) {
+    return `${params.patch_size}`
+  }
+  if (params.model_name && NO_PATCH_MODELS.has(params.model_name)) {
+    return '全图训练（FNO 类默认不切 patch）'
+  }
+  return '自动 patch（系统计算，不满足条件则回退全图）'
+}
 
 /**
  * 训练工作流状态常量
@@ -626,6 +644,7 @@ ${modelListStr}
     const currentUseAmp = params.use_amp ?? true
     const currentGradientCheckpointing = params.gradient_checkpointing ?? false
     const currentPatchSize = params.patch_size ?? null
+    const patchStrategy = formatPatchStrategy(params)
 
     return {
       status: TrainingState.AWAITING_PARAMETERS,
@@ -675,7 +694,7 @@ ${params.ckpt_path ? `- ckpt_path: ${params.ckpt_path}（恢复训练检查点�
 【OOM 防护参数】
 - use_amp: ${currentUseAmp}（AMP 混合精度，减少约 40-50% 显存，默认开启）
 - gradient_checkpointing: ${currentGradientCheckpointing}（梯度检查点，减少约 60% 激活显存）
-- patch_size: ${currentPatchSize ?? '全图训练'}（Patch 裁剪尺寸，需为 scale 整数倍）
+- patch_size: ${patchStrategy}（Patch 裁剪尺寸，需为 scale 整数倍）
 
 💡 显存不足时，优先启用 use_amp=true，效果最显著且无精度损失。
    训练前系统会自动进行显存预估并在必要时自动降低 batch_size。
@@ -806,7 +825,7 @@ ${params.ckpt_path ? `- 检查点恢复: ${params.ckpt_path}` : ''}
 【OOM 防护】
 - AMP 混合精度: ${params.use_amp ?? true}
 - 梯度检查点: ${params.gradient_checkpointing ?? false}
-- Patch 裁剪: ${params.patch_size ?? '全图训练'}
+- Patch 裁剪: ${formatPatchStrategy(params)}
 - 显存预估: 自动（预估 > 85% 时自动降低 batch_size）
 
 ================================================================================
