@@ -16,6 +16,7 @@
     - 2026-02-09 kongzhiquan: v1.0.0 extracted from generate_training_plots.py
 """
 
+from datetime import datetime
 import os
 from typing import Optional
 
@@ -170,7 +171,7 @@ def plot_sample_comparison(log_dir: str, output_dir: str) -> Optional[str]:
 
     # 标题
     if filename:
-        suptitle = f'Test Sample: {filename} — LR vs SR vs HR'
+        suptitle = f'Date: {datetime.strptime(filename, "%Y%m%d").strftime("%B %d, %Y")}  LR vs SR vs HR'
     else:
         suptitle = 'Test Sample: LR vs SR vs HR Comparison'
     fig.suptitle(suptitle, fontsize=15, fontweight='bold', y=1.0)
