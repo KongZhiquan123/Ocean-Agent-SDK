@@ -34,6 +34,10 @@ _model_dict = {
         "model": sr3.UNet,
         "diffusion": sr3.GaussianDiffusion,
     },
+    "MG-DDPM": {
+        "model": mg_ddpm.M2NO2d,
+        "diffusion": mg_ddpm.GaussianDiffusion,
+    },
     "ReMiG": {
         "model": remig.UNetModelSwin,
         "diffusion": remig.GaussianDiffusion,

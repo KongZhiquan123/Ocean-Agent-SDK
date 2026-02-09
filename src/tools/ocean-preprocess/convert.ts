@@ -37,7 +37,7 @@
  *   - 2026-02-03 leizheng: v2.4.0 裁剪与多线程
  *     - 新增 h_slice/w_slice 参数，在转换时直接裁剪
  *     - 新增 scale 参数，验证裁剪后尺寸能否被整除
- *     - 新增 workers 参数，多线程并行处理（默认 32）
+ *     - 新增 workers 参数，多线程并行处理（默认 8，且不超过 CPU 核数）
  *   - 2026-02-03 leizheng: v2.3.0 数据集划分功能
  *     - 新增 train_ratio/valid_ratio/test_ratio 参数
  *     - 按时间顺序划分数据到 train/valid/test 目录
@@ -57,7 +57,10 @@
 
 import { defineTool } from '@shareai-lab/kode-sdk'
 import { findFirstPythonPath } from '@/utils/python-manager'
+import os from 'node:os'
 import path from 'node:path'
+
+const DEFAULT_WORKERS = Math.max(1, Math.min(8, os.cpus().length || 1))
 
 // ========================================
 // 类型定义
@@ -266,9 +269,9 @@ export const oceanConvertNpyTool = defineTool({
     },
     workers: {
       type: 'number',
-      description: '并行线程数（默认 32）',
+      description: '并行线程数（默认 8，且不超过 CPU 核数）',
       required: false,
-      default: 32
+      default: DEFAULT_WORKERS
     },
     output_subdir: {
       type: 'string',
@@ -360,7 +363,7 @@ export const oceanConvertNpyTool = defineTool({
       h_slice,
       w_slice,
       scale,
-      workers = 32,
+      workers = DEFAULT_WORKERS,
       output_subdir = 'hr',
       // 区域裁剪参数（v3.1.0 新增）
       enable_region_crop = false,
@@ -446,7 +449,7 @@ export const oceanConvertNpyTool = defineTool({
       h_slice: h_slice || null,
       w_slice: w_slice || null,
       scale: scale || null,
-      workers,
+      workers: Math.max(1, Math.min(workers, os.cpus().length || 1)),
       // 输出子目录
       output_subdir,
       // 区域裁剪参数（v3.1.0 新增）

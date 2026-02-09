@@ -16,7 +16,7 @@ estimate_memory.py - 训练前 GPU 显存预估工具
         "peak_memory_mb": 3200,
         "available_mb": 40960,
         "utilization_pct": 7.8,
-        "batch_size": 32,
+        "batch_size": 16,
         "use_amp": false,
         "gradient_checkpointing": false,
         "patch_size": null,
@@ -61,7 +61,7 @@ def estimate_memory(config_path, device_id=0):
         args = yaml.load(f, yaml.FullLoader)
 
     model_name = args['model']['name']
-    batch_size = args['data'].get('train_batchsize', 32)
+    batch_size = args['data'].get('train_batchsize', 16)
     use_amp = args['train'].get('use_amp', False)
     gradient_checkpointing = args['train'].get('gradient_checkpointing', False)
     patch_size = args['data'].get('patch_size', None)

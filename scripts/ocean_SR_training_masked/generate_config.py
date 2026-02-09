@@ -4,9 +4,14 @@
 @description 根据参数生成训练配置 YAML 文件
 @author Leizheng
 @date 2026-02-09
-@version 3.5.0
+@version 3.8.2
 
 @changelog
+  - 2026-02-09 Leizheng: v3.8.2 gradient_checkpointing 默认开启
+  - 2026-02-09 Leizheng: v3.8.1 默认 batch_size 下调为 4 + 默认开启 gradient_checkpointing
+  - 2026-02-09 Leizheng: v3.8.0 修复 Galerkin/SRNO 多变量通道映射
+  - 2026-02-09 Leizheng: v3.7.0 gradient_checkpointing 默认按模型/全图自适应
+  - 2026-02-09 Leizheng: v3.6.0 默认 batch_size 下调为 16
   - 2026-02-09 Leizheng: v3.5.0 FNO 类模型默认关闭自动 patch
   - 2026-02-09 Leizheng: v3.4.0 补充标准模型 scale 参数映射
   - 2026-02-08 Leizheng: v3.3.0 自动写入 patch_size 并增加合法性校验
@@ -76,8 +81,62 @@ MODEL_DEFAULTS = {
 }
 
 DIFFUSION_MODELS = {"DDPM", "SR3", "MG-DDPM", "ReMiG"}
+RESSHIFT_MODELS = {"Resshift", "ResShift"}
 # FNO/FFT 类模型默认不切 patch（显存充足且全图更稳定）
 NO_PATCH_MODELS = {"FNO2d", "HiNOTE", "MWT2d", "M2NO2d"}
+HEAVY_MODELS = {
+    "Galerkin_Transformer",
+    "MWT2d",
+    "SRNO",
+    "Swin_Transformer",
+    "SwinIR",
+    "DDPM",
+    "SR3",
+    "MG-DDPM",
+    "Resshift",
+    "ResShift",
+    "ReMiG",
+}
+
+TEMPLATE_MAP = {
+    "FNO2d": "fno.yaml",
+    "UNet2d": "unet.yaml",
+    "M2NO2d": "m2no.yaml",
+    "Galerkin_Transformer": "galerkin.yaml",
+    "MWT2d": "MWT.yaml",
+    "SRNO": "sronet.yaml",
+    "Swin_Transformer": "swin.yaml",
+    "EDSR": "EDSR.yaml",
+    "HiNOTE": "HiNOTE.yaml",
+    "SwinIR": "swinIR.yaml",
+    "DDPM": "ddpm.yaml",
+    "SR3": "sr3.yaml",
+    "MG-DDPM": "mg_ddpm.yaml",
+    "Resshift": "resshift.yaml",
+    "ResShift": "resshift.yaml",
+    "ReMiG": "remg.yaml",
+}
+
+
+def deep_merge(base: dict, override: dict) -> dict:
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            deep_merge(base[key], value)
+        else:
+            base[key] = value
+    return base
+
+
+def load_template_config(model_name: str):
+    filename = TEMPLATE_MAP.get(model_name)
+    if not filename:
+        return None
+    template_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "template_configs", "ns2d")
+    template_path = os.path.join(template_dir, filename)
+    if not os.path.isfile(template_path):
+        return None
+    with open(template_path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
 
 
 def compute_model_divisor(model_name: str, model_config: dict) -> int:
@@ -89,10 +148,13 @@ def compute_model_divisor(model_name: str, model_config: dict) -> int:
             - UNet2d: 16（4 次 MaxPool）
             - SwinIR/FNO2d/EDSR/HiNOTE/M2NO2d: 1（无约束）
     """
-    DIFFUSION_LIKE = {"ResShift"}
+    DIFFUSION_LIKE = {"ResShift", "Resshift"}
 
     if model_name in DIFFUSION_MODELS or model_name in DIFFUSION_LIKE:
-        channel_mults = model_config.get("channel_mults", [1, 1, 2, 2, 4, 4])
+        channel_mults = model_config.get(
+            "channel_mults",
+            model_config.get("channel_mult", [1, 1, 2, 2, 4, 4])
+        )
         num_downsamples = len(channel_mults) - 1
         return 2 ** num_downsamples  # 通常 = 32
     elif model_name == "UNet2d":
@@ -115,8 +177,8 @@ def generate_config(params):
     可选参数:
         epochs (int): 训练轮数 (默认 500)
         lr (float): 学习率 (默认 0.001)
-        batch_size (int): batch size (默认 32)
-        eval_batch_size (int): 评估 batch size (默认 32)
+        batch_size (int): batch size (默认 4)
+        eval_batch_size (int): 评估 batch size (默认 4)
         device (int): 主 GPU 设备号 (默认 0)
         device_ids (list[int]): 多卡时使用的 GPU 列表，如 [0,1,2,3]
         distribute (bool): 是否启用多卡训练 (默认 False)
@@ -133,7 +195,7 @@ def generate_config(params):
         seed (int): 随机种子 (默认 42)
         hr_shape (list[int]): HR 尺寸 [H, W] (若不提供则自动检测)
         use_amp (bool): 是否启用 AMP 混合精度 (默认 True)
-        gradient_checkpointing (bool): 是否启用梯度检查点 (默认 False)
+        gradient_checkpointing (bool): 是否启用梯度检查点 (默认开启，可手动关闭)
         patch_size (int): Patch 裁剪尺寸，None 表示全图训练 (默认 None)
     """
     model_name = params['model_name']
@@ -178,6 +240,10 @@ def generate_config(params):
     if model_name in MODEL_DEFAULTS:
         model_config.update(MODEL_DEFAULTS[model_name])
 
+    # ResShift 默认 channel_mult（用于 divisor 计算）
+    if model_name in RESSHIFT_MODELS:
+        model_config["channel_mults"] = [1, 2, 2, 4]
+
     # 特定模型参数
     if model_name == "FNO2d":
         model_config["in_dim"] = n_channels
@@ -185,6 +251,12 @@ def generate_config(params):
         model_config["upsample_factor"] = [scale, scale]
     elif model_name in {"Galerkin_Transformer", "MWT2d", "Swin_Transformer", "SRNO"}:
         model_config["upsample_factor"] = [scale, scale]
+        if model_name == "Galerkin_Transformer":
+            model_config["in_dim"] = n_channels
+            model_config["out_dim"] = n_channels
+        elif model_name == "SRNO":
+            model_config["input_channels"] = n_channels
+            model_config["output_channels"] = n_channels
     elif model_name == "EDSR":
         model_config["upscale_factor"] = scale
     elif model_name == "SwinIR":
@@ -248,6 +320,66 @@ def generate_config(params):
             model_config["raw_image_size"] = raw_size
             model_config["scale"] = scale
 
+    # ResShift 配置（独立于 model_config）
+    resshift_block = None
+    if model_name in RESSHIFT_MODELS:
+        image_size = patch_size if patch_size else hr_shape[0]
+        resshift_block = {
+            "model": {
+                "target": "models.resshift.models.unet.UNetModelSwin",
+                "ckpt_path": None,
+                "params": {
+                    "image_size": image_size,
+                    "in_channels": n_channels,
+                    "model_channels": 160,
+                    "out_channels": n_channels,
+                    "attention_resolutions": [64, 32, 16, 8],
+                    "dropout": 0,
+                    "channel_mult": [1, 2, 2, 4],
+                    "num_res_blocks": [2, 2, 2, 2],
+                    "conv_resample": True,
+                    "dims": 2,
+                    "use_fp16": False,
+                    "num_head_channels": 32,
+                    "use_scale_shift_norm": True,
+                    "resblock_updown": False,
+                    "swin_depth": 2,
+                    "swin_embed_dim": 192,
+                    "window_size": 8,
+                    "mlp_ratio": 4,
+                    "cond_lq": True,
+                    "cond_mask": False,
+                    "lq_size": image_size,
+                },
+            },
+            "diffusion": {
+                "target": "models.resshift.models.script_util.create_gaussian_diffusion",
+                "params": {
+                    "sf": scale,
+                    "schedule_name": "exponential",
+                    "schedule_kwargs": {
+                        "power": 0.3,
+                    },
+                    "etas_end": 0.99,
+                    "steps": 15,
+                    "min_noise_level": 0.04,
+                    "kappa": 2.0,
+                    "weighted_mse": False,
+                    "predict_type": "xstart",
+                    "timestep_respacing": None,
+                    "scale_factor": 1.0,
+                    "normalize_input": False,
+                    "latent_flag": False,
+                },
+            },
+        }
+
+    # gradient_checkpointing 默认开启（允许用户显式关闭）
+    if "gradient_checkpointing" in params:
+        gradient_checkpointing = bool(params.get("gradient_checkpointing"))
+    else:
+        gradient_checkpointing = True
+
     # 构建完整配置
     config = {
         "model": model_config,
@@ -257,11 +389,10 @@ def generate_config(params):
             "dyn_vars": dyn_vars,
             "sample_factor": scale,
             "shape": hr_shape,
-            "train_batchsize": params.get("batch_size", 32),
+            "train_batchsize": params.get("batch_size", 4),
             # 扩散模型验证需要完整采样循环（2000步），显存开销远大于训练
-            # 默认 eval_batchsize 对扩散模型设为 4，非扩散模型保持 32
-            "eval_batchsize": params.get("eval_batch_size",
-                                         4 if model_name in DIFFUSION_MODELS else 32),
+            # 默认 eval_batchsize 设为 4，可按显存手动调整
+            "eval_batchsize": params.get("eval_batch_size", 4),
             "normalize": params.get("normalize", True),
             "normalizer_type": params.get("normalizer_type", "PGN"),
             "patch_size": patch_size,
@@ -282,7 +413,7 @@ def generate_config(params):
             "saving_ckpt": params.get("saving_ckpt", False),
             "ckpt_freq": params.get("ckpt_freq", 100),
             "use_amp": params.get("use_amp", True),   # AMP 默认开启
-            "gradient_checkpointing": params.get("gradient_checkpointing", False),
+            "gradient_checkpointing": gradient_checkpointing,
             "load_ckpt": bool(params.get("ckpt_path")),
             "ckpt_path": params.get("ckpt_path", ""),
         },
@@ -303,6 +434,9 @@ def generate_config(params):
         },
     }
 
+    if resshift_block is not None:
+        config["resshift"] = resshift_block
+
     # 扩散模型额外配置
     if model_name in DIFFUSION_MODELS:
         config["beta_schedule"] = {
@@ -319,6 +453,10 @@ def generate_config(params):
                 "linear_end": 2e-2,
             },
         }
+
+    template_cfg = load_template_config(model_name)
+    if template_cfg:
+        config = deep_merge(template_cfg, config)
 
     return config
 

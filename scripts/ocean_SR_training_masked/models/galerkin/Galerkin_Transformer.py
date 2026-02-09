@@ -64,8 +64,9 @@ class Galerkin_Transformer(nn.Module):
                 - act: str, activation function {gelu, relu, tanh}, default: 'gelu'
                 - upsample_factor: list of int or int, upsampling scale, default: [2, 2]
         """
-        self.in_dim = model_params.get('in_dim', 1)
-        self.out_dim = model_params.get('out_dim', 1)
+        # 兼容不同配置字段（in_dim/out_dim 优先，其次 in_channels/out_channels）
+        self.in_dim = model_params.get('in_dim', model_params.get('in_channels', model_params.get('input_channels', 1)))
+        self.out_dim = model_params.get('out_dim', model_params.get('out_channels', model_params.get('output_channels', 1)))
         self.ref = model_params.get('ref', 8)
         self.n_hidden = model_params.get('n_hidden', 256)
         n_layers = model_params.get('n_layers', 6)

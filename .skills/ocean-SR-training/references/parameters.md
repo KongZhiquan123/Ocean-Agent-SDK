@@ -1,6 +1,6 @@
 # 工具参数参考
 
-> 版本: 4.0.0 | 最后更新: 2026-02-07
+> 版本: 4.1.0 | 最后更新: 2026-02-09
 
 ---
 
@@ -43,8 +43,8 @@
 | `mode` | string | "train" | 模式: "train" 或 "test" |
 | `epochs` | number | 500 | 训练轮数 |
 | `lr` | number | 0.001 | 学习率 |
-| `batch_size` | number | 32 | 训练 batch size |
-| `eval_batch_size` | number | 32 | 评估 batch size |
+| `batch_size` | number | 16 | 训练 batch size |
+| `eval_batch_size` | number | 16 | 评估 batch size |
 | `patience` | number | 10 | 早停耐心值 |
 | `eval_freq` | number | 5 | 每 N 个 epoch 评估一次 |
 | `seed` | number | 42 | 随机种子 |
@@ -82,10 +82,11 @@
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `use_amp` | boolean | true | 启用 AMP 混合精度训练（减少约 40-50% 显存，默认开启） |
-| `gradient_checkpointing` | boolean | false | 启用梯度检查点（减少约 60% 激活显存，增加约 30% 计算） |
+| `gradient_checkpointing` | boolean | auto | 启用梯度检查点（大模型/全图训练自动开启；减少约 60% 激活显存，增加约 30% 计算） |
 | `patch_size` | number | null | Patch 裁剪尺寸，null 为全图训练（需为 scale 整数倍） |
 
 > 注意：显存预估为强制步骤，不可跳过。预估 > 85% 时系统会自动降低 batch_size。
+> 扩散模型 eval_batch_size 默认 4，非扩散模型默认 16。
 
 ### 模型尺寸自动适配（v3.0.0 新增）
 

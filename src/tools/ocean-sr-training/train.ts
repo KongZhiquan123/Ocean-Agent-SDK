@@ -7,9 +7,14 @@
  * @author Leizheng
  * @contributors kongzhiquan
  * @date 2026-02-09
- * @version 4.2.4
+ * @version 4.2.7
  *
  * @changelog
+ *   - 2026-02-09 Leizheng: v4.2.7 FFT 模型 AMP 默认策略修复 + 模型支持性预检
+ *   - 2026-02-09 Leizheng: v4.2.6 默认 batch_size 下调为 4 + 默认开启 gradient_checkpointing
+ *   - 2026-02-09 Leizheng: v4.2.5 训练前输出尺寸预检 + 默认 batch_size 下调
+ *     - 训练启动前检查模型输出尺寸是否与 HR 匹配
+ *     - batch_size/eval_batch_size 默认降为 16
  *   - 2026-02-09 Leizheng: v4.2.4 FFT + AMP 推荐 patch_size 提示
  *   - 2026-02-09 Leizheng: v4.2.3 FFT 模型 AMP 默认策略
  *     - FFT 模型默认关闭 AMP（用户显式开启则尊重并提示风险）
@@ -74,18 +79,29 @@ function shellSafeJson(json: string): string {
   return json.replace(/'/g, "'\\''")
 }
 
+function extractTaggedJson(output: string, tag: string): Record<string, unknown> | null {
+  const pattern = new RegExp(`__${tag}__([\\s\\S]*?)__${tag}__`)
+  const match = output.match(pattern)
+  if (!match) return null
+  try {
+    return JSON.parse(match[1])
+  } catch {
+    return null
+  }
+}
+
+// FFT/频域/复数变换相关模型：默认关闭 AMP，允许用户显式 override（强提示）
 const AMP_AUTO_DISABLE_MODELS = new Set([
   'FNO2d',
   'HiNOTE',
   'MWT2d',
   'M2NO2d',
   'MG-DDPM',
-  'ReMiG',
 ])
-const DIFFUSION_MODELS = new Set(['DDPM', 'SR3', 'MG-DDPM', 'ReMiG', 'ResShift'])
+const DIFFUSION_MODELS = new Set(['DDPM', 'SR3', 'MG-DDPM', 'ReMiG', 'ResShift', 'Resshift'])
 
 function isFftSensitiveModel(modelName?: string): boolean {
-  return Boolean(modelName)
+  return Boolean(modelName && AMP_AUTO_DISABLE_MODELS.has(modelName))
 }
 
 function isPowerOfTwo(value: number): boolean {
@@ -104,6 +120,7 @@ function countPowerOfTwoFactor(value: number): number {
 
 function getModelDivisor(modelName?: string): number {
   if (!modelName) return 1
+  if (modelName === 'Resshift' || modelName === 'ResShift') return 8
   if (DIFFUSION_MODELS.has(modelName)) return 32
   if (modelName === 'UNet2d') return 16
   return 1
@@ -506,13 +523,13 @@ export const oceanSrTrainTool = defineTool({
       type: 'number',
       description: '训练 batch size',
       required: false,
-      default: 32
+      default: 4
     },
     eval_batch_size: {
       type: 'number',
       description: '评估 batch size',
       required: false,
-      default: 32
+      default: 4
     },
     device_ids: {
       type: 'array',
@@ -600,15 +617,14 @@ export const oceanSrTrainTool = defineTool({
     },
     use_amp: {
       type: 'boolean',
-      description: '是否启用 AMP 混合精度训练（减少约 40-50% 显存，默认开启）',
-      required: false,
-      default: true
+      description: '是否启用 AMP 混合精度训练（减少约 40-50% 显存；默认：非 FFT 开启 / FFT 频域模型关闭）',
+      required: false
     },
     gradient_checkpointing: {
       type: 'boolean',
-      description: '是否启用 Gradient Checkpointing（减少约 60% 激活显存，增加约 30% 计算时间）',
+      description: '是否启用 Gradient Checkpointing（减少约 60% 激活显存，增加约 30% 计算时间，默认开启）',
       required: false,
-      default: false
+      default: true
     },
     patch_size: {
       type: 'number',
@@ -644,14 +660,17 @@ export const oceanSrTrainTool = defineTool({
     args.log_dir = args.log_dir ? path.resolve(ctx.sandbox.workDir, args.log_dir) : undefined
     args.dataset_root = args.dataset_root ? path.resolve(ctx.sandbox.workDir, args.dataset_root) : undefined
 
-    const userSpecifiedUseAmp = args.use_amp !== undefined
-    const shouldAutoDisableAmp =
-      Boolean(args.model_name) &&
-      AMP_AUTO_DISABLE_MODELS.has(args.model_name as string) &&
-      !userSpecifiedUseAmp
+    const userSpecifiedUseAmp = Object.prototype.hasOwnProperty.call(args, 'use_amp')
+    const fftSensitive = isFftSensitiveModel(args.model_name as string | undefined)
+    let autoDisabledAmp = false
 
-    if (shouldAutoDisableAmp) {
-      args.use_amp = false
+    if (!userSpecifiedUseAmp && args.model_name) {
+      if (fftSensitive) {
+        args.use_amp = false
+        autoDisabledAmp = true
+      } else {
+        args.use_amp = true
+      }
     }
 
     // ===== 1. 构建工作流参数 =====
@@ -717,7 +736,7 @@ export const oceanSrTrainTool = defineTool({
         }
       }
 
-      if (shouldAutoDisableAmp) {
+      if (autoDisabledAmp) {
         prompt.message = `${prompt.message}\n\n检测到模型 ${args.model_name} 属于 FFT 类，已默认关闭 AMP（use_amp=false）。如需强制开启，请明确设置 use_amp=true。`
         prompt.data = {
           ...(prompt.data ?? {}),
@@ -731,7 +750,7 @@ export const oceanSrTrainTool = defineTool({
         userSpecifiedUseAmp &&
         args.use_amp === true
       ) {
-        prompt.message = `${prompt.message}\n\n你已手动启用 AMP。FFT 类模型可能触发 cuFFT 尺寸限制错误，如仍要继续请确认。`
+        prompt.message = `${prompt.message}\n\n你已手动启用 AMP（强烈不建议）。FFT 类模型可能触发 cuFFT 尺寸限制错误，如仍要继续请确认。`
         prompt.data = {
           ...(prompt.data ?? {}),
           amp_user_override: { model: args.model_name },
@@ -776,6 +795,39 @@ export const oceanSrTrainTool = defineTool({
         status: 'error',
         error: '未指定训练日志输出目录 (log_dir)',
         suggestion: '请在参数中提供 log_dir'
+      }
+    }
+
+    // ===== 3.0 模型支持性检查（若模型未接入，提前阻断） =====
+    let modelSupportInfo: ModelInfo | undefined
+    const listScript = path.join(trainingDir, 'list_models.py')
+    const listResult = await ctx.sandbox.exec(
+      '"' + pythonPath + '" "' + listScript + '"',
+      { timeoutMs: 30000 }
+    )
+    if (listResult.code === 0) {
+      try {
+        const parsed = JSON.parse(listResult.stdout)
+        if (Array.isArray(parsed.models)) {
+          modelSupportInfo = parsed.models.find((m: ModelInfo) => m.name === model_name)
+        }
+      } catch {
+        modelSupportInfo = undefined
+      }
+    }
+    if (modelSupportInfo && modelSupportInfo.supported === false) {
+      return {
+        status: 'error',
+        error: '模型 ' + model_name + ' 未接入训练流程',
+        reason: modelSupportInfo.notes ?? modelSupportInfo.description,
+        suggestion: '请改用已接入的模型，或补齐模型注册 / trainer / 配置模板后再试'
+      }
+    }
+    if (listResult.code === 0 && !modelSupportInfo) {
+      return {
+        status: 'error',
+        error: '未知模型: ' + model_name,
+        suggestion: '请从模型列表中选择，或确认模型名称是否拼写正确'
       }
     }
 
@@ -866,11 +918,42 @@ export const oceanSrTrainTool = defineTool({
 
     const genInfo = JSON.parse(genResult.stdout)
 
+    // ===== 3b.1 训练前模型输出尺寸预检 =====
+    if (mode === 'train') {
+      const shapeCheckScript = path.join(workspaceDir, 'check_output_shape.py')
+      const deviceId = device_ids[0] ?? 0
+      const shapeResult = await ctx.sandbox.exec(
+        `"${pythonPath}" "${shapeCheckScript}" --config "${configPath}" --device ${deviceId}`,
+        { timeoutMs: 120000 }
+      )
+
+      if (shapeResult.code !== 0) {
+        return {
+          status: 'error',
+          error: `输出尺寸预检失败: ${shapeResult.stderr || shapeResult.stdout}`,
+          reason: '无法完成模型输出尺寸检查',
+          suggestion: '请检查模型配置或数据目录是否可用'
+        }
+      }
+
+      const shapeInfo = extractTaggedJson(shapeResult.stdout, 'shape_check')
+      if (shapeInfo && shapeInfo.status === 'error') {
+        return {
+          status: 'error',
+          error: shapeInfo.error ?? '模型输出尺寸与 HR 不匹配',
+          reason: shapeInfo.reason ?? '模型输出尺寸与目标尺寸不一致',
+          details: shapeInfo.details,
+          suggestion:
+            '请检查 scale/upsample_factor 配置，或调整 patch_size/模型参数使输出与 HR 对齐'
+        }
+      }
+    }
+
     // ===== 3c. 自动显存预估 + 自动调参（不可跳过） =====
     if (mode === 'train') {
       const estimateScript = path.join(workspaceDir, 'estimate_memory.py')
       const cudaDevice = device_ids[0]
-      let currentBatchSize = (configParams.batch_size as number) ?? 32
+      let currentBatchSize = (configParams.batch_size as number) ?? 4
       let currentAmp = (configParams.use_amp as boolean) ?? true
       const MAX_ATTEMPTS = 5
 
@@ -996,7 +1079,7 @@ export const oceanSrTrainTool = defineTool({
         device_ids,
         workspace_dir: workspaceDir,
         workspace_info: prepareInfo,
-        amp_auto_disabled: shouldAutoDisableAmp ? { model: args.model_name } : undefined,
+        amp_auto_disabled: autoDisabledAmp ? { model: args.model_name } : undefined,
         warnings: fftAmpWarningAtStart
           ? [`FFT + AMP 可能不兼容：LR ${fftAmpWarningAtStart.details.lr_height}×${fftAmpWarningAtStart.details.lr_width} 不是 2 的幂，建议 use_amp=false 或调整尺寸。`]
           : undefined,
@@ -1026,7 +1109,7 @@ export const oceanSrTrainTool = defineTool({
       device_ids,
       workspace_dir: workspaceDir,
       workspace_info: prepareInfo,
-      amp_auto_disabled: shouldAutoDisableAmp ? { model: args.model_name } : undefined,
+      amp_auto_disabled: autoDisabledAmp ? { model: args.model_name } : undefined,
       warnings: fftAmpWarningAtStart
         ? [`FFT + AMP 可能不兼容：LR ${fftAmpWarningAtStart.details.lr_height}×${fftAmpWarningAtStart.details.lr_width} 不是 2 的幂，建议 use_amp=false 或调整尺寸。`]
         : undefined,

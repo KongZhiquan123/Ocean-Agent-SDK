@@ -335,7 +335,7 @@ class SwinSR(nn.Module):
         # 这些将在 forward 中动态计算
 
         self.preprocess = MLP(
-            1,
+            self.in_channels,
             self.n_hidden * 2,
             self.n_hidden,
             n_layers=0,
@@ -447,7 +447,7 @@ class SwinSR(nn.Module):
         Hp, Wp = H + pad_h, W + pad_w
 
         fx = x  # [B, Hp, Wp, C]
-        fx = fx.reshape(B, Hp * Wp, 1)  # [B, N, 1]
+        fx = fx.reshape(B, Hp * Wp, C)  # [B, N, C]
 
         fx = self.preprocess(fx)  # [B, N, n_hidden]
         fx = fx + self.placeholder[None, None, :]
