@@ -1,7 +1,7 @@
 ---
 name: ocean-SR-training
 description: 海洋超分辨率模型训练技能 - 支持多种模型架构的训练、测试与推理（含陆地掩码处理 + OOM 自动防护 + 错误实时反馈）
-version: 4.1.0
+version: 4.1.1
 author: Leizheng
 contributors: kongzhiquan
 last_modified: 2026-02-09
@@ -9,6 +9,9 @@ last_modified: 2026-02-09
 
 <!--
 Changelog:
+  - 2026-02-09 kongzhiquan: v4.1.1 可视化与报告生成步骤解耦
+    - 将原步骤 8 拆分为独立的"生成可视化"和"生成报告"两个步骤
+    - 新增可视化结果校验门控，禁止未成功时调用报告生成
   - 2026-02-09 Leizheng: v4.1.0 默认参数更新
     - batch_size / eval_batch_size 默认下调为 16
     - gradient_checkpointing 改为按模型/全图训练自动开启
@@ -88,12 +91,15 @@ Changelog:
    │  调用 ocean_sr_train_status({ action: "wait", process_id, timeout: 120 })
    │  同样等 2 分钟，按上述逻辑处理
    ↓
-8. 训练完成后 → 生成可视化和报告
-   │  → ocean_sr_visualize（用户确认后）
-   │  → ocean_sr_generate_report
+8. 生成可视化 → ocean_sr_visualize（用户确认后）
+   │  检查返回 status="success" 且 plots/ 目录下文件已生成
+   │  若失败：展示错误，询问用户是否重试
+   │  **禁止在此步骤未成功前调用 ocean_sr_generate_report**
+   ↓
+9. 生成报告 → ocean_sr_generate_report（仅在步骤 8 成功后执行）
    │  → Agent 读取报告，补充 <!-- AI_FILL: ... --> 占位符
    ↓
-9. 完成 → 展示报告路径和关键结果
+10. 完成 → 展示报告路径和关键结果
 ```
 
 ---

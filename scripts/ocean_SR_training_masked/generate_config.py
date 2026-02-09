@@ -257,6 +257,8 @@ def generate_config(params):
         elif model_name == "SRNO":
             model_config["input_channels"] = n_channels
             model_config["output_channels"] = n_channels
+    elif model_name == "UNet2d":
+        model_config["scale_factor"] = scale
     elif model_name == "EDSR":
         model_config["upscale_factor"] = scale
     elif model_name == "SwinIR":

@@ -93,7 +93,7 @@ class OceanNPYDataset:
     """
 
     def __init__(self, data_args, **kwargs):
-        dataset_root = data_args['dataset_root']
+        dataset_root = data_args['dataset_root'] if 'dataset_root' in data_args else data_args['data_path']
         dyn_vars = data_args['dyn_vars']
         normalize = data_args.get('normalize', True)
         normalizer_type = data_args.get('normalizer_type', 'PGN')

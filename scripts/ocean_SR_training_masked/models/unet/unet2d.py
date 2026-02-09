@@ -10,9 +10,10 @@ class UNet2d(nn.Module):
         in_channels = args.get('in_channels', 3)
         out_channels = args.get('out_channels', 1)
         init_features = args.get('init_features', 32)
+        scale_factor = args.get('scale_factor', 2)
 
         features = init_features
-        self.up_sample = nn.Upsample(scale_factor=2, mode="nearest")
+        self.up_sample = nn.Upsample(scale_factor=scale_factor, mode="nearest")
         
         self.encoder1 = UNet2d._block(in_channels, features, name="enc1")
         self.pool1 = nn.MaxPool2d(kernel_size=2, stride=2)

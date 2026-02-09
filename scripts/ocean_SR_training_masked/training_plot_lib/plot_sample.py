@@ -5,9 +5,12 @@
     Uses pcolormesh for geo-referenced plotting when lon/lat metadata is available.
 @author kongzhiquan
 @date 2026-02-09
-@version 2.0.0
+@version 2.1.0
 
 @changelog
+    - 2026-02-09 kongzhiquan: v2.1.0 修复 2D 经纬度坐标无法传入 pcolormesh 的问题
+        - 2D lon/lat 直接作为坐标网格传给 pcolormesh（shading='auto'）
+        - 1D lon/lat 仍转换为 edges 后使用 shading='flat'
     - 2026-02-09 kongzhiquan: v2.0.0 pcolormesh + 经纬度/日期/变量名显示
         - imshow → pcolormesh，有经纬度时显示地理坐标轴
         - 读取 dyn_vars 作为行标签替代 Channel 编号
@@ -69,14 +72,27 @@ def plot_sample_comparison(log_dir: str, output_dir: str) -> Optional[str]:
     has_geo = lon_hr is not None and lat_hr is not None
     has_geo_lr = lon_lr is not None and lat_lr is not None
 
-    # 构建 pcolormesh 边界网格
-    lon_hr_edges = lat_hr_edges = lon_lr_edges = lat_lr_edges = None
+    # 构建 pcolormesh 坐标：1D → edges (N+1)，2D → 直接使用
+    lon_hr_grid = lat_hr_grid = lon_lr_grid = lat_lr_grid = None
+    hr_shading = lr_shading = 'auto'
     if has_geo:
-        lon_hr_edges = _make_grid_edges(lon_hr) if lon_hr.ndim == 1 else None
-        lat_hr_edges = _make_grid_edges(lat_hr) if lat_hr.ndim == 1 else None
+        if lon_hr.ndim == 1:
+            lon_hr_grid = _make_grid_edges(lon_hr)
+            lat_hr_grid = _make_grid_edges(lat_hr)
+            hr_shading = 'flat'
+        else:
+            lon_hr_grid = lon_hr
+            lat_hr_grid = lat_hr
+            hr_shading = 'auto'
     if has_geo_lr:
-        lon_lr_edges = _make_grid_edges(lon_lr) if lon_lr.ndim == 1 else None
-        lat_lr_edges = _make_grid_edges(lat_lr) if lat_lr.ndim == 1 else None
+        if lon_lr.ndim == 1:
+            lon_lr_grid = _make_grid_edges(lon_lr)
+            lat_lr_grid = _make_grid_edges(lat_lr)
+            lr_shading = 'flat'
+        else:
+            lon_lr_grid = lon_lr
+            lat_lr_grid = lat_lr
+            lr_shading = 'auto'
 
     # 只可视化第一条样本
     lr0 = lr[0]  # [H_lr, W_lr, C]
@@ -131,12 +147,12 @@ def plot_sample_comparison(log_dir: str, output_dir: str) -> Optional[str]:
             use_geo_lr = lr_flag and has_geo_lr
             use_geo_hr = (not lr_flag) and has_geo
 
-            if use_geo_lr and lon_lr_edges is not None and lat_lr_edges is not None:
-                im = ax.pcolormesh(lon_lr_edges, lat_lr_edges, display,
-                                   cmap=cmap, vmin=lo, vmax=hi, shading='flat')
-            elif use_geo_hr and lon_hr_edges is not None and lat_hr_edges is not None:
-                im = ax.pcolormesh(lon_hr_edges, lat_hr_edges, display,
-                                   cmap=cmap, vmin=lo, vmax=hi, shading='flat')
+            if use_geo_lr and lon_lr_grid is not None and lat_lr_grid is not None:
+                im = ax.pcolormesh(lon_lr_grid, lat_lr_grid, display,
+                                   cmap=cmap, vmin=lo, vmax=hi, shading=lr_shading)
+            elif use_geo_hr and lon_hr_grid is not None and lat_hr_grid is not None:
+                im = ax.pcolormesh(lon_hr_grid, lat_hr_grid, display,
+                                   cmap=cmap, vmin=lo, vmax=hi, shading=hr_shading)
             else:
                 im = ax.pcolormesh(display, cmap=cmap, vmin=lo, vmax=hi,
                                    shading='auto')
