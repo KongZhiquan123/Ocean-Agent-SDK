@@ -1,14 +1,17 @@
 ---
 name: ocean-SR-training
 description: 海洋超分辨率模型训练技能 - 支持多种模型架构的训练、测试与推理（含陆地掩码处理 + OOM 自动防护 + 错误实时反馈）
-version: 4.0.0
+version: 4.1.0
 author: Leizheng
 contributors: kongzhiquan
-last_modified: 2026-02-07
+last_modified: 2026-02-09
 ---
 
 <!--
 Changelog:
+  - 2026-02-09 Leizheng: v4.1.0 默认参数更新
+    - batch_size / eval_batch_size 默认下调为 16
+    - gradient_checkpointing 改为按模型/全图训练自动开启
   - 2026-02-07 kongzhiquan: v4.0.0 OOM 自动防护 + 训练错误实时反馈
     - OOM 防护：AMP 默认开启 + 自动循环调参（batch_size 自动减半）
     - 事件驱动启动监控：等待 training_start 事件，捕获早期崩溃
@@ -64,8 +67,8 @@ Changelog:
    ↓
 2. 选择模型 → ocean_sr_list_models，用户选择
    ↓
-3. 确认参数 → epochs, lr, batch_size, GPU 选择
-   │  → OOM 防护参数: use_amp（默认开启）, gradient_checkpointing, patch_size
+3. 确认参数 → epochs, lr, batch_size(默认16), GPU 选择
+   │  → OOM 防护参数: use_amp（默认开启）, gradient_checkpointing（大模型/全图自动开启）, patch_size
    ↓
 4. 参数汇总 → 展示所有参数，等待"确认执行"
    ↓
@@ -117,8 +120,8 @@ Changelog:
 
 ### OOM 时的手动建议优先级
 1. 启用 `use_amp=true`（最易操作，效果显著）
-2. 减小 `batch_size`（如 32 → 16）
-3. 启用 `gradient_checkpointing=true`（有计算代价）
+2. 减小 `batch_size`（如 16 → 8）
+3. 启用 `gradient_checkpointing=true`（有计算代价；默认会在大模型/全图训练自动开启）
 4. 设置 `patch_size`（如 64 或 128）
 5. 使用多卡训练分摊显存
 

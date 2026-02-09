@@ -31,9 +31,8 @@ LAND_ZERO_RATIO_MIN = 0.90     # 陆地点零值比例下限
 OCEAN_ZERO_RATIO_MAX = 0.90    # 海洋点零值比例上限
 
 # 多线程默认参数
-DEFAULT_WORKERS = 32
+DEFAULT_WORKERS = 8
 
 # 日期文件名格式（用于 use_date_filename 功能）
 # 格式选项: "auto", "YYYYMMDD", "YYYYMMDDHH", "YYYYMMDDHHmm", "YYYY-MM-DD"
 DEFAULT_DATE_FORMAT = "auto"
-

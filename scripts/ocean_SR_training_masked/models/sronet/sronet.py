@@ -32,8 +32,15 @@ class SRNO(nn.Module):
                 - encoder_config: dict, EDSR encoder configuration
         """
         # 【修改】从 model_params 读取所有参数
-        self.input_channels = model_params.get('input_channels', 1)
-        self.output_channels = model_params.get('output_channels', 1)
+        # 兼容不同配置字段（input/output_channels 优先，其次 in/out_channels 或 in/out_dim）
+        self.input_channels = model_params.get(
+            'input_channels',
+            model_params.get('in_channels', model_params.get('in_dim', 1))
+        )
+        self.output_channels = model_params.get(
+            'output_channels',
+            model_params.get('out_channels', model_params.get('out_dim', 1))
+        )
         self.use_coord_input = model_params.get('use_coord_input', True)
         self.width = model_params.get('width', 256)
         blocks = model_params.get('blocks', 16)

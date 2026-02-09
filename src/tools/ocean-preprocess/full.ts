@@ -42,7 +42,7 @@
  *   - 2026-02-03 leizheng: v2.4.0 裁剪与多线程
  *     - 新增 h_slice/w_slice 参数，在转换时直接裁剪
  *     - 新增 scale 参数，验证裁剪后尺寸能否被整除
- *     - 新增 workers 参数，多线程并行处理（默认 32）
+ *     - 新增 workers 参数，多线程并行处理（默认 8，且不超过 CPU 核数）
  *   - 2026-02-03 leizheng: v2.3.2 修复确认流程被绕过问题
  *     - 添加 user_confirmed 参数，必须显式设置为 true 才能继续处理
  *     - 防止 AI Agent 自行决定跳过确认步骤
@@ -66,12 +66,15 @@
  */
 
 import { defineTool } from '@shareai-lab/kode-sdk'
+import os from 'node:os'
 import { oceanInspectDataTool } from './inspect'
 import { oceanValidateTensorTool } from './validate'
 import { oceanConvertNpyTool } from './convert'
 import { oceanDownsampleTool } from './downsample'
 import { oceanVisualizeTool } from './visualize'
 import { PreprocessWorkflow, WorkflowState } from './workflow-state'
+
+const DEFAULT_WORKERS = Math.max(1, Math.min(8, os.cpus().length || 1))
 
 export const oceanPreprocessFullTool = defineTool({
   name: 'ocean_preprocess_full',
@@ -241,9 +244,9 @@ export const oceanPreprocessFullTool = defineTool({
     },
     workers: {
       type: 'number',
-      description: '并行线程数（默认 32）',
+      description: '并行线程数（默认 8，且不超过 CPU 核数）',
       required: false,
-      default: 32
+      default: DEFAULT_WORKERS
     },
     downsample_method: {
       type: 'string',
@@ -360,7 +363,7 @@ export const oceanPreprocessFullTool = defineTool({
       h_slice,
       w_slice,
       scale,
-      workers = 32,
+      workers = DEFAULT_WORKERS,
       downsample_method,
       skip_downsample = false,
       skip_visualize = false,
@@ -529,6 +532,8 @@ export const oceanPreprocessFullTool = defineTool({
     // 有掩码变量时自动允许 NaN（陆地区域的 NaN 是海洋数据的正常特征）
     const effectiveAllowNan = allow_nan || (finalMaskVars && finalMaskVars.length > 0)
 
+    const normalizedWorkers = Math.max(1, Math.min(workers, os.cpus().length || 1))
+
     const stepCResult = await oceanConvertNpyTool.exec({
       nc_folder: actualNcFolder,
       nc_files: actualNcFiles,
@@ -556,7 +561,7 @@ export const oceanPreprocessFullTool = defineTool({
       h_slice,
       w_slice,
       scale,
-      workers,
+      workers: normalizedWorkers,
       // 区域裁剪参数
       enable_region_crop,
       crop_lon_range,
@@ -622,7 +627,7 @@ export const oceanPreprocessFullTool = defineTool({
         test_ratio,
         h_slice,
         w_slice,
-        workers,
+        workers: normalizedWorkers,
         output_subdir: 'lr',
         // 日期文件名参数
         use_date_filename,

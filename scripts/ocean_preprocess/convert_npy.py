@@ -31,7 +31,7 @@ convert_npy.py - Step C: NC 转 NPY 转换（CLI 入口）
     "h_slice": "0:680",
     "w_slice": "0:1440",
     "scale": 4,
-    "workers": 32,
+    "workers": 8,
     "output_subdir": "hr",
     ...
 }

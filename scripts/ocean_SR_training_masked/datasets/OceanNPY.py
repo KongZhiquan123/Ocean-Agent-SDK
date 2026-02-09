@@ -13,6 +13,7 @@ OceanNPY Dataset - 适配 ocean-preprocess 预处理输出的数据集类（带�
 
 多个变量按 channels 维度堆叠: [N, H, W, C]
 
+@description OceanNPY Dataset - 适配 ocean-preprocess 预处理输出的数据集类（带陆地掩码支持）
 @author Leizheng
 @contributors kongzhiquan
 @date 2026-02-06
@@ -52,6 +53,17 @@ OceanNPY Dataset - 适配 ocean-preprocess 预处理输出的数据集类（带�
     - NaN 填充为 0（在归一化之前）
     - 新增 mask_hr / mask_lr 属性供 trainer 使用
   - 原始版本: v1.0.0
+
+从 ocean-preprocess 工具生成的目录结构加载数据：
+    dataset_root/
+    ├── train/hr/{var}/*.npy    (每个 npy 文件: [H, W])
+    ├── train/lr/{var}/*.npy    (每个 npy 文件: [h, w])
+    ├── valid/hr/{var}/*.npy
+    ├── valid/lr/{var}/*.npy
+    ├── test/hr/{var}/*.npy
+    └── test/lr/{var}/*.npy
+
+多个变量按 channels 维度堆叠: [N, H, W, C]
 """
 
 import os
@@ -180,29 +192,32 @@ class OceanNPYDataset:
 
         # Patch 训练参数
         patch_size = data_args.get('patch_size', None)
+        auto_patch = data_args.get('auto_patch', True)
         scale = data_args.get('sample_factor', 1)
         divisor = data_args.get('model_divisor', 1)
         H, W = train_hr.shape[1], train_hr.shape[2]
 
         # 默认开启 patch 训练（OOM 防护 + 尺寸对齐）
         # 当用户未指定 patch_size 时，自动计算合理的默认值
-        if patch_size is None:
+        if patch_size is None and auto_patch:
             from math import gcd
             max_dim = min(H, W)
             # patch_size 必须同时被 scale 和 divisor 整除
             lcm_factor = (scale * divisor) // gcd(scale, divisor)
             # 目标: 不超过数据尺寸的 1/2，不超过 256
             target = min(max_dim // 2, 256)
-            auto_patch = (target // lcm_factor) * lcm_factor
-            if auto_patch < lcm_factor and lcm_factor < max_dim:
-                auto_patch = lcm_factor
-            if 0 < auto_patch < max_dim:
-                patch_size = auto_patch
+            auto_patch_size = (target // lcm_factor) * lcm_factor
+            if auto_patch_size < lcm_factor and lcm_factor < max_dim:
+                auto_patch_size = lcm_factor
+            if 0 < auto_patch_size < max_dim:
+                patch_size = auto_patch_size
                 print(f'[OceanNPY] 默认开启 patch 训练: patch_size={patch_size} '
                       f'(数据 {H}x{W}, scale={scale}, divisor={divisor}, '
                       f'lcm={lcm_factor})')
             else:
                 print(f'[OceanNPY] 数据尺寸 {H}x{W} 较小，使用全图训练')
+        elif patch_size is None and not auto_patch:
+            print(f'[OceanNPY] 自动 patch 已关闭，使用全图训练（数据 {H}x{W}）')
 
         if patch_size is not None:
             H, W = train_hr.shape[1], train_hr.shape[2]
@@ -448,9 +463,17 @@ class OceanNPYDatasetBase(Dataset):
             H, W, C = y.shape
             ps = self.patch_size
 
-            # 随机裁剪 HR patch
-            top = torch.randint(0, H - ps + 1, (1,)).item()
-            left = torch.randint(0, W - ps + 1, (1,)).item()
+            # 随机裁剪 HR patch（起点对齐 scale，确保 LR/HR 对齐）
+            if self.scale and self.scale > 1:
+                max_top = H - ps
+                max_left = W - ps
+                top_steps = max_top // self.scale
+                left_steps = max_left // self.scale
+                top = int(torch.randint(0, top_steps + 1, (1,)).item()) * self.scale
+                left = int(torch.randint(0, left_steps + 1, (1,)).item()) * self.scale
+            else:
+                top = torch.randint(0, H - ps + 1, (1,)).item()
+                left = torch.randint(0, W - ps + 1, (1,)).item()
             y = y[top:top+ps, left:left+ps, :]
 
             # 推导对应的 LR patch 坐标

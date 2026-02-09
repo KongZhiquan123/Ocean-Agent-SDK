@@ -5,10 +5,16 @@
  *
  * @author Leizheng
  * @contributors kongzhiquan
- * @date 2026-02-07
- * @version 2.3.0
+ * @date 2026-02-09
+ * @version 2.4.5
  *
  * @changelog
+ *   - 2026-02-09 Leizheng: v2.4.5 FFT 模型 AMP 默认策略 + 模型列表支持标记
+ *   - 2026-02-09 Leizheng: v2.4.4 默认 batch_size 下调为 4 + 默认开启 gradient_checkpointing
+ *   - 2026-02-09 Leizheng: v2.4.3 默认 batch_size 下调为 16
+ *   - 2026-02-09 Leizheng: v2.4.2 gradient_checkpointing 默认按模型/全图自适应
+ *   - 2026-02-09 Leizheng: v2.4.1 默认 batch_size 下调为 16
+ *   - 2026-02-09 Leizheng: v2.4.0 FNO 类模型默认全图训练提示
  *   - 2026-02-08 Leizheng: v2.3.0 简化 Token 机制
  *     - PASS 阶段移除 token 强校验，user_confirmed=true + hasAllRequiredParams() 即通过
  *     - Token 降级为展示用途：awaiting_execution 阶段仍生成 token 供 Agent 展示给用户
@@ -31,6 +37,128 @@
  */
 
 import * as crypto from 'crypto'
+
+const NO_PATCH_MODELS = new Set([
+  'FNO2d',
+  'HiNOTE',
+  'MWT2d',
+  'M2NO2d',
+])
+const AMP_AUTO_DISABLE_MODELS = new Set([
+  'FNO2d',
+  'HiNOTE',
+  'MWT2d',
+  'M2NO2d',
+  'MG-DDPM',
+])
+const HEAVY_MODELS = new Set([
+  'Galerkin_Transformer',
+  'MWT2d',
+  'SRNO',
+  'Swin_Transformer',
+  'SwinIR',
+  'DDPM',
+  'SR3',
+  'MG-DDPM',
+  'Resshift',
+  'ReMiG',
+])
+
+function gcd(a: number, b: number): number {
+  let x = Math.abs(a)
+  let y = Math.abs(b)
+  while (y !== 0) {
+    const tmp = x % y
+    x = y
+    y = tmp
+  }
+  return x
+}
+
+function getModelDivisor(modelName?: string): number {
+  if (!modelName) return 1
+  if (modelName === 'Resshift' || modelName === 'ResShift') return 8
+  if (['DDPM', 'SR3', 'MG-DDPM', 'Resshift', 'ReMiG', 'ResShift'].includes(modelName)) {
+    return 32
+  }
+  if (modelName === 'UNet2d') return 16
+  return 1
+}
+
+function getSpatialDims(shape?: number[] | null): [number, number] | null {
+  if (!shape || shape.length < 2) return null
+  const height = shape[shape.length - 2]
+  const width = shape[shape.length - 1]
+  if (!Number.isFinite(height) || !Number.isFinite(width)) return null
+  return [height, width]
+}
+
+function computeAutoPatchSize(
+  params: TrainingWorkflowParams,
+  datasetInfo?: DatasetValidationInfo
+): { patch_size: number | null; known: boolean } {
+  if (params.patch_size !== undefined && params.patch_size !== null) {
+    return { patch_size: params.patch_size, known: true }
+  }
+
+  const modelName = params.model_name
+  const autoPatch = !(modelName && NO_PATCH_MODELS.has(modelName))
+  if (!autoPatch) {
+    return { patch_size: null, known: true }
+  }
+
+  const scale = params.scale ?? datasetInfo?.scale ?? null
+  const hrDims = getSpatialDims(datasetInfo?.hr_shape)
+  if (!scale || !hrDims) {
+    return { patch_size: null, known: false }
+  }
+
+  const maxDim = Math.min(hrDims[0], hrDims[1])
+  const divisor = getModelDivisor(modelName)
+  const lcmFactor = (scale * divisor) / gcd(scale, divisor)
+  const target = Math.min(Math.floor(maxDim / 2), 256)
+  let autoPatchSize = Math.floor(target / lcmFactor) * lcmFactor
+  if (autoPatchSize < lcmFactor && lcmFactor < maxDim) {
+    autoPatchSize = lcmFactor
+  }
+  if (autoPatchSize > 0 && autoPatchSize < maxDim) {
+    return { patch_size: autoPatchSize, known: true }
+  }
+  return { patch_size: null, known: true }
+}
+
+function resolveGradientCheckpointing(
+  params: TrainingWorkflowParams,
+  datasetInfo?: DatasetValidationInfo
+): boolean {
+  if (params.gradient_checkpointing !== undefined) {
+    return Boolean(params.gradient_checkpointing)
+  }
+  const heavyModel = params.model_name ? HEAVY_MODELS.has(params.model_name) : false
+  const patchInfo = computeAutoPatchSize(params, datasetInfo)
+  const fullImage = patchInfo.known && patchInfo.patch_size === null
+  return heavyModel || fullImage
+}
+
+function resolveUseAmp(params: TrainingWorkflowParams): boolean {
+  if (params.use_amp !== undefined) {
+    return Boolean(params.use_amp)
+  }
+  if (params.model_name && AMP_AUTO_DISABLE_MODELS.has(params.model_name)) {
+    return false
+  }
+  return true
+}
+
+function formatPatchStrategy(params: TrainingWorkflowParams): string {
+  if (params.patch_size !== undefined && params.patch_size !== null) {
+    return `${params.patch_size}`
+  }
+  if (params.model_name && NO_PATCH_MODELS.has(params.model_name)) {
+    return '全图训练（FNO 类默认不切 patch）'
+  }
+  return '自动 patch（系统计算，不满足条件则回退全图）'
+}
 
 /**
  * 训练工作流状态常量
@@ -165,6 +293,8 @@ export interface ModelInfo {
   category: string
   trainer: string
   description: string
+  supported?: boolean
+  notes?: string
 }
 
 /**
@@ -187,8 +317,8 @@ export class TrainingWorkflow {
       mode: 'train',
       epochs: 500,
       lr: 0.001,
-      batch_size: 32,
-      eval_batch_size: 32,
+      batch_size: 4,
+      eval_batch_size: 4,
       distribute: false,
       distribute_mode: 'DDP',
       patience: 10,
@@ -202,8 +332,7 @@ export class TrainingWorkflow {
       scheduler_gamma: 0.5,
       seed: 42,
       wandb: false,
-      use_amp: true,
-      gradient_checkpointing: false,
+      gradient_checkpointing: true,
       user_confirmed: false,
       ...params,
     }
@@ -214,6 +343,7 @@ export class TrainingWorkflow {
    */
   generateConfirmationToken(): string {
     const { params } = this
+    const resolvedUseAmp = resolveUseAmp(params)
     const tokenData = {
       dataset_root: params.dataset_root,
       log_dir: params.log_dir,
@@ -227,7 +357,7 @@ export class TrainingWorkflow {
       device_ids: params.device_ids?.join(','),
       distribute: params.distribute,
       distribute_mode: params.distribute_mode,
-      use_amp: params.use_amp,
+      use_amp: resolvedUseAmp,
       gradient_checkpointing: params.gradient_checkpointing,
       patch_size: params.patch_size,
     }
@@ -297,6 +427,8 @@ export class TrainingWorkflow {
     const missingData: string[] = []
     if (!params.dataset_root) missingData.push('dataset_root')
     if (!params.log_dir) missingData.push('log_dir')
+
+    const effectiveGradientCheckpointing = resolveGradientCheckpointing(params, datasetInfo)
 
     return {
       currentState: TrainingState.AWAITING_DATA_CONFIRMATION,
@@ -523,17 +655,37 @@ Agent 可以进入下一阶段（阶段2：模型选择）。`,
     // 格式化模型列表
     let modelListStr = '（模型列表加载失败，请调用 ocean_sr_list_models 查看）'
     if (modelList && modelList.length > 0) {
-      const standardModels = modelList.filter(m => m.category === 'standard')
-      const diffusionModels = modelList.filter(m => m.category === 'diffusion')
+      const supportedModels = modelList.filter(m => m.supported !== false)
+      const unsupportedModels = modelList.filter(m => m.supported === false)
+      const standardModels = supportedModels.filter(m => m.category === 'standard')
+      const diffusionModels = supportedModels.filter(m => m.category === 'diffusion')
 
       const formatGroup = (models: ModelInfo[]) =>
-        models.map(m => `  - ${m.name}: ${m.description}`).join('\n')
+        models
+          .map(m => {
+            const note = m.notes ? '（' + m.notes + '）' : ''
+            return '  - ' + m.name + ': ' + m.description + note
+          })
+          .join('\n')
 
-      modelListStr = `【标准模型】（BaseTrainer）
-${formatGroup(standardModels)}
+      modelListStr = [
+        '【标准模型】（BaseTrainer）',
+        formatGroup(standardModels),
+        '',
+        '【扩散模型】（DDPMTrainer / ResshiftTrainer）',
+        formatGroup(diffusionModels),
+      ].join('\n')
 
-【扩散模型】（DDPMTrainer / ResshiftTrainer）
-${formatGroup(diffusionModels)}`
+      if (unsupportedModels.length > 0) {
+        modelListStr = [
+          modelListStr,
+          '',
+          '【未接入/实验模型】',
+          formatGroup(unsupportedModels),
+          '',
+          '⚠️ 这些模型暂未接入训练流程（缺少注册/Trainer/配置），无法直接训练。',
+        ].join('\n')
+      }
     }
 
     return {
@@ -606,8 +758,8 @@ ${modelListStr}
     // 当前已填参数（有默认值的显示默认值）
     const currentEpochs = params.epochs ?? 500
     const currentLr = params.lr ?? 0.001
-    const currentBatchSize = params.batch_size ?? 32
-    const currentEvalBatchSize = params.eval_batch_size ?? 32
+    const currentBatchSize = params.batch_size ?? 4
+    const currentEvalBatchSize = params.eval_batch_size ?? 4
     const currentDeviceIds = params.device_ids ?? [0]
     const currentDistribute = params.distribute ?? false
     const currentDistributeMode = params.distribute_mode ?? 'DDP'
@@ -623,9 +775,10 @@ ${modelListStr}
     const currentSeed = params.seed ?? 42
 
     // OOM 防护参数
-    const currentUseAmp = params.use_amp ?? true
-    const currentGradientCheckpointing = params.gradient_checkpointing ?? false
+    const currentUseAmp = resolveUseAmp(params)
+    const currentGradientCheckpointing = resolveGradientCheckpointing(params, datasetInfo)
     const currentPatchSize = params.patch_size ?? null
+    const patchStrategy = formatPatchStrategy(params)
 
     return {
       status: TrainingState.AWAITING_PARAMETERS,
@@ -673,11 +826,11 @@ ${gpuInfo && gpuInfo.gpu_count > 1 ? `💡 检测到 ${gpuInfo.gpu_count} 张 GP
 ${params.ckpt_path ? `- ckpt_path: ${params.ckpt_path}（恢复训练检查点）` : ''}
 
 【OOM 防护参数】
-- use_amp: ${currentUseAmp}（AMP 混合精度，减少约 40-50% 显存，默认开启）
+- use_amp: ${currentUseAmp}（AMP 混合精度，减少约 40-50% 显存，FFT 默认关闭）
 - gradient_checkpointing: ${currentGradientCheckpointing}（梯度检查点，减少约 60% 激活显存）
-- patch_size: ${currentPatchSize ?? '全图训练'}（Patch 裁剪尺寸，需为 scale 整数倍）
+- patch_size: ${patchStrategy}（Patch 裁剪尺寸，需为 scale 整数倍）
 
-💡 显存不足时，优先启用 use_amp=true，效果最显著且无精度损失。
+💡 显存不足时可尝试 use_amp=true；FFT 模型需注意 cuFFT 尺寸限制。
    训练前系统会自动进行显存预估并在必要时自动降低 batch_size。
 
 ================================================================================
@@ -739,6 +892,7 @@ ${params.ckpt_path ? `- ckpt_path: ${params.ckpt_path}（恢复训练检查点�
     const { params } = this
 
     const confirmationToken = this.generateConfirmationToken()
+    const effectiveUseAmp = resolveUseAmp(params)
 
     // GPU 模式描述
     const deviceIds = params.device_ids || [0]
@@ -784,7 +938,7 @@ ${datasetInfo ? `- HR 尺寸: ${datasetInfo.hr_shape?.join(' × ') ?? '?'}
 - Epochs: ${params.epochs}
 - 学习率: ${params.lr}
 - Batch Size: ${params.batch_size}
-- 评估 Batch Size: ${params.eval_batch_size ?? 32}
+- 评估 Batch Size: ${params.eval_batch_size ?? 4}
 - 早停耐心值: ${params.patience ?? 10}
 - 评估频率: 每 ${params.eval_freq ?? 5} 个 epoch
 
@@ -804,9 +958,9 @@ ${gpuNames ? `- GPU: ${gpuNames}` : ''}
 ${params.ckpt_path ? `- 检查点恢复: ${params.ckpt_path}` : ''}
 
 【OOM 防护】
-- AMP 混合精度: ${params.use_amp ?? true}
-- 梯度检查点: ${params.gradient_checkpointing ?? false}
-- Patch 裁剪: ${params.patch_size ?? '全图训练'}
+- AMP 混合精度: ${effectiveUseAmp}
+- 梯度检查点: ${effectiveGradientCheckpointing}
+- Patch 裁剪: ${formatPatchStrategy(params)}
 - 显存预估: 自动（预估 > 85% 时自动降低 batch_size）
 
 ================================================================================
@@ -846,7 +1000,7 @@ ${params.ckpt_path ? `- 检查点恢复: ${params.ckpt_path}` : ''}
           seed: params.seed,
           wandb: params.wandb,
           ckpt_path: params.ckpt_path,
-          use_amp: params.use_amp,
+          use_amp: effectiveUseAmp,
           gradient_checkpointing: params.gradient_checkpointing,
           patch_size: params.patch_size,
         }

@@ -54,7 +54,9 @@ def main():
     from trainers import _trainer_dict
     from datasets import _dataset_dict
 
-    if model_name not in _model_dict:
+    is_resshift = model_name in {'Resshift', 'ResShift'}
+
+    if not is_resshift and model_name not in _model_dict:
         print(json.dumps({
             'status': 'error',
             'error': f'未知模型: {model_name}',
@@ -80,7 +82,7 @@ def main():
         'main.py', 'main_ddp.py', 'config.py',
         'generate_config.py', 'generate_training_report.py',
         'validate_dataset.py', 'check_gpu.py', 'list_models.py',
-        'estimate_memory.py',
+        'estimate_memory.py', 'check_output_shape.py',
     ]
     for f in core_files:
         s = os.path.join(src, f)
@@ -101,7 +103,7 @@ def main():
     # ================================================================
     # 3. models/：只复制选中模型的包目录
     # ================================================================
-    model_entry = _model_dict[model_name]
+    model_entry = _model_dict.get(model_name)
     is_diffusion = isinstance(model_entry, dict)
 
     models_dst = os.path.join(dst, 'models')
@@ -109,7 +111,16 @@ def main():
         shutil.rmtree(models_dst)
     os.makedirs(models_dst)
 
-    if is_diffusion:
+    if is_resshift:
+        copy_dir(os.path.join(src, 'models', 'resshift'),
+                 os.path.join(models_dst, 'resshift'))
+        copied.append('models/resshift/')
+        init_code = (
+            'from . import resshift\n\n'
+            '_model_dict = {}\n\n'
+            '_ddpm_dict = {}\n'
+        )
+    elif is_diffusion:
         # 扩散模型：entry = {"model": ddpm.UNet, "diffusion": ddpm.GaussianDiffusion}
         model_cls = model_entry['model']
         diff_cls = model_entry['diffusion']
