@@ -85,7 +85,7 @@
 | `patch_size` | number | null | Patch 裁剪尺寸，null 为全图训练（需为 scale 整数倍） |
 
 > 注意：显存预估为强制步骤，不可跳过。预估 > 85% 时系统会先尝试开启 AMP（若当前关闭），再自动降低 batch_size。
-> eval_batch_size 默认 4（可按需调整）。
+> eval_batch_size 默认 4（扩散模型超过 4 会自动限制为 4；非扩散模型可按需调整）。
 
 ### 模型尺寸自动适配（v3.0.0 新增）
 

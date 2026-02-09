@@ -843,6 +843,12 @@ export const oceanSrTrainTool = defineTool({
         patch_size: args.patch_size ?? null,
       })
     }
+    const execWarnings: string[] = []
+    if (fftAmpWarningAtStart) {
+      execWarnings.push(
+        `FFT + AMP 可能不兼容：LR ${fftAmpWarningAtStart.details.lr_height}×${fftAmpWarningAtStart.details.lr_width} 不是 2 的幂，建议 use_amp=false 或调整尺寸。`
+      )
+    }
 
     // ===== 3a. 准备训练工作空间（只复制所选模型相关代码） =====
     // 训练在副本上执行，保持 Agent SDK 源码不被修改；
@@ -917,6 +923,13 @@ export const oceanSrTrainTool = defineTool({
     }
 
     const genInfo = JSON.parse(genResult.stdout)
+    if (genInfo?.eval_batchsize_clamped) {
+      const requested = genInfo.eval_batchsize_requested ?? args.eval_batch_size
+      const applied = genInfo.eval_batchsize ?? 4
+      execWarnings.push(
+        `扩散模型评估显存开销大，eval_batch_size 已从 ${requested} 限制为 ${applied}（上限 4）`
+      )
+    }
 
     // ===== 3b.1 训练前模型输出尺寸预检 =====
     if (mode === 'train') {
@@ -955,6 +968,7 @@ export const oceanSrTrainTool = defineTool({
       const cudaDevice = device_ids[0]
       let currentBatchSize = (configParams.batch_size as number) ?? 4
       let currentAmp = (configParams.use_amp as boolean) ?? true
+      const allowAutoEnableAmp = !fftSensitive || args.use_amp === true
       const MAX_ATTEMPTS = 5
 
       for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
@@ -985,7 +999,21 @@ export const oceanSrTrainTool = defineTool({
 
           // OOM 或 >85%：依次降级
           if (!currentAmp) {
-            currentAmp = true
+            if (allowAutoEnableAmp) {
+              currentAmp = true
+            } else if (currentBatchSize > 1) {
+              currentBatchSize = Math.max(1, Math.floor(currentBatchSize / 2))
+            } else {
+              // 所有手段耗尽
+              return {
+                status: 'error',
+                error: 'GPU 显存不足，已尝试所有自动优化手段仍无法适配',
+                memory_estimate: mem,
+                applied_optimizations: { use_amp: currentAmp, batch_size: currentBatchSize },
+                recommendations: mem.recommendations,
+                suggestion: '请使用更大显存的 GPU，或手动设置更小的 patch_size'
+              }
+            }
           } else if (currentBatchSize > 1) {
             currentBatchSize = Math.max(1, Math.floor(currentBatchSize / 2))
           } else {
@@ -1080,9 +1108,7 @@ export const oceanSrTrainTool = defineTool({
         workspace_dir: workspaceDir,
         workspace_info: prepareInfo,
         amp_auto_disabled: autoDisabledAmp ? { model: args.model_name } : undefined,
-        warnings: fftAmpWarningAtStart
-          ? [`FFT + AMP 可能不兼容：LR ${fftAmpWarningAtStart.details.lr_height}×${fftAmpWarningAtStart.details.lr_width} 不是 2 的幂，建议 use_amp=false 或调整尺寸。`]
-          : undefined,
+        warnings: execWarnings.length > 0 ? execWarnings : undefined,
         fft_amp_warning: fftAmpWarningAtStart?.details,
         next_steps: [
           `调用 ocean_sr_train_status({ action: "wait", process_id: "${processInfo.id}", timeout: 120 }) 等待训练状态变化`,
@@ -1110,9 +1136,7 @@ export const oceanSrTrainTool = defineTool({
       workspace_dir: workspaceDir,
       workspace_info: prepareInfo,
       amp_auto_disabled: autoDisabledAmp ? { model: args.model_name } : undefined,
-      warnings: fftAmpWarningAtStart
-        ? [`FFT + AMP 可能不兼容：LR ${fftAmpWarningAtStart.details.lr_height}×${fftAmpWarningAtStart.details.lr_width} 不是 2 的幂，建议 use_amp=false 或调整尺寸。`]
-        : undefined,
+      warnings: execWarnings.length > 0 ? execWarnings : undefined,
       fft_amp_warning: fftAmpWarningAtStart?.details,
       next_steps: [
         `调用 ocean_sr_train_status({ action: "wait", process_id: "${processInfo.id}", timeout: 120 }) 等待训练状态变化`,

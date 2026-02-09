@@ -151,6 +151,8 @@ class GaussianDiffusion:
     def __init__(self, model, model_args):
         self.model = model
         self.model_args = model_args
+        self.image_size = model_args.get('image_size', None)
+        self.raw_image_size = model_args.get('raw_image_size', self.image_size)
         
         steps = model_args.get('steps', 1000)
         sqrt_etas = get_named_eta_schedule(
@@ -482,8 +484,18 @@ class GaussianDiffusion:
                     )
         return out
 
-    def super_resolution(self, **kwargs):
-        return self.p_sample_loop(**kwargs)
+    def super_resolution(self, y, **kwargs):
+        result = self.p_sample_loop(y=y, **kwargs)
+        if (
+            isinstance(result, th.Tensor)
+            and self.raw_image_size is not None
+            and self.image_size is not None
+            and self.raw_image_size != self.image_size
+            and result.dim() >= 4
+        ):
+            raw = int(self.raw_image_size)
+            result = result[:, :, :raw, :raw]
+        return result
 
     def p_sample_loop_progressive(
             self, y,

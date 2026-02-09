@@ -4,9 +4,10 @@
 @description 根据参数生成训练配置 YAML 文件
 @author Leizheng
 @date 2026-02-09
-@version 3.8.4
+@version 3.8.5
 
 @changelog
+  - 2026-02-09 Leizheng: v3.8.5 扩散模型 eval_batchsize 限制为 <=4
   - 2026-02-09 Leizheng: v3.8.4 ReMiG 模板改为 remig.yaml
   - 2026-02-09 Leizheng: v3.8.3 FFT 模型 AMP 默认关闭
   - 2026-02-09 Leizheng: v3.8.2 gradient_checkpointing 默认开启
@@ -211,6 +212,17 @@ def generate_config(params):
     lr_size = None
     hr_shape = params.get('hr_shape', None)
     patch_size = params.get('patch_size', None)
+    eval_batch_size = params.get('eval_batch_size', 4)
+    try:
+        eval_batch_size = int(eval_batch_size)
+    except (TypeError, ValueError):
+        eval_batch_size = 4
+    if model_name in DIFFUSION_MODELS and eval_batch_size > 4:
+        print(
+            f"[generate_config] diffusion eval_batch_size={eval_batch_size} is too high; cap to 4 to reduce OOM risk",
+            file=sys.stderr,
+        )
+        eval_batch_size = 4
     user_auto_patch = params.get('auto_patch', None)
     if user_auto_patch is None:
         auto_patch = False if (patch_size is None and model_name in NO_PATCH_MODELS) else True
@@ -401,7 +413,7 @@ def generate_config(params):
             "train_batchsize": params.get("batch_size", 4),
             # 扩散模型验证需要完整采样循环（2000步），显存开销远大于训练
             # 默认 eval_batchsize 设为 4，可按显存手动调整
-            "eval_batchsize": params.get("eval_batch_size", 4),
+            "eval_batchsize": eval_batch_size,
             "normalize": params.get("normalize", True),
             "normalizer_type": params.get("normalizer_type", "PGN"),
             "patch_size": patch_size,
@@ -467,6 +479,18 @@ def generate_config(params):
     if template_cfg:
         config = deep_merge(template_cfg, config)
 
+    if model_name in DIFFUSION_MODELS:
+        try:
+            final_eval_bs = int(config.get("data", {}).get("eval_batchsize", 4))
+        except (TypeError, ValueError):
+            final_eval_bs = 4
+        if final_eval_bs > 4:
+            print(
+                f"[generate_config] diffusion eval_batchsize={final_eval_bs} after merge; cap to 4",
+                file=sys.stderr,
+            )
+            config["data"]["eval_batchsize"] = 4
+
     return config
 
 
@@ -477,6 +501,12 @@ def main():
     args = parser.parse_args()
 
     params = json.loads(args.params)
+    model_name = params.get("model_name")
+    requested_eval_batch = params.get("eval_batch_size", 4)
+    try:
+        requested_eval_batch = int(requested_eval_batch)
+    except (TypeError, ValueError):
+        requested_eval_batch = None
     config = generate_config(params)
 
     os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
@@ -485,10 +515,19 @@ def main():
 
     print(json.dumps({
         "status": "success",
+        "eval_batchsize_requested": requested_eval_batch,
+        "eval_batchsize_clamped": (
+            model_name in DIFFUSION_MODELS
+            and requested_eval_batch is not None
+            and config["data"].get("eval_batchsize") is not None
+            and config["data"].get("eval_batchsize") != requested_eval_batch
+        ),
         "config_path": os.path.abspath(args.output),
         "model": config["model"]["name"],
         "dataset": config["data"]["name"],
         "hr_shape": config["data"]["shape"],
+        "train_batchsize": config["data"].get("train_batchsize"),
+        "eval_batchsize": config["data"].get("eval_batchsize"),
         "epochs": config["train"]["epochs"],
         "distribute": config["train"]["distribute"],
         "distribute_mode": config["train"]["distribute_mode"],
