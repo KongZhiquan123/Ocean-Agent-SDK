@@ -1,6 +1,6 @@
 # 错误处理指南
 
-> 版本: 3.2.0 | 最后更新: 2026-02-09
+> 版本: 3.3.0 | 最后更新: 2026-02-09
 
 遇到错误时，必须展示：**错误信息 + 可能原因 + 修改建议**
 
@@ -54,8 +54,8 @@
 
 **修改建议**：
 1. 启用 AMP 混合精度 `use_amp=true`（减少约 40-50% 显存，最易操作）
-2. 减小 batch_size（如 64 → 16 或 8）
-3. 启用梯度检查点 `gradient_checkpointing=true`（减少约 60% 激活显存；大模型/全图训练默认会自动开启）
+2. 减小 batch_size（如 8 → 4 → 2）
+3. 启用梯度检查点 `gradient_checkpointing=true`（减少约 60% 激活显存；当前默认已开启，可显式确认）
 4. 设置 `patch_size`（如 64 或 128）裁剪小区域训练
 5. 使用多卡训练分摊显存
 6. 用 `ocean_sr_check_gpu` 查看显存占用情况
@@ -63,7 +63,7 @@
 
 **显存预估失败（OOM）**：
 - 训练前的显存预估阶段已检测到 OOM
-- 系统会自动尝试降级：开启 AMP → 减半 batch_size（最多 5 次）
+- 系统会自动尝试降级：开启 AMP（若当前关闭）→ 减半 batch_size（最多 5 次）
 - 所有自动优化手段耗尽后才报错，并建议使用更大显存 GPU 或设置 patch_size
 
 ### NCCL error (DDP 模式)
@@ -109,15 +109,28 @@
 
 ## 模型相关错误
 
-### Model not implemented
+### Model not implemented / 模型未接入
 
 **可能原因**：
 - 模型名称拼写错误
 - 模型未在注册表中
+- 模型目录存在但未接入训练流程（缺少注册、Trainer 或模板）
 
 **修改建议**：
 1. 调用 `ocean_sr_list_models` 查看正确的模型名
-2. 使用返回的准确名称
+2. 仅选择 `supported=true` 的模型
+3. 若要接入新模型，补齐 model 注册、trainer 映射与模板配置
+
+### FFT + AMP 可能不兼容
+
+**可能原因**：
+- FNO2d/HiNOTE/MWT2d/M2NO2d/MG-DDPM 等 FFT/频域模型在特定尺寸下开启 AMP 会触发 cuFFT 限制
+- LR 高宽不是 2 的幂或 patch_size 与 scale/divisor 不匹配
+
+**修改建议**：
+1. 保持默认策略：FFT/频域模型优先 `use_amp=false`
+2. 若必须开启 AMP，请手动设置 `use_amp=true` 并按提示调整 patch_size
+3. 确保 patch_size 同时满足 scale 与模型整除要求
 
 ### Shape mismatch
 

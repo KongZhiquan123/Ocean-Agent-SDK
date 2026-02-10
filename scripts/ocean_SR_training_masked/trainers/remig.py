@@ -83,7 +83,11 @@ class ReMiGTrainer(BaseTrainer):
         return loss_record
 
     def inference(self, x, y, **kwargs):
+        orig_shape = y.shape
+        orig_h, orig_w = orig_shape[1], orig_shape[2]
         x = x.permute(0, 3, 1, 2)
         y_pred = self._unwrap().super_resolution(x, continous=False)
-        y_pred = y_pred.permute(0, 2, 3, 1).reshape(y.shape)
+        if y_pred.shape[2] != orig_h or y_pred.shape[3] != orig_w:
+            y_pred = y_pred[:, :, :orig_h, :orig_w]
+        y_pred = y_pred.permute(0, 2, 3, 1).reshape(orig_shape)
         return y_pred

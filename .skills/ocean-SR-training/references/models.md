@@ -1,6 +1,6 @@
 # 模型详细说明
 
-> 版本: 1.0.0 | 最后更新: 2026-02-06
+> 版本: 1.1.0 | 最后更新: 2026-02-09
 
 ---
 
@@ -69,7 +69,7 @@
 - **适用场景**：加速扩散训练
 
 ### ReMiG
-- **Trainer**：DDPMTrainer
+- **Trainer**：ReMiGTrainer
 - **特点**：基于 Swin Transformer 的扩散模型
 - **适用场景**：高质量超分
 
@@ -77,3 +77,11 @@
 - **Trainer**：ResshiftTrainer
 - **特点**：残差偏移扩散模型
 - **适用场景**：高效扩散训练
+
+---
+
+## 模型接入说明
+
+- 训练可用模型以 `ocean_sr_list_models` 返回结果为准。
+- `idm`、`wdno`、`remg` 目录已移除，不在可训练模型列表中。
+- ReMiG 使用 `models/remig` 路径与 `remig.yaml` 模板。

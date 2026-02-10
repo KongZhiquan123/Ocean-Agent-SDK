@@ -4,9 +4,12 @@
 @description 根据参数生成训练配置 YAML 文件
 @author Leizheng
 @date 2026-02-09
-@version 3.8.2
+@version 3.8.5
 
 @changelog
+  - 2026-02-09 Leizheng: v3.8.5 扩散模型 eval_batchsize 限制为 <=4
+  - 2026-02-09 Leizheng: v3.8.4 ReMiG 模板改为 remig.yaml
+  - 2026-02-09 Leizheng: v3.8.3 FFT 模型 AMP 默认关闭
   - 2026-02-09 Leizheng: v3.8.2 gradient_checkpointing 默认开启
   - 2026-02-09 Leizheng: v3.8.1 默认 batch_size 下调为 4 + 默认开启 gradient_checkpointing
   - 2026-02-09 Leizheng: v3.8.0 修复 Galerkin/SRNO 多变量通道映射
@@ -84,6 +87,7 @@ DIFFUSION_MODELS = {"DDPM", "SR3", "MG-DDPM", "ReMiG"}
 RESSHIFT_MODELS = {"Resshift", "ResShift"}
 # FNO/FFT 类模型默认不切 patch（显存充足且全图更稳定）
 NO_PATCH_MODELS = {"FNO2d", "HiNOTE", "MWT2d", "M2NO2d"}
+AMP_AUTO_DISABLE_MODELS = {"FNO2d", "HiNOTE", "MWT2d", "M2NO2d", "MG-DDPM"}
 HEAVY_MODELS = {
     "Galerkin_Transformer",
     "MWT2d",
@@ -114,7 +118,7 @@ TEMPLATE_MAP = {
     "MG-DDPM": "mg_ddpm.yaml",
     "Resshift": "resshift.yaml",
     "ResShift": "resshift.yaml",
-    "ReMiG": "remg.yaml",
+    "ReMiG": "remig.yaml",
 }
 
 
@@ -194,7 +198,7 @@ def generate_config(params):
         scheduler_gamma (float): 调度器衰减率 (默认 0.5)
         seed (int): 随机种子 (默认 42)
         hr_shape (list[int]): HR 尺寸 [H, W] (若不提供则自动检测)
-        use_amp (bool): 是否启用 AMP 混合精度 (默认 True)
+        use_amp (bool): 是否启用 AMP 混合精度 (默认按模型: FFT 关闭)
         gradient_checkpointing (bool): 是否启用梯度检查点 (默认开启，可手动关闭)
         patch_size (int): Patch 裁剪尺寸，None 表示全图训练 (默认 None)
     """
@@ -208,6 +212,17 @@ def generate_config(params):
     lr_size = None
     hr_shape = params.get('hr_shape', None)
     patch_size = params.get('patch_size', None)
+    eval_batch_size = params.get('eval_batch_size', 4)
+    try:
+        eval_batch_size = int(eval_batch_size)
+    except (TypeError, ValueError):
+        eval_batch_size = 4
+    if model_name in DIFFUSION_MODELS and eval_batch_size > 4:
+        print(
+            f"[generate_config] diffusion eval_batch_size={eval_batch_size} is too high; cap to 4 to reduce OOM risk",
+            file=sys.stderr,
+        )
+        eval_batch_size = 4
     user_auto_patch = params.get('auto_patch', None)
     if user_auto_patch is None:
         auto_patch = False if (patch_size is None and model_name in NO_PATCH_MODELS) else True
@@ -257,6 +272,9 @@ def generate_config(params):
         elif model_name == "SRNO":
             model_config["input_channels"] = n_channels
             model_config["output_channels"] = n_channels
+            model_config
+            model_config.setdefault("encoder_config", {})["input_channels"] = n_channels
+            model_config.setdefault("encoder_config", {})["scale"] = scale
     elif model_name == "UNet2d":
         model_config["scale_factor"] = scale
     elif model_name == "EDSR":
@@ -382,6 +400,12 @@ def generate_config(params):
     else:
         gradient_checkpointing = True
 
+    # use_amp 默认策略：FFT 模型关闭，其余开启（允许用户显式覆盖）
+    if "use_amp" in params:
+        use_amp = bool(params.get("use_amp"))
+    else:
+        use_amp = model_name not in AMP_AUTO_DISABLE_MODELS
+
     # 构建完整配置
     config = {
         "model": model_config,
@@ -394,7 +418,7 @@ def generate_config(params):
             "train_batchsize": params.get("batch_size", 4),
             # 扩散模型验证需要完整采样循环（2000步），显存开销远大于训练
             # 默认 eval_batchsize 设为 4，可按显存手动调整
-            "eval_batchsize": params.get("eval_batch_size", 4),
+            "eval_batchsize": eval_batch_size,
             "normalize": params.get("normalize", True),
             "normalizer_type": params.get("normalizer_type", "PGN"),
             "patch_size": patch_size,
@@ -414,7 +438,7 @@ def generate_config(params):
             "saving_best": True,
             "saving_ckpt": params.get("saving_ckpt", False),
             "ckpt_freq": params.get("ckpt_freq", 100),
-            "use_amp": params.get("use_amp", True),   # AMP 默认开启
+            "use_amp": use_amp,   # AMP 默认按模型策略
             "gradient_checkpointing": gradient_checkpointing,
             "load_ckpt": bool(params.get("ckpt_path")),
             "ckpt_path": params.get("ckpt_path", ""),
@@ -460,6 +484,18 @@ def generate_config(params):
     if template_cfg:
         config = deep_merge(template_cfg, config)
 
+    if model_name in DIFFUSION_MODELS:
+        try:
+            final_eval_bs = int(config.get("data", {}).get("eval_batchsize", 4))
+        except (TypeError, ValueError):
+            final_eval_bs = 4
+        if final_eval_bs > 4:
+            print(
+                f"[generate_config] diffusion eval_batchsize={final_eval_bs} after merge; cap to 4",
+                file=sys.stderr,
+            )
+            config["data"]["eval_batchsize"] = 4
+
     return config
 
 
@@ -470,6 +506,12 @@ def main():
     args = parser.parse_args()
 
     params = json.loads(args.params)
+    model_name = params.get("model_name")
+    requested_eval_batch = params.get("eval_batch_size", 4)
+    try:
+        requested_eval_batch = int(requested_eval_batch)
+    except (TypeError, ValueError):
+        requested_eval_batch = None
     config = generate_config(params)
 
     os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
@@ -478,10 +520,19 @@ def main():
 
     print(json.dumps({
         "status": "success",
+        "eval_batchsize_requested": requested_eval_batch,
+        "eval_batchsize_clamped": (
+            model_name in DIFFUSION_MODELS
+            and requested_eval_batch is not None
+            and config["data"].get("eval_batchsize") is not None
+            and config["data"].get("eval_batchsize") != requested_eval_batch
+        ),
         "config_path": os.path.abspath(args.output),
         "model": config["model"]["name"],
         "dataset": config["data"]["name"],
         "hr_shape": config["data"]["shape"],
+        "train_batchsize": config["data"].get("train_batchsize"),
+        "eval_batchsize": config["data"].get("eval_batchsize"),
         "epochs": config["train"]["epochs"],
         "distribute": config["train"]["distribute"],
         "distribute_mode": config["train"]["distribute_mode"],
