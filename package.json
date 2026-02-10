@@ -1,5 +1,5 @@
 {
-  "name": "agent-trying",
+  "name": "ocean-agent",
   "version": "1.0.0",
   "description": "AI Agent HTTP Service powered by KODE SDK",
   "main": "index.js",
@@ -16,7 +16,7 @@
     "anthropic",
     "claude"
   ],
-  "author": "",
+  "author": "Leizheng, Kongzhiquan",
   "license": "ISC",
   "type": "module",
   "engines": {

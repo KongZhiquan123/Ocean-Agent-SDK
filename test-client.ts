@@ -153,7 +153,7 @@ async function chat(message: string, mode: 'ask' | 'edit' = 'edit'): Promise<str
                 break
 
               case 'tool_result':
-                console.log(`[工具结果] ${event.is_error ? '失败' : '成功'}`)
+                console.log(`[工具结果] ${event.is_error || !(event.result.status === 'success') ? '失败' : '成功'}`)
                 const resultStr = JSON.stringify(event.result ?? null, null, 2) ?? 'null'
                 // 显示完整结果（格式化 JSON）
                 const sliceLen = showFullToolResult ? resultStr.length : Math.min(2000, resultStr.length)

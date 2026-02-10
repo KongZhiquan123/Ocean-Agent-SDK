@@ -404,13 +404,6 @@ export const oceanPreprocessFullTool = defineTool({
       }
     }
 
-    ctx.emit('pipeline_started', {
-      nc_folder: actualNcFolder,
-      nc_files: actualNcFiles,
-      output_base,
-      dyn_vars
-    })
-
     const result = {
       step_a: null as any,
       step_b: null as any,
@@ -503,11 +496,6 @@ export const oceanPreprocessFullTool = defineTool({
     } else if (finalMaskVars.length > 1) {
       const rhoMask = finalMaskVars.find((m: string) => m.includes('rho'))
       primaryMaskVar = rhoMask || finalMaskVars[0]
-      ctx.emit('info', {
-        type: 'primary_mask_selected',
-        message: `自动选择主掩码变量: ${primaryMaskVar}（共有 ${finalMaskVars.length} 个掩码变量）`,
-        all_masks: finalMaskVars
-      })
     }
 
     // 经纬度变量
@@ -592,14 +580,6 @@ export const oceanPreprocessFullTool = defineTool({
           actualLrNcFolder = filePath.substring(0, lastSlash)
           actualLrFilePattern = filePath.substring(lastSlash + 1)
         }
-
-        ctx.emit('info', {
-          type: 'single_file_mode_lr',
-          message: `检测到单个 LR 文件路径，自动转换为目录模式`,
-          original_path: filePath,
-          lr_nc_folder: actualLrNcFolder,
-          lr_dyn_file_pattern: actualLrFilePattern
-        })
       }
 
       const stepC2Result = await oceanConvertNpyTool.exec({
@@ -643,10 +623,6 @@ export const oceanPreprocessFullTool = defineTool({
     // ========== Step D: 下采样 ==========
     if (isNumericalModelMode) {
       result.step_d = { status: 'skipped', reason: '粗网格模式（数值模型）下自动跳过下采样' }
-      ctx.emit('info', {
-        type: 'downsample_skipped',
-        message: '粗网格模式：LR 数据已在 Step C2 中转换，跳过下采样步骤'
-      })
     } else if (!skip_downsample) {
       const stepDResult = await oceanDownsampleTool.exec({
         dataset_root: output_base,
@@ -663,13 +639,10 @@ export const oceanPreprocessFullTool = defineTool({
 
     // ========== Step E: 可视化 ==========
     if (!skip_visualize) {
-      ctx.emit('step_started', { step: 'E', description: '生成可视化对比图' })
-
       const stepEResult = await oceanVisualizeTool.exec({
         dataset_root: output_base,
         splits: ['train', 'valid', 'test']
       }, ctx)
-
       result.step_e = stepEResult
     } else {
       result.step_e = { status: 'skipped', reason: 'skip_visualize=true' }

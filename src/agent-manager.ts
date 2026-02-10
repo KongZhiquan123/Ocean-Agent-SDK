@@ -5,9 +5,12 @@
  * @author kongzhiquan
  * @contributors Leizheng
  * @date 2026-02-02
- * @version 1.4.0
+ * @version 1.5.0
  *
  * @changelog
+ *   - 2026-02-10 kongzhiquan: v1.5.0 新增 transformToolResult 集中格式转换器
+ *     - 对 ocean_preprocess_full 工具结果做裁剪，只保留当前步骤进度信息
+ *     - 未注册的工具名原样透传
  *   - 2026-02-08 Leizheng: v1.4.0 增加受控 bash 白名单与安全路径检查
  *   - 2026-02-07 Leizheng: v1.3.0 修复 KODE SDK 内部处理超时（5分钟→2小时）
  *   - 2026-02-07 Leizheng: v1.2.0 sandbox 添加 allowPaths: ['/data'] 允许访问数据目录
@@ -19,6 +22,8 @@
 
 import { Agent, type ProgressEvent } from '@shareai-lab/kode-sdk'
 import { getDependencies } from './config'
+import { transformToolResult } from './utils/tool-result-transformer'
+import { transformToolUse } from './utils/tool-use-transformer'
 
 // ========================================
 // 类型定义
@@ -261,7 +266,7 @@ export function convertProgressToSSE(event: ProgressEvent, reqId: string): SSEEv
         type: 'tool_use',
         tool: event.call.name,
         id: event.call.id,
-        input: event.call.inputPreview,
+        ...transformToolUse(event.call),
         timestamp: Date.now(),
       }
 
@@ -269,7 +274,7 @@ export function convertProgressToSSE(event: ProgressEvent, reqId: string): SSEEv
       return {
         type: 'tool_result',
         tool_use_id: event.call.id,
-        result: event.call.result ?? null,
+        result: transformToolResult(event.call),
         is_error: event.call.state === 'FAILED',
         timestamp: Date.now(),
       }
