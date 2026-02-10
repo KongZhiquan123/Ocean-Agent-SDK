@@ -17,6 +17,7 @@ import argparse
 import inspect
 import json
 import os
+import re
 import shutil
 import sys
 
@@ -27,11 +28,30 @@ def get_package_name(cls):
     return os.path.basename(os.path.dirname(src_file))
 
 
+def strip_header_docstring(content):
+    """去除 Python 文件开头的模块级 docstring（保留 shebang 行）"""
+    pattern = r'^((?:#!.*\n)?)\s*(?:"""[\s\S]*?"""|\'\'\'[\s\S]*?\'\'\')\s*\n?'
+    return re.sub(pattern, r'\1', content, count=1)
+
+
+def copy_file(src, dst):
+    """复制文件，对 .py 文件去除头部 docstring"""
+    if src.endswith('.py'):
+        with open(src, 'r', encoding='utf-8') as f:
+            content = f.read()
+        content = strip_header_docstring(content)
+        with open(dst, 'w', encoding='utf-8') as f:
+            f.write(content)
+        shutil.copystat(src, dst)
+    else:
+        shutil.copy2(src, dst)
+
+
 def copy_dir(src, dst):
-    """复制目录，已存在则先删除"""
+    """复制目录，已存在则先删除，对 .py 文件去除头部 docstring"""
     if os.path.exists(dst):
         shutil.rmtree(dst)
-    shutil.copytree(src, dst)
+    shutil.copytree(src, dst, copy_function=copy_file)
 
 
 def main():
@@ -87,7 +107,7 @@ def main():
     for f in core_files:
         s = os.path.join(src, f)
         if os.path.exists(s):
-            shutil.copy2(s, os.path.join(dst, f))
+            copy_file(s, os.path.join(dst, f))
             copied.append(f)
 
     # ================================================================
@@ -179,14 +199,14 @@ def main():
     os.makedirs(trainers_dst)
 
     # base.py 始终需要（所有 trainer 都继承它）
-    shutil.copy2(os.path.join(src, 'trainers', 'base.py'),
-                 os.path.join(trainers_dst, 'base.py'))
+    copy_file(os.path.join(src, 'trainers', 'base.py'),
+              os.path.join(trainers_dst, 'base.py'))
     copied.append('trainers/base.py')
 
     # 如果不是 BaseTrainer 本身，复制专属 trainer
     trainer_init_lines = ['from .base import BaseTrainer']
     if trainer_basename != 'base.py':
-        shutil.copy2(trainer_file, os.path.join(trainers_dst, trainer_basename))
+        copy_file(trainer_file, os.path.join(trainers_dst, trainer_basename))
         copied.append(f'trainers/{trainer_basename}')
         trainer_module = trainer_basename.replace('.py', '')
         trainer_init_lines.append(f'from .{trainer_module} import {trainer_cls_name}')
@@ -222,15 +242,15 @@ def main():
         shutil.rmtree(forecastors_dst)
     os.makedirs(forecastors_dst)
 
-    shutil.copy2(os.path.join(src, 'forecastors', 'base.py'),
-                 os.path.join(forecastors_dst, 'base.py'))
+    copy_file(os.path.join(src, 'forecastors', 'base.py'),
+              os.path.join(forecastors_dst, 'base.py'))
     copied.append('forecastors/base.py')
 
     fc_init_lines = ['from .base import BaseForecaster']
     for fc_file in _forecaster_extra.get(trainer_cls_name, []):
         fc_src = os.path.join(src, 'forecastors', fc_file)
         if os.path.exists(fc_src):
-            shutil.copy2(fc_src, os.path.join(forecastors_dst, fc_file))
+            copy_file(fc_src, os.path.join(forecastors_dst, fc_file))
             copied.append(f'forecastors/{fc_file}')
             fc_module = fc_file.replace('.py', '')
             if fc_module in _fc_cls_map:
@@ -256,7 +276,7 @@ def main():
         ds_cls_name = ds_cls.__name__
         ds_module = ds_basename.replace('.py', '')
 
-        shutil.copy2(ds_file, os.path.join(datasets_dst, ds_basename))
+        copy_file(ds_file, os.path.join(datasets_dst, ds_basename))
         copied.append(f'datasets/{ds_basename}')
 
         ds_init = (

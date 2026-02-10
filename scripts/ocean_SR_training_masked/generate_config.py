@@ -272,7 +272,6 @@ def generate_config(params):
         elif model_name == "SRNO":
             model_config["input_channels"] = n_channels
             model_config["output_channels"] = n_channels
-            model_config
             model_config.setdefault("encoder_config", {})["input_channels"] = n_channels
             model_config.setdefault("encoder_config", {})["scale"] = scale
     elif model_name == "UNet2d":
