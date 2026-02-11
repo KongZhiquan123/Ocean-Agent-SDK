@@ -32,6 +32,10 @@ import { defineTool } from '@shareai-lab/kode-sdk'
 import { findFirstPythonPath } from '@/utils/python-manager'
 import path from 'node:path'
 
+function shellEscapeDouble(str: string): string {
+  return str.replace(/[\\"$`!]/g, '\\$&')
+}
+
 // ========================================
 // 类型定义
 // ========================================
@@ -175,7 +179,7 @@ export const oceanInspectDataTool = defineTool({
     }
 
     // 2. 准备路径
-    const pythonCmd = `"${pythonPath}"`
+    const pythonCmd = `"${shellEscapeDouble(pythonPath)}"`
     const tempDir = path.resolve(ctx.sandbox.workDir, 'ocean_preprocess_temp')
     const configPath = path.join(tempDir, 'inspect_config.json')
     const outputPath = path.join(tempDir, 'inspect_result.json')
@@ -207,12 +211,12 @@ export const oceanInspectDataTool = defineTool({
     }
 
     // 4. 创建临时目录并写入配置
-    await ctx.sandbox.exec(`mkdir -p "${tempDir}"`)
+    await ctx.sandbox.exec(`mkdir -p "${shellEscapeDouble(tempDir)}"`)
     await ctx.sandbox.fs.write(configPath, JSON.stringify(config, null, 2))
 
     // 5. 执行 Python 脚本
     const result = await ctx.sandbox.exec(
-      `${pythonCmd} "${scriptPath}" --config "${configPath}" --output "${outputPath}"`,
+      `${pythonCmd} "${shellEscapeDouble(scriptPath)}" --config "${shellEscapeDouble(configPath)}" --output "${shellEscapeDouble(outputPath)}"`,
       { timeoutMs: 300000 }
     )
 

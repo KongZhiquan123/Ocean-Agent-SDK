@@ -111,7 +111,7 @@ AI 生成的文本增量，客户端需拼接所有 `content` 得到完整回复
   "status": "success",
   "message": "写入文件成功: /data/output.npy，写入 1024 字节",
   "modified": true,              // 文件是否被修改
-  "paths": ["/data/output.npy"]  // 被修改/读取的文件路径列表
+  "paths": ["/data/output.npy"]  // 被修改的文件路径列表
 }
 ```
 

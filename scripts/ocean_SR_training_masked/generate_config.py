@@ -4,9 +4,13 @@
 @description 根据参数生成训练配置 YAML 文件
 @author Leizheng
 @date 2026-02-09
-@version 3.8.5
+@version 3.9.0
 
 @changelog
+  - 2026-02-10 Leizheng: v3.9.0 auto-patch 逻辑统一为配置生成时唯一入口
+    - 区分 'auto'(未指定) / None(显式禁用) / int(显式值) 三种 patch_size 输入
+    - OceanNPY 不再重复计算 auto-patch，只读取配置值
+    - 配置写入真实 patch_size，消除配置/运行时不一致
   - 2026-02-09 Leizheng: v3.8.5 扩散模型 eval_batchsize 限制为 <=4
   - 2026-02-09 Leizheng: v3.8.4 ReMiG 模板改为 remig.yaml
   - 2026-02-09 Leizheng: v3.8.3 FFT 模型 AMP 默认关闭
@@ -87,7 +91,7 @@ DIFFUSION_MODELS = {"DDPM", "SR3", "MG-DDPM", "ReMiG"}
 RESSHIFT_MODELS = {"Resshift", "ResShift"}
 # FNO/FFT 类模型默认不切 patch（显存充足且全图更稳定）
 NO_PATCH_MODELS = {"FNO2d", "HiNOTE", "MWT2d", "M2NO2d"}
-AMP_AUTO_DISABLE_MODELS = {"FNO2d", "HiNOTE", "MWT2d", "M2NO2d", "MG-DDPM"}
+AMP_AUTO_DISABLE_MODELS = {"FNO2d", "HiNOTE", "MWT2d", "M2NO2d", "MG-DDPM", "SRNO"}
 HEAVY_MODELS = {
     "Galerkin_Transformer",
     "MWT2d",
@@ -200,7 +204,10 @@ def generate_config(params):
         hr_shape (list[int]): HR 尺寸 [H, W] (若不提供则自动检测)
         use_amp (bool): 是否启用 AMP 混合精度 (默认按模型: FFT 关闭)
         gradient_checkpointing (bool): 是否启用梯度检查点 (默认开启，可手动关闭)
-        patch_size (int): Patch 裁剪尺寸，None 表示全图训练 (默认 None)
+        patch_size (int|None): Patch 裁剪尺寸。
+            未传入(默认): 自动计算合理值（NO_PATCH 模型除外）
+            None/null: 显式禁用 patch，全图训练
+            int: 使用指定值
     """
     model_name = params['model_name']
     dataset_root = params['dataset_root']
@@ -211,7 +218,8 @@ def generate_config(params):
     n_channels = len(dyn_vars)
     lr_size = None
     hr_shape = params.get('hr_shape', None)
-    patch_size = params.get('patch_size', None)
+    # 区分"未指定"和"显式禁用": 'auto'=未指定, None=显式禁用, int=显式值
+    _patch_size_raw = params.get('patch_size', 'auto')
     eval_batch_size = params.get('eval_batch_size', 4)
     try:
         eval_batch_size = int(eval_batch_size)
@@ -224,10 +232,21 @@ def generate_config(params):
         )
         eval_batch_size = 4
     user_auto_patch = params.get('auto_patch', None)
-    if user_auto_patch is None:
-        auto_patch = False if (patch_size is None and model_name in NO_PATCH_MODELS) else True
+    if _patch_size_raw == 'auto':
+        # 未指定 patch_size，按模型策略决定是否自动计算
+        if user_auto_patch is None:
+            auto_patch = model_name not in NO_PATCH_MODELS
+        else:
+            auto_patch = bool(user_auto_patch)
+        patch_size = None  # 将在后续 auto-patch 逻辑中计算
+    elif _patch_size_raw is None:
+        # 用户显式禁用 patch（JSON 传入 null）
+        patch_size = None
+        auto_patch = False
     else:
-        auto_patch = bool(user_auto_patch)
+        # 用户显式指定 patch_size
+        patch_size = int(_patch_size_raw)
+        auto_patch = True
 
     # 自动检测 HR shape
     if hr_shape is None:
@@ -272,8 +291,12 @@ def generate_config(params):
         elif model_name == "SRNO":
             model_config["input_channels"] = n_channels
             model_config["output_channels"] = n_channels
-            model_config.setdefault("encoder_config", {})["input_channels"] = n_channels
-            model_config.setdefault("encoder_config", {})["scale"] = scale
+            encoder_cfg = model_config.get("encoder_config")
+            if not isinstance(encoder_cfg, dict):
+                encoder_cfg = {}
+            encoder_cfg["input_channels"] = n_channels
+            encoder_cfg["scale"] = scale
+            model_config["encoder_config"] = encoder_cfg
     elif model_name == "UNet2d":
         model_config["scale_factor"] = scale
     elif model_name == "EDSR":
@@ -290,7 +313,7 @@ def generate_config(params):
     # 计算模型整除要求并自动对齐 image_size
     divisor = compute_model_divisor(model_name, model_config)
 
-    # 自动计算 patch_size（与 OceanNPY 保持一致）
+    # 自动计算 patch_size（配置生成时唯一入口，OceanNPY 不再重复计算）
     if patch_size is None and auto_patch:
         from math import gcd
         max_dim = min(hr_shape[0], hr_shape[1])
@@ -399,7 +422,7 @@ def generate_config(params):
     else:
         gradient_checkpointing = True
 
-    # use_amp 默认策略：FFT 模型关闭，其余开启（允许用户显式覆盖）
+    # use_amp 默认策略：FFT/数值敏感模型关闭，其余开启（允许用户显式覆盖）
     if "use_amp" in params:
         use_amp = bool(params.get("use_amp"))
     else:

@@ -34,6 +34,10 @@ import { findFirstPythonPath } from '@/utils/python-manager'
 import { z } from 'zod'
 import path from 'node:path'
 
+function shellEscapeDouble(str: string): string {
+  return str.replace(/[\\"$`!]/g, '\\$&')
+}
+
 // 使用 zod 定义 user_confirmation 的 schema
 const UserConfirmationSchema = z.object({
   stage1_research_vars: z.object({
@@ -217,7 +221,7 @@ export const oceanReportTool = defineTool({
     }
 
     // 2. 准备路径
-    const pythonCmd = `"${pythonPath}"`
+    const pythonCmd = `"${shellEscapeDouble(pythonPath)}"`
     const scriptPath = path.resolve(process.cwd(), 'scripts/ocean_preprocess/generate_report.py')
     const reportPath = output_path || path.join(dataset_root, 'preprocessing_report.md')
 
@@ -241,7 +245,7 @@ export const oceanReportTool = defineTool({
 
     // 5. 执行 Python 脚本
     const result = await ctx.sandbox.exec(
-      `${pythonCmd} "${scriptPath}" --config "${configPath}"`,
+      `${pythonCmd} "${shellEscapeDouble(scriptPath)}" --config "${shellEscapeDouble(configPath)}"`,
       { timeoutMs: 120000 }
     )
 

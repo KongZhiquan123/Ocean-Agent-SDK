@@ -60,6 +60,10 @@ import { findFirstPythonPath } from '@/utils/python-manager'
 import os from 'node:os'
 import path from 'node:path'
 
+function shellEscapeDouble(str: string): string {
+  return str.replace(/[\\"$`!]/g, '\\$&')
+}
+
 const DEFAULT_WORKERS = Math.max(1, Math.min(8, os.cpus().length || 1))
 
 // ========================================
@@ -412,7 +416,7 @@ export const oceanConvertNpyTool = defineTool({
     }
 
     // 2. 准备路径
-    const pythonCmd = `"${pythonPath}"`
+    const pythonCmd = `"${shellEscapeDouble(pythonPath)}"`
     const tempDir = path.resolve(ctx.sandbox.workDir, 'ocean_preprocess_temp')
     const configPath = path.join(tempDir, 'convert_config.json')
     const outputPath = path.join(tempDir, 'convert_result.json')
@@ -466,12 +470,12 @@ export const oceanConvertNpyTool = defineTool({
     }
 
     // 4. 创建临时目录并写入配置
-    await ctx.sandbox.exec(`mkdir -p "${tempDir}"`)
+    await ctx.sandbox.exec(`mkdir -p "${shellEscapeDouble(tempDir)}"`)
     await ctx.sandbox.fs.write(configPath, JSON.stringify(config, null, 2))
 
     // 5. 执行 Python 脚本
     const result = await ctx.sandbox.exec(
-      `${pythonCmd} "${scriptPath}" --config "${configPath}" --output "${outputPath}"`,
+      `${pythonCmd} "${shellEscapeDouble(scriptPath)}" --config "${shellEscapeDouble(configPath)}" --output "${shellEscapeDouble(outputPath)}"`,
       { timeoutMs: 1800000 }
     )
 

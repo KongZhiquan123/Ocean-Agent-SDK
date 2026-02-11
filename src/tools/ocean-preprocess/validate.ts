@@ -19,6 +19,10 @@ import { defineTool } from '@shareai-lab/kode-sdk'
 import { findFirstPythonPath } from '@/utils/python-manager'
 import path from 'node:path'
 
+function shellEscapeDouble(str: string): string {
+  return str.replace(/[\\"$`!]/g, '\\$&')
+}
+
 // ========================================
 // 类型定义
 // ========================================
@@ -90,7 +94,7 @@ export const oceanValidateTensorTool = defineTool({
     }
 
     // 2. 准备路径
-    const pythonCmd = `"${pythonPath}"`
+    const pythonCmd = `"${shellEscapeDouble(pythonPath)}"`
     const tempDir = path.resolve(ctx.sandbox.workDir, 'ocean_preprocess_temp')
     const configPath = path.join(tempDir, 'validate_config.json')
     const outputPath = path.join(tempDir, 'validate_result.json')
@@ -110,7 +114,7 @@ export const oceanValidateTensorTool = defineTool({
 
     // 5. 执行 Python 脚本
     const result = await ctx.sandbox.exec(
-      `${pythonCmd} "${scriptPath}" --config "${configPath}" --output "${outputPath}"`,
+      `${pythonCmd} "${shellEscapeDouble(scriptPath)}" --config "${shellEscapeDouble(configPath)}" --output "${shellEscapeDouble(outputPath)}"`,
       { timeoutMs: 60000 }
     )
 

@@ -63,6 +63,7 @@ import { defineTool } from '@shareai-lab/kode-sdk'
 import { findPythonWithModule, findFirstPythonPath } from '@/utils/python-manager'
 import { trainingProcessManager } from '@/utils/training-process-manager'
 import path from 'node:path'
+import net from 'node:net'
 import {
   TrainingWorkflow,
   TrainingState,
@@ -74,9 +75,40 @@ import {
 /**
  * 将 JSON 字符串转义为可以安全嵌入 shell 单引号的形式
  * 策略：替换单引号为 '\'' (结束单引号 + 转义单引号 + 开始单引号)
+ * 注：在 shell 单引号内，反斜杠等其他字符均为字面量，无需额外转义
  */
 function shellSafeJson(json: string): string {
   return json.replace(/'/g, "'\\''")
+}
+
+/**
+ * 转义字符串使其可以安全嵌入 shell 双引号
+ * 在双引号内有特殊含义的字符：\ " $ ` !
+ */
+function shellEscapeDouble(str: string): string {
+  return str.replace(/[\\"$`!]/g, '\\$&')
+}
+
+/** model_name 白名单格式（仅字母、数字、下划线、连字符） */
+const MODEL_NAME_PATTERN = /^[a-zA-Z0-9_-]+$/
+
+async function isPortFree(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const server = net.createServer()
+    server.unref()
+    server.once('error', () => resolve(false))
+    server.listen(port, () => {
+      server.close(() => resolve(true))
+    })
+  })
+}
+
+async function findFreePort(start = 29500, end = 29600): Promise<number | null> {
+  for (let port = start; port <= end; port += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    if (await isPortFree(port)) return port
+  }
+  return null
 }
 
 function extractTaggedJson(output: string, tag: string): Record<string, unknown> | null {
@@ -91,17 +123,22 @@ function extractTaggedJson(output: string, tag: string): Record<string, unknown>
 }
 
 // FFT/频域/复数变换相关模型：默认关闭 AMP，允许用户显式 override（强提示）
-const AMP_AUTO_DISABLE_MODELS = new Set([
+const FFT_AMP_SENSITIVE_MODELS = new Set([
   'FNO2d',
   'HiNOTE',
   'MWT2d',
   'M2NO2d',
   'MG-DDPM',
 ])
+const AMP_DEFAULT_OFF_MODELS = new Set([...FFT_AMP_SENSITIVE_MODELS, 'SRNO'])
 const DIFFUSION_MODELS = new Set(['DDPM', 'SR3', 'MG-DDPM', 'ReMiG', 'ResShift', 'Resshift'])
 
 function isFftSensitiveModel(modelName?: string): boolean {
-  return Boolean(modelName && AMP_AUTO_DISABLE_MODELS.has(modelName))
+  return Boolean(modelName && FFT_AMP_SENSITIVE_MODELS.has(modelName))
+}
+
+function isAmpDefaultOffModel(modelName?: string): boolean {
+  return Boolean(modelName && AMP_DEFAULT_OFF_MODELS.has(modelName))
 }
 
 function isPowerOfTwo(value: number): boolean {
@@ -120,6 +157,7 @@ function countPowerOfTwoFactor(value: number): number {
 
 function getModelDivisor(modelName?: string): number {
   if (!modelName) return 1
+  // ResShift 使用 channel_mult=[1,2,2,4]，divisor = 2^3 = 8（优先于通用扩散模型的 32）
   if (modelName === 'Resshift' || modelName === 'ResShift') return 8
   if (DIFFUSION_MODELS.has(modelName)) return 32
   if (modelName === 'UNet2d') return 16
@@ -424,7 +462,7 @@ async function validateDataset(
 ): Promise<DatasetValidationInfo> {
   const validateScript = path.join(trainingDir, 'validate_dataset.py')
   const validateResult = await ctx.sandbox.exec(
-    `"${pythonPath}" "${validateScript}" --dataset_root "${datasetRoot}"`,
+    `"${shellEscapeDouble(pythonPath)}" "${shellEscapeDouble(validateScript)}" --dataset_root "${shellEscapeDouble(datasetRoot)}"`,
     { timeoutMs: 60000 }
   )
   if (validateResult.code === 0) {
@@ -549,6 +587,11 @@ export const oceanSrTrainTool = defineTool({
       required: false,
       default: 'DDP'
     },
+    master_port: {
+      type: 'number',
+      description: 'DDP 主端口（可选，端口冲突时可指定）',
+      required: false
+    },
     patience: {
       type: 'number',
       description: '早停耐心值',
@@ -650,6 +693,13 @@ export const oceanSrTrainTool = defineTool({
   },
 
   async exec(args, ctx) {
+    // model_name 格式白名单校验（防止 shell 注入）
+    if (args.model_name && typeof args.model_name === 'string') {
+      if (!MODEL_NAME_PATTERN.test(args.model_name)) {
+        throw new Error(`model_name 格式不合法: "${args.model_name}"。只允许字母、数字、下划线和连字符。`)
+      }
+    }
+
     // 训练工具需要 torch，优先查找安装了 torch 的 Python
     const pythonPath = findPythonWithModule('torch') || findFirstPythonPath()
     if (!pythonPath) {
@@ -662,10 +712,11 @@ export const oceanSrTrainTool = defineTool({
 
     const userSpecifiedUseAmp = Object.prototype.hasOwnProperty.call(args, 'use_amp')
     const fftSensitive = isFftSensitiveModel(args.model_name as string | undefined)
+    const ampDefaultOff = isAmpDefaultOffModel(args.model_name as string | undefined)
     let autoDisabledAmp = false
 
     if (!userSpecifiedUseAmp && args.model_name) {
-      if (fftSensitive) {
+      if (ampDefaultOff) {
         args.use_amp = false
         autoDisabledAmp = true
       } else {
@@ -695,7 +746,7 @@ export const oceanSrTrainTool = defineTool({
       if (stateCheck.currentState === TrainingState.AWAITING_MODEL_SELECTION) {
         const listScript = path.join(trainingDir, 'list_models.py')
         const listResult = await ctx.sandbox.exec(
-          `"${pythonPath}" "${listScript}"`,
+          `"${shellEscapeDouble(pythonPath)}" "${shellEscapeDouble(listScript)}"`,
           { timeoutMs: 30000 }
         )
         if (listResult.code === 0) {
@@ -711,7 +762,7 @@ export const oceanSrTrainTool = defineTool({
       ) {
         const gpuScript = path.join(trainingDir, 'check_gpu.py')
         const gpuResult = await ctx.sandbox.exec(
-          `"${pythonPath}" "${gpuScript}"`,
+          `"${shellEscapeDouble(pythonPath)}" "${shellEscapeDouble(gpuScript)}"`,
           { timeoutMs: 30000 }
         )
         if (gpuResult.code === 0) {
@@ -736,8 +787,12 @@ export const oceanSrTrainTool = defineTool({
         }
       }
 
+      if (args.use_amp === true && isAmpDefaultOffModel(args.model_name) && !isFftSensitiveModel(args.model_name)) {
+        prompt.message = `${prompt.message}\n\n⚠️ 检测到模型 ${args.model_name} 默认关闭 AMP，但当前 use_amp=true 可能导致数值不稳定（如 NaN）。建议 use_amp=false；如需强行开启请自行承担风险。`
+      }
+
       if (autoDisabledAmp) {
-        prompt.message = `${prompt.message}\n\n检测到模型 ${args.model_name} 属于 FFT 类，已默认关闭 AMP（use_amp=false）。如需强制开启，请明确设置 use_amp=true。`
+        prompt.message = `${prompt.message}\n\n检测到模型 ${args.model_name} 属于 FFT/数值敏感模型，已默认关闭 AMP（use_amp=false）。如需强制开启，请明确设置 use_amp=true。`
         prompt.data = {
           ...(prompt.data ?? {}),
           amp_auto_disabled: { model: args.model_name },
@@ -746,7 +801,7 @@ export const oceanSrTrainTool = defineTool({
 
       if (
         args.model_name &&
-        AMP_AUTO_DISABLE_MODELS.has(args.model_name as string) &&
+        FFT_AMP_SENSITIVE_MODELS.has(args.model_name as string) &&
         userSpecifiedUseAmp &&
         args.use_amp === true
       ) {
@@ -802,7 +857,7 @@ export const oceanSrTrainTool = defineTool({
     let modelSupportInfo: ModelInfo | undefined
     const listScript = path.join(trainingDir, 'list_models.py')
     const listResult = await ctx.sandbox.exec(
-      '"' + pythonPath + '" "' + listScript + '"',
+      `"${shellEscapeDouble(pythonPath)}" "${shellEscapeDouble(listScript)}"`,
       { timeoutMs: 30000 }
     )
     if (listResult.code === 0) {
@@ -850,6 +905,36 @@ export const oceanSrTrainTool = defineTool({
       )
     }
 
+    const normalizedDeviceIds = Array.isArray(device_ids) && device_ids.length > 0 ? device_ids : [0]
+    const effectiveDistribute = distribute && normalizedDeviceIds.length > 1
+    const effectiveDistributeMode = effectiveDistribute ? distribute_mode : 'single'
+
+    let masterPort: number | null = null
+    if (effectiveDistribute && distribute_mode === 'DDP') {
+      const requestedPort = typeof args.master_port === 'number' ? Math.trunc(args.master_port) : null
+      if (requestedPort && requestedPort > 0 && requestedPort <= 65535) {
+        if (await isPortFree(requestedPort)) {
+          masterPort = requestedPort
+        } else {
+          const fallbackPort = await findFreePort(29500, 29600)
+          masterPort = fallbackPort ?? requestedPort
+          execWarnings.push(`DDP master_port ${requestedPort} 已被占用，已切换为 ${masterPort}。`)
+        }
+      } else {
+        const fallbackPort = await findFreePort(29500, 29600)
+        masterPort = fallbackPort ?? 29500
+        if (masterPort !== 29500) {
+          execWarnings.push(`DDP master_port 自动选择为 ${masterPort}。`)
+        }
+      }
+    }
+
+    if (distribute && normalizedDeviceIds.length <= 1) {
+      execWarnings.push(
+        '已请求多卡/DP/DDP 但 device_ids 只有 1 张 GPU，已自动降级为单卡训练以避免 DDP 初始化失败。'
+      )
+    }
+
     // ===== 3a. 准备训练工作空间（只复制所选模型相关代码） =====
     // 训练在副本上执行，保持 Agent SDK 源码不被修改；
     // Agent 运行时如需调整代码，可直接修改副本而不影响 SDK；
@@ -857,7 +942,7 @@ export const oceanSrTrainTool = defineTool({
     const workspaceDir = path.resolve(log_dir, '_ocean_sr_code')
     const prepareScript = path.join(trainingDir, 'prepare_workspace.py')
     const prepareResult = await ctx.sandbox.exec(
-      `"${pythonPath}" "${prepareScript}" --source_dir "${trainingDir}" --target_dir "${workspaceDir}" --model_name "${model_name}"`,
+      `"${shellEscapeDouble(pythonPath)}" "${shellEscapeDouble(prepareScript)}" --source_dir "${shellEscapeDouble(trainingDir)}" --target_dir "${shellEscapeDouble(workspaceDir)}" --model_name "${shellEscapeDouble(model_name)}"`,
       { timeoutMs: 60000 }
     )
     if (prepareResult.code !== 0) {
@@ -880,10 +965,11 @@ export const oceanSrTrainTool = defineTool({
       dyn_vars,
       scale,
       log_dir,
-      device: device_ids[0],
-      device_ids,
-      distribute,
-      distribute_mode,
+      device: normalizedDeviceIds[0],
+      device_ids: normalizedDeviceIds,
+      distribute: effectiveDistribute,
+      distribute_mode: effectiveDistributeMode,
+      master_port: masterPort ?? undefined,
       ckpt_path,
       epochs: args.epochs,
       lr: args.lr,
@@ -909,7 +995,7 @@ export const oceanSrTrainTool = defineTool({
 
     const paramsJson = JSON.stringify(configParams)
     const genResult = await ctx.sandbox.exec(
-      `"${pythonPath}" "${generateScript}" --params '${shellSafeJson(paramsJson)}' --output "${configPath}"`,
+      `"${shellEscapeDouble(pythonPath)}" "${shellEscapeDouble(generateScript)}" --params '${shellSafeJson(paramsJson)}' --output "${shellEscapeDouble(configPath)}"`,
       { timeoutMs: 60000 }
     )
 
@@ -934,9 +1020,9 @@ export const oceanSrTrainTool = defineTool({
     // ===== 3b.1 训练前模型输出尺寸预检 =====
     if (mode === 'train') {
       const shapeCheckScript = path.join(workspaceDir, 'check_output_shape.py')
-      const deviceId = device_ids[0] ?? 0
+      const deviceId = normalizedDeviceIds[0] ?? 0
       const shapeResult = await ctx.sandbox.exec(
-        `"${pythonPath}" "${shapeCheckScript}" --config "${configPath}" --device ${deviceId}`,
+        `"${shellEscapeDouble(pythonPath)}" "${shellEscapeDouble(shapeCheckScript)}" --config "${shellEscapeDouble(configPath)}" --device ${Number(deviceId) || 0}`,
         { timeoutMs: 120000 }
       )
 
@@ -965,10 +1051,10 @@ export const oceanSrTrainTool = defineTool({
     // ===== 3c. 自动显存预估 + 自动调参（不可跳过） =====
     if (mode === 'train') {
       const estimateScript = path.join(workspaceDir, 'estimate_memory.py')
-      const cudaDevice = device_ids[0]
+      const cudaDevice = normalizedDeviceIds[0]
       let currentBatchSize = (configParams.batch_size as number) ?? 4
       let currentAmp = (configParams.use_amp as boolean) ?? true
-      const allowAutoEnableAmp = !fftSensitive || args.use_amp === true
+      const allowAutoEnableAmp = !ampDefaultOff || args.use_amp === true
       const MAX_ATTEMPTS = 5
 
       for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
@@ -978,17 +1064,23 @@ export const oceanSrTrainTool = defineTool({
           configParams.use_amp = currentAmp
           const regenJson = JSON.stringify(configParams)
           const regenResult = await ctx.sandbox.exec(
-            `"${pythonPath}" "${generateScript}" --params '${shellSafeJson(regenJson)}' --output "${configPath}"`,
+            `"${shellEscapeDouble(pythonPath)}" "${shellEscapeDouble(generateScript)}" --params '${shellSafeJson(regenJson)}' --output "${shellEscapeDouble(configPath)}"`,
             { timeoutMs: 60000 }
           )
-          if (regenResult.code !== 0) break
+          if (regenResult.code !== 0) {
+            execWarnings.push(`显存预估前重建配置失败，已跳过自动调参：${regenResult.stderr || regenResult.stdout}`)
+            break
+          }
         }
 
         const estimateResult = await ctx.sandbox.exec(
-          `cd "${workspaceDir}" && CUDA_VISIBLE_DEVICES=${cudaDevice} "${pythonPath}" "${estimateScript}" --config "${configPath}" --device 0`,
+          `cd "${shellEscapeDouble(workspaceDir)}" && CUDA_VISIBLE_DEVICES=${Number(cudaDevice) || 0} "${shellEscapeDouble(pythonPath)}" "${shellEscapeDouble(estimateScript)}" --config "${shellEscapeDouble(configPath)}" --device 0`,
           { timeoutMs: 120000 }
         )
-        if (estimateResult.code !== 0) break
+        if (estimateResult.code !== 0) {
+          execWarnings.push(`显存预估失败，已跳过自动调参并继续训练：${estimateResult.stderr || estimateResult.stdout}`)
+          break
+        }
 
         try {
           const mem = JSON.parse(estimateResult.stdout)
@@ -1029,6 +1121,7 @@ export const oceanSrTrainTool = defineTool({
           }
         } catch {
           // 解析失败不阻止训练
+          execWarnings.push('显存预估输出解析失败，已跳过自动调参并继续训练')
           break
         }
       }
@@ -1040,15 +1133,21 @@ export const oceanSrTrainTool = defineTool({
     let cmdArgs: string[]
     let cmdEnv: Record<string, string> = {}
 
-    if (distribute && distribute_mode === 'DDP' && device_ids.length > 1) {
-      const nproc = device_ids.length
-      const cudaDevices = device_ids.join(',')
+    if (effectiveDistribute && distribute_mode === 'DDP') {
+      const nproc = normalizedDeviceIds.length
+      const cudaDevices = normalizedDeviceIds.join(',')
       const mainDdp = path.join(workspaceDir, 'main_ddp.py')
       cmdPath = pythonPath
-      cmdArgs = ['-m', 'torch.distributed.run', `--nproc_per_node=${nproc}`, mainDdp, '--mode', mode, '--config', configPath]
-      cmdEnv = { CUDA_VISIBLE_DEVICES: cudaDevices }
+      cmdArgs = ['-m', 'torch.distributed.run', `--nproc_per_node=${nproc}`, `--master_port=${masterPort ?? 29500}`, mainDdp, '--mode', mode, '--config', configPath]
+      cmdEnv = { CUDA_VISIBLE_DEVICES: cudaDevices, MASTER_PORT: String(masterPort ?? 29500) }
+    } else if (effectiveDistribute && distribute_mode === 'DP') {
+      const mainPy = path.join(workspaceDir, 'main.py')
+      cmdPath = pythonPath
+      cmdArgs = [mainPy, '--mode', mode, '--config', configPath]
+      // DP 直接使用用户选择的物理 GPU 编号，避免被单卡 CUDA_VISIBLE_DEVICES 限制
+      cmdEnv = {}
     } else {
-      const cudaDevice = String(device_ids[0])
+      const cudaDevice = String(normalizedDeviceIds[0])
       const mainPy = path.join(workspaceDir, 'main.py')
       cmdPath = pythonPath
       cmdArgs = [mainPy, '--mode', mode, '--config', configPath]
@@ -1068,6 +1167,7 @@ export const oceanSrTrainTool = defineTool({
         logDir: log_dir,
         configPath: genInfo.config_path,
         workspaceDir: workspaceDir,
+        deviceIds: normalizedDeviceIds,
       },
     })
 
@@ -1102,9 +1202,10 @@ export const oceanSrTrainTool = defineTool({
         config_path: genInfo.config_path,
         log_dir,
         log_file: processInfo.logFile,
-        distribute: distribute && device_ids.length > 1,
-        distribute_mode: distribute ? distribute_mode : 'single',
-        device_ids,
+        distribute: effectiveDistribute,
+        distribute_mode: effectiveDistributeMode,
+        device_ids: normalizedDeviceIds,
+        master_port: masterPort ?? undefined,
         workspace_dir: workspaceDir,
         workspace_info: prepareInfo,
         amp_auto_disabled: autoDisabledAmp ? { model: args.model_name } : undefined,
@@ -1112,6 +1213,7 @@ export const oceanSrTrainTool = defineTool({
         fft_amp_warning: fftAmpWarningAtStart?.details,
         next_steps: [
           `调用 ocean_sr_train_status({ action: "wait", process_id: "${processInfo.id}", timeout: 120 }) 等待训练状态变化`,
+          `调用 ocean_sr_train_status({ action: "watch", process_id: "${processInfo.id}", timeout: 300 }) 等待关键推送事件`,
           `调用 ocean_sr_train_status({ process_id: "${processInfo.id}" }) 查看训练状态`,
           `调用 ocean_sr_train_status({ action: "logs", process_id: "${processInfo.id}", tail: 50 }) 查看最新日志`,
           `调用 ocean_sr_train_status({ action: "kill", process_id: "${processInfo.id}" }) 终止训练`,
@@ -1130,9 +1232,10 @@ export const oceanSrTrainTool = defineTool({
       config_path: genInfo.config_path,
       log_dir,
       log_file: processInfo.logFile,
-      distribute: distribute && device_ids.length > 1,
-      distribute_mode: distribute ? distribute_mode : 'single',
-      device_ids,
+      distribute: effectiveDistribute,
+      distribute_mode: effectiveDistributeMode,
+      device_ids: normalizedDeviceIds,
+      master_port: masterPort ?? undefined,
       workspace_dir: workspaceDir,
       workspace_info: prepareInfo,
       amp_auto_disabled: autoDisabledAmp ? { model: args.model_name } : undefined,
@@ -1140,6 +1243,7 @@ export const oceanSrTrainTool = defineTool({
       fft_amp_warning: fftAmpWarningAtStart?.details,
       next_steps: [
         `调用 ocean_sr_train_status({ action: "wait", process_id: "${processInfo.id}", timeout: 120 }) 等待训练状态变化`,
+        `调用 ocean_sr_train_status({ action: "watch", process_id: "${processInfo.id}", timeout: 300 }) 等待关键推送事件`,
         `调用 ocean_sr_train_status({ process_id: "${processInfo.id}" }) 查看训练状态`,
         `调用 ocean_sr_train_status({ action: "logs", process_id: "${processInfo.id}", tail: 50 }) 查看最新日志`,
       ],

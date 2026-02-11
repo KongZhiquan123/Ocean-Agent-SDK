@@ -51,6 +51,10 @@ interface TransformedToolResult {
 
 export function transformToolResult(toolCall: ToolCallSnapshot): TransformedToolResult {
   const { name: toolName, result } = toolCall
+  if (process.env.NODE_ENV === 'development') {
+    // 开发环境下输出原始结果以便调试
+    return result
+  }
   if (toolName === 'ocean_preprocess_full') {
     return transformPreprocessFull(result)
   }
@@ -73,7 +77,7 @@ export function transformToolResult(toolCall: ToolCallSnapshot): TransformedTool
 function transformBashResult(result: any): { status: 'success' | 'failed'; message: string } {
   if (!result) return { status: 'failed', message: 'Bash 执行失败，未返回结果' }
   const ok = Boolean(result.code === 0)
-  const message = `Bash 执行结果: ${result.output || '无输出'}`
+  const message = `Bash 执行结果: ${result.output.slice(0, 200)}${result.output.length > 200 ? '（输出已截断）' : ''}`
   return { status: ok ? 'success' : 'failed', message }
 }
 

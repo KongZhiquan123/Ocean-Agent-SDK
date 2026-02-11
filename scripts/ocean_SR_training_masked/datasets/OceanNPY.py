@@ -17,9 +17,12 @@ OceanNPY Dataset - 适配 ocean-preprocess 预处理输出的数据集类（带�
 @author Leizheng
 @contributors kongzhiquan
 @date 2026-02-06
-@version 7.1.0
+@version 7.2.0
 
 @changelog
+  - 2026-02-10 Leizheng: v7.2.0 移除运行时 auto-patch，改为纯读取配置值
+    - patch_size 由 generate_config.py 预计算，OceanNPY 不再独立计算
+    - 消除配置/运行时 patch_size 不一致问题
   - 2026-02-09 kongzhiquan: v7.1.0 get_meta() 返回完整元数据
     - filenames/dyn_vars 传入 OceanNPYDatasetBase
     - get_coords() 重命名为 get_meta()，返回 dict 含经纬度、filename、dyn_vars
@@ -190,43 +193,20 @@ class OceanNPYDataset:
         self.dyn_vars = dyn_vars      # list[str]
         self.test_filenames = test_filenames  # list[str]
 
-        # Patch 训练参数
+        # Patch 训练参数（由 generate_config.py 预计算，这里只读取）
         patch_size = data_args.get('patch_size', None)
-        auto_patch = data_args.get('auto_patch', True)
         scale = data_args.get('sample_factor', 1)
-        divisor = data_args.get('model_divisor', 1)
         H, W = train_hr.shape[1], train_hr.shape[2]
 
-        # 默认开启 patch 训练（OOM 防护 + 尺寸对齐）
-        # 当用户未指定 patch_size 时，自动计算合理的默认值
-        if patch_size is None and auto_patch:
-            from math import gcd
-            max_dim = min(H, W)
-            # patch_size 必须同时被 scale 和 divisor 整除
-            lcm_factor = (scale * divisor) // gcd(scale, divisor)
-            # 目标: 不超过数据尺寸的 1/2，不超过 256
-            target = min(max_dim // 2, 256)
-            auto_patch_size = (target // lcm_factor) * lcm_factor
-            if auto_patch_size < lcm_factor and lcm_factor < max_dim:
-                auto_patch_size = lcm_factor
-            if 0 < auto_patch_size < max_dim:
-                patch_size = auto_patch_size
-                print(f'[OceanNPY] 默认开启 patch 训练: patch_size={patch_size} '
-                      f'(数据 {H}x{W}, scale={scale}, divisor={divisor}, '
-                      f'lcm={lcm_factor})')
-            else:
-                print(f'[OceanNPY] 数据尺寸 {H}x{W} 较小，使用全图训练')
-        elif patch_size is None and not auto_patch:
-            print(f'[OceanNPY] 自动 patch 已关闭，使用全图训练（数据 {H}x{W}）')
-
         if patch_size is not None:
-            H, W = train_hr.shape[1], train_hr.shape[2]
             assert patch_size <= H and patch_size <= W, (
                 f"patch_size ({patch_size}) must be <= HR spatial dims ({H}x{W})")
             assert patch_size % scale == 0, (
                 f"patch_size ({patch_size}) must be divisible by scale ({scale})")
             print(f'[OceanNPY] Patch training: HR patch {patch_size}x{patch_size}, '
                   f'LR patch {patch_size//scale}x{patch_size//scale}')
+        else:
+            print(f'[OceanNPY] Full-image training (data {H}x{W})')
 
         self.train_dataset = OceanNPYDatasetBase(
             train_lr, train_hr, mode='train',

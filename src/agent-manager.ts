@@ -283,7 +283,9 @@ export function convertProgressToSSE(event: ProgressEvent, reqId: string): SSEEv
       return {
         type: 'tool_error',
         tool: event.call.name,
-        error: event.error,
+        error: process.env.NODE_ENV === 'production'
+          ? '工具执行失败'
+          : event.error,
         timestamp: Date.now(),
       }
 

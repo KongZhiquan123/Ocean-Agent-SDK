@@ -62,9 +62,8 @@ export function transformToolUse(toolCall: ToolCallSnapshot): { message: string;
 
   if (toolName.startsWith('fs_')) {
     const action = toolName.split('_')[1] || '未知操作'
-    const path = inputPreview?.path || '未知路径'
     return {
-      message: `执行文件操作: ${action}，路径: ${path}`,
+      message: `执行文件操作: ${action} ${inputPreview.path ? `，路径： ${inputPreview.path}` : ''}...`,
       input: inputPreview,
     }
   }

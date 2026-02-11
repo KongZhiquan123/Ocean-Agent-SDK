@@ -32,6 +32,10 @@ import { defineTool } from '@shareai-lab/kode-sdk'
 import { findFirstPythonPath } from '@/utils/python-manager'
 import path from 'node:path'
 
+function shellEscapeDouble(str: string): string {
+  return str.replace(/[\\"$`!]/g, '\\$&')
+}
+
 export interface VisualizeResult {
   status: 'success' | 'error'
   dataset_root: string
@@ -114,13 +118,13 @@ export const oceanVisualizeTool = defineTool({
     }
 
     // 2. 准备路径
-    const pythonCmd = `"${pythonPath}"`
+    const pythonCmd = `"${shellEscapeDouble(pythonPath)}"`
     const scriptPath = path.resolve(process.cwd(), 'scripts/ocean_preprocess/visualize_check.py')
     const outputDir = out_dir || path.join(dataset_root, 'visualisation_data_process')
 
     // 3. 构建命令
-    const splitsArg = splits.join(' ')
-    const cmd = `${pythonCmd} "${scriptPath}" --dataset_root "${dataset_root}" --splits ${splitsArg} --out_dir "${outputDir}"`
+    const splitsArg = splits.map((split) => `"${shellEscapeDouble(String(split))}"`).join(' ')
+    const cmd = `${pythonCmd} "${shellEscapeDouble(scriptPath)}" --dataset_root "${shellEscapeDouble(dataset_root)}" --splits ${splitsArg} --out_dir "${shellEscapeDouble(outputDir)}"`
 
     // 4. 执行 Python 脚本
     const result = await ctx.sandbox.exec(cmd, { timeoutMs: 300000 })
@@ -133,7 +137,7 @@ export const oceanVisualizeTool = defineTool({
     const generatedFiles: string[] = []
     for (const split of splits) {
       const splitDir = path.join(outputDir, split)
-      const lsResult = await ctx.sandbox.exec(`ls "${splitDir}"/*.png 2>/dev/null || true`)
+      const lsResult = await ctx.sandbox.exec(`ls "${shellEscapeDouble(splitDir)}"/*.png 2>/dev/null || true`)
       if (lsResult.stdout.trim()) {
         const files = lsResult.stdout.trim().split('\n')
         generatedFiles.push(...files)

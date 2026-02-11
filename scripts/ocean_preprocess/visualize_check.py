@@ -435,13 +435,13 @@ def plot_summary_statistics(all_stats: list, save_path: str, dataset_name: str =
             height = bar.get_height()
             va = 'bottom' if height >= 0 else 'top'
             ax1.text(bar.get_x() + bar.get_width()/2, height, f'{val:.4g}',
-                    ha='center', va=va, fontsize=7, rotation=90)
+                    ha='center', va=va, fontsize=7, rotation=0)
     for bar, val in zip(bars2, lr_means):
         if not np.isnan(val):
             height = bar.get_height()
             va = 'bottom' if height >= 0 else 'top'
             ax1.text(bar.get_x() + bar.get_width()/2, height, f'{val:.4g}',
-                    ha='center', va=va, fontsize=7, rotation=90)
+                    ha='center', va=va, fontsize=7, rotation=0)
 
     # 2. 标准差对比条形图
     ax2 = axes[1]
@@ -461,13 +461,13 @@ def plot_summary_statistics(all_stats: list, save_path: str, dataset_name: str =
             height = bar.get_height()
             va = 'bottom' if height >= 0 else 'top'
             ax2.text(bar.get_x() + bar.get_width()/2, height, f'{val:.4g}',
-                    ha='center', va=va, fontsize=7, rotation=90)
+                    ha='center', va=va, fontsize=7, rotation=0)
     for bar, val in zip(bars4, lr_stds):
         if not np.isnan(val):
             height = bar.get_height()
             va = 'bottom' if height >= 0 else 'top'
             ax2.text(bar.get_x() + bar.get_width()/2, height, f'{val:.4g}',
-                    ha='center', va=va, fontsize=7, rotation=90)
+                    ha='center', va=va, fontsize=7, rotation=0)
 
     plt.tight_layout()
 

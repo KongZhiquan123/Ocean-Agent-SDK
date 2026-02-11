@@ -7,37 +7,28 @@
  *              - 进程生命周期管理（服务器关闭时清理所有进程）
  *              - stderr 环形缓冲区 + stdout 事件解析
  *              - 失败分类 + 错误摘要
- *              - waitForStatusChange / waitForEvent 长轮询
+ *              - waitForChange / waitForEvent 长轮询
  * @author kongzhiquan
  * @contributors Leizheng
  * @date 2026-02-07
- * @version 2.2.0
+ * @version 3.0.0
  *
  * @changelog
+ *   - 2026-02-11 kongzhiquan: v3.0.0 精简重构
+ *     - 删除死代码 cleanupCompleted / dequeueNotifications
+ *     - sampleRuntimeStats 改为独立定时采样，不再阻塞 getter
+ *     - 删除 parseProgressFallback / parseLogTimestamp / maybeInitTrainingMetaFromConfig（Python 端统一走 __event__ 协议）
+ *     - 合并 waitForStatusChange + waitForNotification → waitForChange
+ *     - 删除 ERROR_PATTERNS + isErrorContent，stderr 统一写入不加前缀
  *   - 2026-02-08 Leizheng: v2.2.0 增加训练日志滚动，限制日志文件大小
  *   - 2026-02-07 Leizheng: v2.1.0 修复事件捕获通道
- *     - 新增 stderrEventBuffer + stderr 侧 __event__ 解析（兜底 Python logging → stderr 的事件）
- *     - FAILURE_PATTERNS 新增 ChildFailedError / torch.distributed.elastic 等 DDP 失败模式
- *     - parseStdoutEvents → parseEventMarkers，同时用于 stdout 和 stderr
  *   - 2026-02-07 Leizheng: v2.0.0 训练错误实时反馈增强
- *     - 新增 stderr 环形缓冲区（最后 100 行）
- *     - 新增 stdout __event__ 标记解析（training_error / epoch_train / training_start 等）
- *     - 新增 classifyFailure() 失败分类，填充 errorSummary
- *     - 新增 waitForStatusChange() 长轮询方法
- *     - 新增 waitForEvent() 等待特定事件方法
- *     - TrainingProcessInfo 新增 errorSummary / progress 字段
- *     - ManagedProcess 新增 stderrRingBuffer / receivedEvents / lastTrainingError / lastEpochInfo / trainingMeta
  *   - 2026-02-07 kongzhiquan: v1.2.0 增强错误处理
- *     - 移除 EventEmitter 继承，避免未处理的 error 事件导致崩溃
- *     - 日志流写入添加错误处理
- *     - 文件读取操作添加 try-catch
  *   - 2026-02-07 kongzhiquan: v1.1.0 优化日志输出
- *     - stderr 中的正常日志（INFO/DEBUG）直接写入，不加前缀
- *     - 只有真正的错误（ERROR/WARNING/Traceback 等）才加 [STDERR] 前缀
  *   - 2026-02-07 kongzhiquan: v1.0.0 初始版本
  */
 
-import { spawn, ChildProcess } from 'child_process'
+import { spawn, ChildProcess, execFileSync } from "child_process"
 import {
   createWriteStream,
   existsSync,
@@ -65,6 +56,33 @@ export interface TrainingProgress {
   currentEpoch: number
   totalEpochs: number
   estimatedRemainingSeconds: number | null
+  epochsPerHour?: number | null
+  latestMetrics?: Record<string, number>
+}
+
+export interface RuntimeStats {
+  sampledAt: string
+  uptimeSeconds: number
+  cpuPercent: number | null
+  memoryRssMB: number | null
+  ioReadMB: number | null
+  ioWriteMB: number | null
+  gpu?: Array<{
+    id: number
+    utilizationPct: number | null
+    memoryUsedMB: number | null
+    memoryTotalMB: number | null
+    temperatureC: number | null
+    powerW: number | null
+  }>
+}
+
+export interface TrainingNotification {
+  id: string
+  type: 'training_start' | 'training_error' | 'process_exit'
+  timestamp: string
+  processId: string
+  payload?: Record<string, unknown>
 }
 
 export interface TrainingProcessInfo {
@@ -86,11 +104,14 @@ export interface TrainingProcessInfo {
     logDir?: string
     configPath?: string
     workspaceDir?: string
+    deviceIds?: number[]
   }
   // 错误摘要（失败时填充）
   errorSummary?: ErrorSummary
   // 训练进度（运行时填充）
   progress?: TrainingProgress
+  // 运行时资源监控（运行中更新）
+  runtimeStats?: RuntimeStats
 }
 
 interface ManagedProcess {
@@ -122,44 +143,25 @@ interface ManagedProcess {
   // 日志滚动锁
   rotatingLog: boolean
   rotatingErrorLog: boolean
+  runtimeStats: RuntimeStats | null
+  runtimeSampleTimer: ReturnType<typeof setInterval> | null
+  notifications: TrainingNotification[]
 }
 
 const RING_BUFFER_SIZE = 100
-const MAX_LOG_BYTES = Number(process.env.TRAIN_LOG_MAX_BYTES ?? 200 * 1024 * 1024)
+const MAX_LOG_BYTES = Number(process.env.TRAIN_LOG_MAX_BYTES ?? 50 * 1024 * 1024)
 const MAX_LOG_ROTATIONS = Number(process.env.TRAIN_LOG_MAX_ROTATIONS ?? 5)
+/** tail 模式最多从文件尾部读取的字节数（避免 OOM） */
+const TAIL_READ_BYTES = 512 * 1024 // 512KB
+/** 内存中保留的最大已完成进程数 */
+const MAX_COMPLETED_PROCESSES = 50
+const MAX_NOTIFICATION_QUEUE = Number(process.env.TRAIN_NOTIFICATION_QUEUE_SIZE ?? 50)
+const RUNTIME_SAMPLE_INTERVAL_MS = Number(process.env.TRAIN_RUNTIME_SAMPLE_INTERVAL_MS ?? 5000)
+const PROCESS_STATS_TIMEOUT_MS = Number(process.env.TRAIN_PROCESS_STATS_TIMEOUT_MS ?? 2000)
 
 class TrainingProcessManager {
   private processes: Map<string, ManagedProcess> = new Map()
   private isShuttingDown = false
-
-  // 用于判断 stderr 内容是否为真正的错误
-  private static readonly ERROR_PATTERNS = [
-    /\bERROR\b/i,
-    /\bWARNING\b/i,
-    /\bWARN\b/i,
-    /\bCRITICAL\b/i,
-    /\bFATAL\b/i,
-    /\bException\b/,
-    /\bError\b/,
-    /\bTraceback\b/,
-    /\bFailed\b/i,
-    /CUDA out of memory/i,
-    /RuntimeError/,
-    /ValueError/,
-    /TypeError/,
-    /KeyError/,
-    /IndexError/,
-    /FileNotFoundError/,
-    /ModuleNotFoundError/,
-    /ImportError/,
-    /AssertionError/,
-    /AttributeError/,
-    /NameError/,
-    /ZeroDivisionError/,
-    /MemoryError/,
-    /OSError/,
-    /IOError/,
-  ]
 
   // 失败分类模式
   private static readonly FAILURE_PATTERNS: Array<{
@@ -173,9 +175,29 @@ class TrainingProcessManager {
       suggestion: '启用 use_amp=true，减小 batch_size，或设置 patch_size',
     },
     {
+      pattern: /EADDRINUSE|address already in use|server socket has failed to listen/i,
+      type: 'DDP_PORT_IN_USE',
+      suggestion: 'DDP 端口被占用，请指定 master_port 或结束占用端口的训练进程',
+    },
+    {
+      pattern: /Default process group has not been initialized|init_process_group/i,
+      type: 'DDP_NOT_INITIALIZED',
+      suggestion: '未初始化分布式进程组：单卡请关闭 distribute，或使用 torchrun 启动 DDP',
+    },
+    {
       pattern: /ChildFailedError|elastic.*multiprocessing.*errors/i,
       type: 'DDP_CHILD_FAILED',
       suggestion: '某个 GPU rank 崩溃导致 DDP 训练中止，查看 stderr 获取具体 rank 和错误信息',
+    },
+    {
+      pattern: /cuFFT|cufft/i,
+      type: 'FFT_ERROR',
+      suggestion: 'FFT/频域报错：建议关闭 AMP，或调整 patch_size/输入尺寸为 2 的幂',
+    },
+    {
+      pattern: /\bNaN\b|\bnan\b/i,
+      type: 'NUMERICAL_NAN',
+      suggestion: '出现 NaN：建议降低学习率、关闭 AMP、检查归一化与数据异常值',
     },
     {
       pattern: /NCCL.*timeout|NCCL.*error/i,
@@ -208,13 +230,6 @@ class TrainingProcessManager {
       suggestion: '数据类型不匹配',
     },
   ]
-
-  /**
-   * 判断文本是否包含错误信息
-   */
-  private isErrorContent(text: string): boolean {
-    return TrainingProcessManager.ERROR_PATTERNS.some((pattern) => pattern.test(text))
-  }
 
   /**
    * 安全写入日志流
@@ -270,7 +285,9 @@ class TrainingProcessManager {
       } else {
         managed.errorLogStream = newStream
       }
-      this.safeWrite(newStream, `\n[Log rotated at ${new Date().toISOString()}]\n`)
+      this.safeWrite(newStream, `
+[Log rotated at ${new Date().toISOString()}]
+`)
     } catch (err) {
       console.error(`[TrainingProcessManager] Failed to rotate ${kind} log:`, err)
     } finally {
@@ -340,11 +357,94 @@ class TrainingProcessManager {
     }
   }
 
+
+  private createNotification(
+    managed: ManagedProcess,
+    type: TrainingNotification['type'],
+    payload?: Record<string, unknown>,
+  ): TrainingNotification {
+    return {
+      id: `notify-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      type,
+      timestamp: new Date().toISOString(),
+      processId: managed.info.id,
+      payload,
+    }
+  }
+
+  private pushNotification(managed: ManagedProcess, notification: TrainingNotification): void {
+    managed.notifications.push(notification)
+    if (managed.notifications.length > MAX_NOTIFICATION_QUEUE) {
+      managed.notifications.splice(0, managed.notifications.length - MAX_NOTIFICATION_QUEUE)
+    }
+  }
+
+  /**
+   * 统一的长轮询方法：等待进程状态变化或通知事件
+   * @param mode 'status' 等待状态变化，'notification' 等待通知事件
+   */
+  async waitForChange(
+    id: string,
+    opts: { mode?: 'status' | 'notification'; timeoutMs?: number; pollIntervalMs?: number } = {},
+  ): Promise<{
+    processInfo?: TrainingProcessInfo
+    notification?: TrainingNotification
+    processStatus: string
+    found: boolean
+  }> {
+    const { mode = 'status', timeoutMs = 120000, pollIntervalMs = 1000 } = opts
+    const start = Date.now()
+    const initial = this.getProcess(id)
+    if (!initial) return { found: false, processStatus: 'unknown' }
+
+    // 已结束的进程不会再变
+    if (initial.status !== 'running' && mode === 'status') {
+      return { found: true, processInfo: initial, processStatus: initial.status }
+    }
+
+    const initialStatus = initial.status
+
+    while (Date.now() - start < timeoutMs) {
+      const managed = this.processes.get(id)
+      if (!managed) return { found: false, processStatus: 'unknown' }
+
+      // notification 模式：检查通知队列
+      if (mode === 'notification' && managed.notifications.length > 0) {
+        const notification = managed.notifications.shift()
+        if (notification) {
+          return {
+            found: true,
+            notification,
+            processInfo: managed.info,
+            processStatus: managed.info.status,
+          }
+        }
+      }
+
+      // status 模式：检查状态变化
+      if (mode === 'status' && managed.info.status !== initialStatus) {
+        const info = this.getProcess(id)
+        return { found: true, processInfo: info, processStatus: info?.status ?? 'unknown' }
+      }
+
+      // 进程已退出且 notification 模式无新通知
+      if (mode === 'notification' && managed.info.status !== 'running') {
+        return { found: false, processInfo: managed.info, processStatus: managed.info.status }
+      }
+
+      await new Promise((r) => setTimeout(r, pollIntervalMs))
+    }
+
+    // 超时
+    const final = this.getProcess(id)
+    return { found: false, processInfo: final, processStatus: final?.status ?? 'timeout' }
+  }
+
   /**
    * 从 managed process 计算训练进度
    */
   private computeProgress(managed: ManagedProcess): TrainingProgress | undefined {
-    if (!managed.lastEpochInfo || !managed.trainingMeta) {
+    if (!managed.lastEpochInfo || !managed.trainingMeta || managed.trainingMeta.totalEpochs <= 0) {
       return undefined
     }
     const current = managed.lastEpochInfo.epoch
@@ -354,12 +454,116 @@ class TrainingProcessManager {
     const elapsed = epochTime - startTime
     const avgPerEpoch = current > 0 ? elapsed / current : 0
     const remaining = avgPerEpoch * (total - current)
+    const estimatedRemainingSeconds = current > 0 ? Math.round(remaining / 1000) : null
+    const epochsPerHour = avgPerEpoch > 0 ? Math.round(3600000 / avgPerEpoch) : null
     return {
       currentEpoch: current,
       totalEpochs: total,
-      estimatedRemainingSeconds: current > 0 ? Math.round(remaining / 1000) : null,
+      estimatedRemainingSeconds,
+      epochsPerHour,
+      latestMetrics: managed.lastEpochInfo.metrics ?? {},
     }
   }
+
+  private sampleRuntimeStats(managed: ManagedProcess): void {
+    const now = Date.now()
+
+    const stats: RuntimeStats = {
+      sampledAt: new Date(now).toISOString(),
+      uptimeSeconds: Math.round((now - managed.info.startTime) / 1000),
+      cpuPercent: null,
+      memoryRssMB: null,
+      ioReadMB: null,
+      ioWriteMB: null,
+    }
+
+    const pid = managed.info.pid
+    if (pid) {
+      try {
+        const output = execFileSync(
+          'ps',
+          ['-p', String(pid), '-o', '%cpu,%mem,rss'],
+          { encoding: 'utf-8', timeout: PROCESS_STATS_TIMEOUT_MS },
+        ).trim()
+        const lines = output.split(/\r?\n/)
+        if (lines.length >= 2) {
+          const parts = lines[1].trim().split(/\s+/)
+          if (parts.length >= 3) {
+            const cpu = Number(parts[0])
+            const rssKb = Number(parts[2])
+            stats.cpuPercent = Number.isFinite(cpu) ? cpu : null
+            stats.memoryRssMB = Number.isFinite(rssKb) ? Math.round((rssKb / 1024) * 10) / 10 : null
+          }
+        }
+      } catch {
+        // ignore ps failures
+      }
+
+      try {
+        const ioText = readFileSync(`/proc/${pid}/io`, 'utf-8')
+        const readMatch = ioText.match(/read_bytes:\s*(\d+)/)
+        const writeMatch = ioText.match(/write_bytes:\s*(\d+)/)
+        if (readMatch) {
+          const readBytes = Number(readMatch[1])
+          if (Number.isFinite(readBytes)) {
+            stats.ioReadMB = Math.round((readBytes / 1024 / 1024) * 10) / 10
+          }
+        }
+        if (writeMatch) {
+          const writeBytes = Number(writeMatch[1])
+          if (Number.isFinite(writeBytes)) {
+            stats.ioWriteMB = Math.round((writeBytes / 1024 / 1024) * 10) / 10
+          }
+        }
+      } catch {
+        // ignore non-linux or permission errors
+      }
+    }
+
+    try {
+      const output = execFileSync(
+        'nvidia-smi',
+        [
+          '--query-gpu=index,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw',
+          '--format=csv,noheader,nounits',
+        ],
+        { encoding: 'utf-8', timeout: PROCESS_STATS_TIMEOUT_MS },
+      ).trim()
+      if (output) {
+        const deviceSet = managed.info.metadata?.deviceIds
+          ? new Set(managed.info.metadata.deviceIds)
+          : null
+        const gpuStats: NonNullable<RuntimeStats['gpu']> = []
+        for (const line of output.split(/\r?\n/)) {
+          const parts = line.split(',').map((p) => p.trim())
+          if (parts.length < 6) continue
+          const id = Number(parts[0])
+          if (deviceSet && !deviceSet.has(id)) continue
+          const toNum = (val: string) => {
+            const num = Number(val)
+            return Number.isFinite(num) ? num : null
+          }
+          gpuStats.push({
+            id,
+            utilizationPct: toNum(parts[1]),
+            memoryUsedMB: toNum(parts[2]),
+            memoryTotalMB: toNum(parts[3]),
+            temperatureC: toNum(parts[4]),
+            powerW: toNum(parts[5]),
+          })
+        }
+        if (gpuStats.length > 0) {
+          stats.gpu = gpuStats
+        }
+      }
+    } catch {
+      // nvidia-smi not available or failed
+    }
+
+    managed.runtimeStats = stats
+    managed.info.runtimeStats = stats
+  }
+
 
   /**
    * 解析缓冲区中的 __event__ 标记
@@ -390,13 +594,21 @@ class TrainingProcessManager {
       try {
         const event = JSON.parse(jsonStr) as Record<string, unknown>
         if (typeof event.event === 'string') {
-          managed.receivedEvents.add(event.event)
+          const eventType = event.event
+          const isFirst = !managed.receivedEvents.has(eventType)
+          managed.receivedEvents.add(eventType)
 
-          if (event.event === 'training_error') {
+          if (eventType === 'training_error') {
             managed.lastTrainingError = event
+            if (isFirst) {
+              this.pushNotification(
+                managed,
+                this.createNotification(managed, 'training_error', event),
+              )
+            }
           }
 
-          if (event.event === 'epoch_train' || event.event === 'epoch_valid') {
+          if (eventType === 'epoch_train' || eventType === 'epoch_valid') {
             managed.lastEpochInfo = {
               epoch: event.epoch as number,
               timestamp: event.timestamp as string,
@@ -404,10 +616,16 @@ class TrainingProcessManager {
             }
           }
 
-          if (event.event === 'training_start') {
+          if (eventType === 'training_start') {
             managed.trainingMeta = {
               totalEpochs: event.total_epochs as number,
               startTimestamp: event.timestamp as string,
+            }
+            if (isFirst) {
+              this.pushNotification(
+                managed,
+                this.createNotification(managed, 'training_start', event),
+              )
             }
           }
         }
@@ -515,7 +733,17 @@ Start Time: ${new Date().toISOString()}
       trainingMeta: null,
       rotatingLog: false,
       rotatingErrorLog: false,
+      runtimeStats: null,
+      runtimeSampleTimer: null,
+      notifications: [],
     }
+
+    // 启动独立的运行时资源采样定时器
+    managed.runtimeSampleTimer = setInterval(() => {
+      if (managed.info.status === 'running') {
+        this.sampleRuntimeStats(managed)
+      }
+    }, RUNTIME_SAMPLE_INTERVAL_MS)
 
     // 管道 stdout 到日志文件 + 解析事件
     if (childProcess.stdout) {
@@ -529,16 +757,10 @@ Start Time: ${new Date().toISOString()}
     }
 
     // 管道 stderr 到错误日志文件（同时也写入主日志）+ 环形缓冲区 + 事件解析
-    // 只有真正的错误才加 [STDERR] 前缀
     if (childProcess.stderr) {
       childProcess.stderr.on('data', (data: Buffer) => {
         const text = data.toString()
-        // 判断是否为真正的错误内容
-        if (this.isErrorContent(text)) {
-          this.writeLog(managed, 'log', `[STDERR] ${text}`)
-        } else {
-          this.writeLog(managed, 'log', text)
-        }
+        this.writeLog(managed, 'log', text)
         this.writeLog(managed, 'error', text)
 
         // 维护环形缓冲区
@@ -562,6 +784,12 @@ Start Time: ${new Date().toISOString()}
 
     // 监听进程退出
     childProcess.on('exit', (code, signal) => {
+      // 清除运行时采样定时器
+      if (managed.runtimeSampleTimer) {
+        clearInterval(managed.runtimeSampleTimer)
+        managed.runtimeSampleTimer = null
+      }
+
       managed.info.endTime = Date.now()
       managed.info.exitCode = code ?? undefined
 
@@ -575,6 +803,15 @@ Start Time: ${new Date().toISOString()}
         managed.info.errorSummary = this.classifyFailure(managed)
       }
 
+      this.pushNotification(
+        managed,
+        this.createNotification(managed, 'process_exit', {
+          status: managed.info.status,
+          exitCode: managed.info.exitCode,
+          errorSummary: managed.info.errorSummary ?? undefined,
+        }),
+      )
+
       // 写入结束信息
       const endFooter = `
 ================================================================================
@@ -586,6 +823,7 @@ Duration: ${((managed.info.endTime - managed.info.startTime) / 1000).toFixed(1)}
 ================================================================================
 `
       this.writeLog(managed, 'log', endFooter)
+      this.evictOldProcesses()
 
       // 关闭日志流
       logStream.end()
@@ -593,11 +831,27 @@ Duration: ${((managed.info.endTime - managed.info.startTime) / 1000).toFixed(1)}
     })
 
     childProcess.on('error', (err) => {
+      // 清除运行时采样定时器
+      if (managed.runtimeSampleTimer) {
+        clearInterval(managed.runtimeSampleTimer)
+        managed.runtimeSampleTimer = null
+      }
+
       managed.info.status = 'failed'
       managed.info.endTime = Date.now()
       managed.info.errorSummary = this.classifyFailure(managed)
+      this.pushNotification(
+        managed,
+        this.createNotification(managed, 'process_exit', {
+          status: managed.info.status,
+          exitCode: managed.info.exitCode,
+          errorSummary: managed.info.errorSummary ?? undefined,
+          errorMessage: err.message,
+        }),
+      )
       this.writeLog(managed, 'error', `Process error: ${err.message}\n`)
       this.writeLog(managed, 'log', `[ERROR] Process error: ${err.message}\n`)
+      this.evictOldProcesses()
       logStream.end()
       errorLogStream.end()
     })
@@ -620,6 +874,7 @@ Duration: ${((managed.info.endTime - managed.info.startTime) / 1000).toFixed(1)}
     // 动态计算进度
     if (managed.info.status === 'running') {
       managed.info.progress = this.computeProgress(managed)
+      managed.info.runtimeStats = managed.runtimeStats ?? undefined
     }
 
     return managed.info
@@ -632,6 +887,7 @@ Duration: ${((managed.info.endTime - managed.info.startTime) / 1000).toFixed(1)}
     return Array.from(this.processes.values()).map((m) => {
       if (m.info.status === 'running') {
         m.info.progress = this.computeProgress(m)
+        m.info.runtimeStats = m.runtimeStats ?? undefined
       }
       return m.info
     })
@@ -645,13 +901,16 @@ Duration: ${((managed.info.endTime - managed.info.startTime) / 1000).toFixed(1)}
   }
 
   /**
-   * 读取进程日志（支持增量读取）
+   * 读取进程日志
+   * - tail 模式：从文件尾部读取最后 N 行
+   * - offset 模式：从指定字节偏移量开始增量读取
+   * - 必须指定 tail 或 offset 之一
    */
   readLogs(
     id: string,
-    options?: {
-      tail?: number // 只读取最后 N 行
-      offset?: number // 从字节偏移量开始读取
+    options: {
+      tail?: number
+      offset?: number
     },
   ): { content: string; size: number; offset: number } | undefined {
     const managed = this.processes.get(id)
@@ -664,32 +923,40 @@ Duration: ${((managed.info.endTime - managed.info.startTime) / 1000).toFixed(1)}
         return { content: '', size: 0, offset: 0 }
       }
 
-      const stat = statSync(logFile)
-      const size = stat.size
+      const size = statSync(logFile).size
 
-      if (options?.tail) {
-        // 读取最后 N 行
-        const content = readFileSync(logFile, 'utf-8')
-        const lines = content.split('\n')
-        const tailLines = lines.slice(-options.tail).join('\n')
-        return { content: tailLines, size, offset: size }
-      }
-
-      if (options?.offset !== undefined && options.offset < size) {
-        // 增量读取
-        const buffer = Buffer.alloc(size - options.offset)
+      if (options.tail) {
+        const readBytes = Math.min(size, TAIL_READ_BYTES)
+        const tailOffset = Math.max(0, size - readBytes)
+        const buffer = Buffer.alloc(readBytes)
         const fd = openSync(logFile, 'r')
         try {
-          readSync(fd, buffer, 0, buffer.length, options.offset)
+          readSync(fd, buffer, 0, readBytes, tailOffset)
+        } finally {
+          closeSync(fd)
+        }
+        const lines = buffer.toString('utf-8').split('\n')
+        if (tailOffset > 0) lines.shift() // 丢弃可能不完整的首行
+        return { content: lines.slice(-options.tail).join('\n'), size, offset: size }
+      }
+
+      if (options.offset !== undefined) {
+        const safeOffset = Math.max(0, options.offset)
+        if (safeOffset >= size) {
+          return { content: '', size, offset: size }
+        }
+        const readBytes = size - safeOffset
+        const buffer = Buffer.alloc(readBytes)
+        const fd = openSync(logFile, 'r')
+        try {
+          readSync(fd, buffer, 0, readBytes, safeOffset)
         } finally {
           closeSync(fd)
         }
         return { content: buffer.toString('utf-8'), size, offset: size }
       }
 
-      // 读取全部
-      const content = readFileSync(logFile, 'utf-8')
-      return { content, size, offset: size }
+      return { content: '', size, offset: size }
     } catch (err) {
       console.error(`[TrainingProcessManager] Failed to read logs for ${id}:`, err)
       return { content: `Error reading logs: ${(err as Error).message}`, size: 0, offset: 0 }
@@ -715,29 +982,6 @@ Duration: ${((managed.info.endTime - managed.info.startTime) / 1000).toFixed(1)}
       console.error(`[TrainingProcessManager] Failed to kill process ${id}:`, err)
       return false
     }
-  }
-
-  /**
-   * 等待进程状态变化（长轮询）
-   */
-  async waitForStatusChange(
-    id: string,
-    opts: { timeoutMs?: number; pollIntervalMs?: number } = {},
-  ): Promise<TrainingProcessInfo | undefined> {
-    const { timeoutMs = 60000, pollIntervalMs = 2000 } = opts
-    const start = Date.now()
-    const initial = this.getProcess(id)
-    if (!initial) return undefined
-    // 如果进程已结束，直接返回（不会再变）
-    if (initial.status !== 'running') return initial
-    const initialStatus = initial.status
-    while (Date.now() - start < timeoutMs) {
-      const current = this.getProcess(id)
-      if (!current) return undefined
-      if (current.status !== initialStatus) return current
-      await new Promise((r) => setTimeout(r, pollIntervalMs))
-    }
-    return this.getProcess(id)
   }
 
   /**
@@ -769,17 +1013,27 @@ Duration: ${((managed.info.endTime - managed.info.startTime) / 1000).toFixed(1)}
   }
 
   /**
-   * 清理已完成的进程记录（保留日志文件）
+   * 自动淘汰超量的已完成进程（保留最近 MAX_COMPLETED_PROCESSES 条）
+   * 在进程退出时自动调用，避免 Map 无限增长
    */
-  cleanupCompleted(): number {
-    let count = 0
+  private evictOldProcesses(): void {
+    const completed: Array<{ id: string; endTime: number }> = []
     for (const [id, managed] of this.processes) {
       if (managed.info.status !== 'running') {
-        this.processes.delete(id)
-        count++
+        completed.push({ id, endTime: managed.info.endTime ?? 0 })
       }
     }
-    return count
+    if (completed.length <= MAX_COMPLETED_PROCESSES) return
+
+    // 按结束时间降序排列，淘汰最旧的
+    completed.sort((a, b) => b.endTime - a.endTime)
+    const toRemove = completed.slice(MAX_COMPLETED_PROCESSES)
+    for (const item of toRemove) {
+      this.processes.delete(item.id)
+    }
+    if (toRemove.length > 0) {
+      console.log(`[TrainingProcessManager] Evicted ${toRemove.length} old completed process(es)`)
+    }
   }
 
   /**
