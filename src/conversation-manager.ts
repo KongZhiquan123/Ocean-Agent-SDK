@@ -39,11 +39,9 @@ const AGENT_ID_PATTERN = /^agt-[a-zA-Z0-9_-]+$/
 
 class ConversationManager {
   private storePath: string
-  private resolvedStorePath: string
 
   constructor(config: ConversationManagerConfig = {}) {
-    this.storePath = config.storePath || './.kode'
-    this.resolvedStorePath = path.resolve(this.storePath)
+    this.storePath = path.resolve(config.storePath || './.kode')
     console.log('[ConversationManager] 初始化完成', {
       storePath: this.storePath,
     })
@@ -56,8 +54,8 @@ class ConversationManager {
     if (!agentId || typeof agentId !== 'string') return false
     if (!AGENT_ID_PATTERN.test(agentId)) return false
     // 防御性检查：resolve 后路径必须在 storePath 内
-    const resolved = path.resolve(this.resolvedStorePath, agentId)
-    return resolved.startsWith(this.resolvedStorePath + path.sep)
+    const resolved = path.resolve(this.storePath, agentId)
+    return resolved.startsWith(this.storePath + path.sep)
   }
 
   /**

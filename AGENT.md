@@ -173,7 +173,7 @@ To continue a conversation, include the `agentId` from the previous response's `
 1. Define tool in `src/config.ts` using `defineTool()` from KODE SDK
 2. Register in `createToolRegistry()` function
 3. Add tool name to appropriate template in `createTemplateRegistry()`
-4. **Critical**: Use `ctx.sandbox` for all file operations and command execution to ensure proper isolation
+4. **Critical**: Use `ctx.sandbox` for all file operations and command execution to ensure proper isolation. And for the input path, always resolve it relative to `ctx.sandbox.workDir` to prevent path traversal issues.
 
 Example:
 ```typescript

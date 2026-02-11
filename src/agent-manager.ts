@@ -8,8 +8,6 @@
  * @version 1.6.0
  *
  * @changelog
- *   - 2026-02-11 Leizheng: v1.6.0 sandbox allowPaths 添加 scripts 目录
- *     - Agent 可使用 fs_read/fs_write 访问 scripts/ 下的训练框架代码
  *   - 2026-02-10 kongzhiquan: v1.5.0 新增 transformToolResult 集中格式转换器
  *     - 对 ocean_preprocess_full 工具结果做裁剪，只保留当前步骤进度信息
  *     - 未注册的工具名原样透传
@@ -69,7 +67,7 @@ export async function createAgent(config: AgentConfig): Promise<Agent> {
   const sandboxConfig = {
     kind: 'local' as const,
     workDir: config.workingDir,
-    allowPaths: ['/data', `${process.cwd()}/.skills`, `${process.cwd()}/scripts`], // 允许访问数据目录、技能目录和脚本目录
+    allowPaths: ['/data', `${process.cwd()}/.skills`], // 允许访问数据目录、技能目录
   }
 
   const agent = await Agent.create(
@@ -181,9 +179,7 @@ function isAllowedPathToken(token: string): boolean {
   if (!trimmed || trimmed.startsWith('-')) return true
   if (trimmed.includes('..')) return false
   if (trimmed.startsWith('~')) return false
-  if (trimmed.startsWith('/')) {
-    return trimmed.startsWith('/data') || trimmed.startsWith(process.cwd())
-  }
+  if (trimmed.startsWith('/')) return trimmed.startsWith('/data')
   return true
 }
 

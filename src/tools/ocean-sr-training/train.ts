@@ -712,9 +712,9 @@ export const oceanSrTrainTool = defineTool({
     const trainingDir = path.resolve(process.cwd(), 'scripts/ocean_SR_training_masked')
     args.log_dir = args.log_dir ? path.resolve(ctx.sandbox.workDir, args.log_dir) : undefined
     args.dataset_root = args.dataset_root ? path.resolve(ctx.sandbox.workDir, args.dataset_root) : undefined
+    args.ckpt_path = args.ckpt_path ? path.resolve(ctx.sandbox.workDir, args.ckpt_path) : undefined
 
     const userSpecifiedUseAmp = Object.prototype.hasOwnProperty.call(args, 'use_amp')
-    const fftSensitive = isFftSensitiveModel(args.model_name as string | undefined)
     const ampDefaultOff = isAmpDefaultOffModel(args.model_name as string | undefined)
     let autoDisabledAmp = false
 

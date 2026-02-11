@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """
-prepare_workspace.py
-
-准备训练工作空间：只复制与所选模型相关的代码文件。
-每次调用会清理 models/ trainers/ datasets/ forecastors/，
-确保切换模型时旧代码被替换为新模型的代码。
+@filename prepare_workspace.py
+@author kongzhiquan
+@date 2026-02-11
+@description 准备训练工作空间：只复制与所选模型相关的代码文件。
 
 用法:
     python prepare_workspace.py \
@@ -34,8 +33,17 @@ def strip_header_docstring(content):
     return re.sub(pattern, r'\1', content, count=1)
 
 
+def _is_up_to_date(src, dst):
+    """判断目标文件是否已存在且不比源文件旧"""
+    if not os.path.exists(dst):
+        return False
+    return os.path.getmtime(dst) >= os.path.getmtime(src)
+
+
 def copy_file(src, dst):
-    """复制文件，对 .py 文件去除头部 docstring"""
+    """复制文件，跳过已存在且未过期的文件。对 .py 文件去除头部 docstring。"""
+    if _is_up_to_date(src, dst):
+        return False  # 跳过，无需复制
     if src.endswith('.py'):
         with open(src, 'r', encoding='utf-8') as f:
             content = f.read()
@@ -45,13 +53,29 @@ def copy_file(src, dst):
         shutil.copystat(src, dst)
     else:
         shutil.copy2(src, dst)
+    return True  # 实际执行了复制
+
+
+def write_if_changed(path, content):
+    """仅在内容有变化时写入文件"""
+    if os.path.exists(path):
+        with open(path, 'r', encoding='utf-8') as f:
+            if f.read() == content:
+                return False
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write(content)
+    return True
 
 
 def copy_dir(src, dst):
-    """复制目录，已存在则先删除，对 .py 文件去除头部 docstring"""
-    if os.path.exists(dst):
-        shutil.rmtree(dst)
-    shutil.copytree(src, dst, copy_function=copy_file)
+    """增量复制目录，仅复制新增或更新的文件，保留已有且未变化的文件"""
+    for dirpath, dirnames, filenames in os.walk(src):
+        rel = os.path.relpath(dirpath, src)
+        dst_dir = os.path.join(dst, rel)
+        os.makedirs(dst_dir, exist_ok=True)
+        for fname in filenames:
+            copy_file(os.path.join(dirpath, fname),
+                      os.path.join(dst_dir, fname))
 
 
 def main():
@@ -101,6 +125,7 @@ def main():
     core_files = [
         'main.py', 'main_ddp.py', 'config.py',
         'generate_config.py', 'generate_training_report.py',
+        'generate_training_plots.py',
         'validate_dataset.py', 'check_gpu.py', 'list_models.py',
         'estimate_memory.py', 'check_output_shape.py',
     ]
@@ -113,7 +138,7 @@ def main():
     # ================================================================
     # 2. utils/ 和 template_configs/（完整复制，体积小且通用）
     # ================================================================
-    for d in ['utils', 'template_configs']:
+    for d in ['utils', 'template_configs', 'training_plot_lib']:
         s = os.path.join(src, d)
         t = os.path.join(dst, d)
         if os.path.isdir(s):
@@ -127,9 +152,7 @@ def main():
     is_diffusion = isinstance(model_entry, dict)
 
     models_dst = os.path.join(dst, 'models')
-    if os.path.exists(models_dst):
-        shutil.rmtree(models_dst)
-    os.makedirs(models_dst)
+    os.makedirs(models_dst, exist_ok=True)
 
     if is_resshift:
         copy_dir(os.path.join(src, 'models', 'resshift'),
@@ -182,8 +205,7 @@ def main():
             f'_ddpm_dict = {{}}\n'
         )
 
-    with open(os.path.join(models_dst, '__init__.py'), 'w') as f:
-        f.write(init_code)
+    write_if_changed(os.path.join(models_dst, '__init__.py'), init_code)
     copied.append('models/__init__.py (generated)')
 
     # ================================================================
@@ -195,9 +217,7 @@ def main():
     trainer_basename = os.path.basename(trainer_file)
 
     trainers_dst = os.path.join(dst, 'trainers')
-    if os.path.exists(trainers_dst):
-        shutil.rmtree(trainers_dst)
-    os.makedirs(trainers_dst)
+    os.makedirs(trainers_dst, exist_ok=True)
 
     # base.py 始终需要（所有 trainer 都继承它）
     copy_file(os.path.join(src, 'trainers', 'base.py'),
@@ -219,8 +239,8 @@ def main():
         '}',
         '',
     ]
-    with open(os.path.join(trainers_dst, '__init__.py'), 'w') as f:
-        f.write('\n'.join(trainer_init_lines))
+    write_if_changed(os.path.join(trainers_dst, '__init__.py'),
+                      '\n'.join(trainer_init_lines))
     copied.append('trainers/__init__.py (generated)')
 
     # ================================================================
@@ -239,9 +259,7 @@ def main():
     }
 
     forecastors_dst = os.path.join(dst, 'forecastors')
-    if os.path.exists(forecastors_dst):
-        shutil.rmtree(forecastors_dst)
-    os.makedirs(forecastors_dst)
+    os.makedirs(forecastors_dst, exist_ok=True)
 
     copy_file(os.path.join(src, 'forecastors', 'base.py'),
               os.path.join(forecastors_dst, 'base.py'))
@@ -258,17 +276,15 @@ def main():
                 fc_init_lines.append(
                     f'from .{fc_module} import {_fc_cls_map[fc_module]}')
 
-    with open(os.path.join(forecastors_dst, '__init__.py'), 'w') as f:
-        f.write('\n'.join(fc_init_lines) + '\n')
+    write_if_changed(os.path.join(forecastors_dst, '__init__.py'),
+                      '\n'.join(fc_init_lines) + '\n')
     copied.append('forecastors/__init__.py (generated)')
 
     # ================================================================
     # 6. datasets/：只复制选中的数据集
     # ================================================================
     datasets_dst = os.path.join(dst, 'datasets')
-    if os.path.exists(datasets_dst):
-        shutil.rmtree(datasets_dst)
-    os.makedirs(datasets_dst)
+    os.makedirs(datasets_dst, exist_ok=True)
 
     if data_name in _dataset_dict:
         ds_cls = _dataset_dict[data_name]
@@ -289,8 +305,7 @@ def main():
     else:
         ds_init = '_dataset_dict = {}\n'
 
-    with open(os.path.join(datasets_dst, '__init__.py'), 'w') as f:
-        f.write(ds_init)
+    write_if_changed(os.path.join(datasets_dst, '__init__.py'), ds_init)
     copied.append('datasets/__init__.py (generated)')
 
     # ================================================================
