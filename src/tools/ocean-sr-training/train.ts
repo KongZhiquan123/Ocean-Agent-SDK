@@ -7,9 +7,13 @@
  * @author Leizheng
  * @contributors kongzhiquan
  * @date 2026-02-09
- * @version 4.3.0
+ * @version 4.4.0
  *
  * @changelog
+ *   - 2026-02-11 Leizheng: v4.4.0 predict 快速通道
+ *     - mode 参数支持 "predict"，跳过训练工作流（OOM/shape/FFT 检查）
+ *     - predict 分支直接准备工作空间 → 生成配置 → 启动 → 等待 predict_start
+ *     - 启动事件根据 mode 选择 predict_start 或 training_start
  *   - 2026-02-11 Leizheng: v4.3.0 ResShift divisor 修正 + TOKEN_INVALID GPU 信息
  *     - ResShift divisor 8→64（Swin window_size=8）
  *     - TOKEN_INVALID 状态下也获取 GPU 信息供重新确认
@@ -509,6 +513,7 @@ export const oceanSrTrainTool = defineTool({
 
 **训练模式 (mode=train)**：执行完整训练流程，包含验证和早停
 **测试模式 (mode=test)**：加载最佳模型，在测试集上评估
+**预测模式 (mode=predict)**：加载模型对测试集执行全图 SR 推理，输出 NPY 文件（跳过训练工作流）
 
 **GPU 模式**：
 - 单卡：device_ids 长度为 1
@@ -544,7 +549,7 @@ export const oceanSrTrainTool = defineTool({
     },
     mode: {
       type: 'string',
-      description: '运行模式: "train" 或 "test"',
+      description: '运行模式: "train", "test" 或 "predict"（predict 跳过训练工作流，直接推理）',
       required: false,
       default: 'train'
     },
@@ -854,6 +859,148 @@ export const oceanSrTrainTool = defineTool({
         status: 'error',
         error: '未指定训练日志输出目录 (log_dir)',
         suggestion: '请在参数中提供 log_dir'
+      }
+    }
+
+    // ===== predict 快速通道：跳过训练专属步骤（OOM/shape/FFT），直接准备 + 启动 =====
+    if (mode === 'predict') {
+      if (!dataset_root) {
+        return { status: 'error', error: '需要 dataset_root', suggestion: '请提供预处理数据根目录' }
+      }
+      if (!model_name) {
+        return { status: 'error', error: '需要 model_name', suggestion: '请提供模型名称' }
+      }
+
+      const normalizedDeviceIds = Array.isArray(device_ids) && device_ids.length > 0 ? device_ids : [0]
+
+      // 准备工作空间
+      const workspaceDir = path.resolve(log_dir, '_ocean_sr_code')
+      const prepareScript = path.join(trainingDir, 'prepare_workspace.py')
+      const prepareResult = await ctx.sandbox.exec(
+        `"${shellEscapeDouble(pythonPath)}" "${shellEscapeDouble(prepareScript)}" --source_dir "${shellEscapeDouble(trainingDir)}" --target_dir "${shellEscapeDouble(workspaceDir)}" --model_name "${shellEscapeDouble(model_name)}"`,
+        { timeoutMs: 60000 }
+      )
+      if (prepareResult.code !== 0) {
+        return {
+          status: 'error',
+          error: `工作空间准备失败: ${prepareResult.stderr}`,
+          suggestion: `请检查输出目录 ${log_dir} 是否存在且有写入权限`
+        }
+      }
+      const prepareInfo = JSON.parse(prepareResult.stdout)
+
+      // 生成配置（predict 最小参数集）
+      const generateScript = path.join(workspaceDir, 'generate_config.py')
+      const configParams: Record<string, unknown> = {
+        model_name, dataset_root, dyn_vars, scale, log_dir,
+        device: normalizedDeviceIds[0], device_ids: normalizedDeviceIds,
+        distribute: false, distribute_mode: 'single',
+        ckpt_path: ckpt_path || path.join(log_dir, 'best_model.pth'),
+        epochs: 1, batch_size: 1, eval_batch_size: 1,
+        use_amp: args.use_amp ?? false,
+        gradient_checkpointing: false,
+        patch_size: args.patch_size,
+        normalize: args.normalize, normalizer_type: args.normalizer_type,
+      }
+      const configPath = path.join(workspaceDir, `${model_name}_config.yaml`)
+      const paramsJson = JSON.stringify(configParams)
+      const genResult = await ctx.sandbox.exec(
+        `"${shellEscapeDouble(pythonPath)}" "${shellEscapeDouble(generateScript)}" --params '${shellSafeJson(paramsJson)}' --output "${shellEscapeDouble(configPath)}"`,
+        { timeoutMs: 60000 }
+      )
+      if (genResult.code !== 0) {
+        return {
+          status: 'error',
+          error: `配置生成失败: ${genResult.stderr}`,
+          suggestion: '请检查 dataset_root 路径是否正确，以及 model_name 是否在支持列表中'
+        }
+      }
+      const genInfo = JSON.parse(genResult.stdout)
+
+      // 构建命令（predict 始终单卡）
+      const cudaDevice = String(normalizedDeviceIds[0])
+      const mainPy = path.join(workspaceDir, 'main.py')
+      const cmdPath = pythonPath
+      const cmdArgs = [mainPy, '--mode', 'predict', '--config', configPath]
+      const cmdEnv = { CUDA_VISIBLE_DEVICES: cudaDevice }
+
+      // 启动后台进程
+      const processInfo = trainingProcessManager.startProcess({
+        cmd: cmdPath,
+        args: cmdArgs,
+        cwd: workspaceDir,
+        logDir: log_dir,
+        env: cmdEnv,
+        metadata: {
+          modelName: model_name,
+          datasetRoot: dataset_root,
+          logDir: log_dir,
+          configPath: genInfo.config_path,
+          workspaceDir: workspaceDir,
+          deviceIds: normalizedDeviceIds,
+          mode: 'predict',
+        },
+      })
+
+      // 等待 predict_start 事件
+      const STARTUP_TIMEOUT_MS = 300000
+      const startupResult = await trainingProcessManager.waitForEvent(
+        processInfo.id, 'predict_start', STARTUP_TIMEOUT_MS
+      )
+
+      if (startupResult.processStatus === 'failed' || startupResult.processStatus === 'killed') {
+        const failedInfo = trainingProcessManager.getProcess(processInfo.id)
+        return {
+          status: 'error',
+          error: '预测推理在启动阶段崩溃（数据加载/模型加载失败）',
+          process_id: processInfo.id,
+          error_summary: failedInfo?.errorSummary ?? null,
+          error_log_tail: trainingProcessManager.readLogs(processInfo.id, { tail: 50 })?.content,
+          suggestions: failedInfo?.errorSummary?.suggestions ?? [],
+        }
+      }
+
+      const predictionsDir = path.join(log_dir, 'predictions')
+      if (startupResult.found) {
+        return {
+          status: 'started',
+          message: '预测推理已启动。使用 ocean_sr_train_status 监控进度。',
+          process_id: processInfo.id,
+          pid: processInfo.pid,
+          mode: 'predict',
+          model: model_name,
+          config_path: genInfo.config_path,
+          log_dir,
+          log_file: processInfo.logFile,
+          predictions_dir: predictionsDir,
+          workspace_dir: workspaceDir,
+          workspace_info: prepareInfo,
+          next_steps: [
+            `调用 ocean_sr_train_status({ action: "wait", process_id: "${processInfo.id}", timeout: 300 }) 等待推理完成`,
+            `调用 ocean_sr_train_status({ process_id: "${processInfo.id}" }) 查看推理状态`,
+            `调用 ocean_sr_train_status({ action: "logs", process_id: "${processInfo.id}", tail: 50 }) 查看最新日志`,
+            `推理完成后调用 ocean_sr_visualize({ log_dir: "${log_dir}", mode: "predict" }) 生成可视化`,
+          ],
+        }
+      }
+
+      return {
+        status: 'started',
+        message: '预测进程已启动，仍在初始化中（可能数据量较大）。使用 ocean_sr_train_status 监控。',
+        process_id: processInfo.id,
+        pid: processInfo.pid,
+        mode: 'predict',
+        model: model_name,
+        config_path: genInfo.config_path,
+        log_dir,
+        log_file: processInfo.logFile,
+        predictions_dir: predictionsDir,
+        workspace_dir: workspaceDir,
+        workspace_info: prepareInfo,
+        next_steps: [
+          `调用 ocean_sr_train_status({ action: "wait", process_id: "${processInfo.id}", timeout: 300 }) 等待推理完成`,
+          `调用 ocean_sr_train_status({ process_id: "${processInfo.id}" }) 查看推理状态`,
+        ],
       }
     }
 

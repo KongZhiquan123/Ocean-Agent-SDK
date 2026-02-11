@@ -10,9 +10,12 @@
  * @author kongzhiquan
  * @contributors Leizheng
  * @date 2026-02-07
- * @version 2.0.0
+ * @version 2.1.0
  *
  * @changelog
+ *   - 2026-02-11 Leizheng: v2.1.0 Predict 模式适配
+ *     - buildStatusResponse() 操作提示根据 mode 区分训练/推理
+ *     - getNotificationMessage() 新增 predict_start / predict_end 消息
  *   - 2026-02-07 Leizheng: v2.0.0 训练错误实时反馈增强
  *     - 新增 action="wait" 长轮询模式，等待训练状态变化
  *     - 新增 timeout 参数（wait 模式超时秒数）
@@ -280,13 +283,15 @@ function buildStatusResponse(
   }
 
   // 操作提示
+  const isPredict = processInfo.metadata?.mode === 'predict'
+  const actionLabel = isPredict ? '推理' : '训练'
   response.actions =
     processInfo.status === 'running'
       ? [
           `查看日志: ocean_sr_train_status({ action: "logs", process_id: "${process_id}", tail: 50 })`,
           `等待完成: ocean_sr_train_status({ action: "wait", process_id: "${process_id}", timeout: 120 })`,
           `等待推送: ocean_sr_train_status({ action: "watch", process_id: "${process_id}", timeout: 300 })`,
-          `终止训练: ocean_sr_train_status({ action: "kill", process_id: "${process_id}" })`,
+          `终止${actionLabel}: ocean_sr_train_status({ action: "kill", process_id: "${process_id}" })`,
         ]
       : [
           `查看完整日志: ocean_sr_train_status({ action: "logs", process_id: "${process_id}", tail: 200 })`,
@@ -300,12 +305,16 @@ function getNotificationMessage(type?: string): string {
   switch (type) {
     case 'training_start':
       return '训练启动成功，已开始执行。'
+    case 'predict_start':
+      return '推理启动成功，已开始执行。'
     case 'training_error':
-      return '训练过程中捕获到错误事件。'
+      return '过程中捕获到错误事件。'
+    case 'predict_end':
+      return '推理已完成。'
     case 'process_exit':
-      return '训练进程已结束。'
+      return '进程已结束。'
     default:
-      return '收到训练关键事件。'
+      return '收到关键事件。'
   }
 }
 

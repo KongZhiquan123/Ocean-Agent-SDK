@@ -4,9 +4,13 @@ ResShift Trainer (masked version).
 @author Leizheng
 @contributors Leizheng
 @date 2026-02-06
-@version 4.0.0
+@version 4.1.0
 
 @changelog
+  - 2026-02-11 Leizheng: v4.1.0 修复 inference() 死代码
+    - 清除无效的 tt 变量（两处）、indices 变量、无效 self._unwrap() 调用
+    - model 改用 self._unwrap() 返回值，避免 DDP 包装传入 p_sample_loop
+    - 保留全步采样（p_sample 后验系数不支持跳步，需 SpacedDiffusion 才行）
   - 2026-02-07 Leizheng: v4.0.0 inference 自动对齐尺寸 + crop 回原尺寸
     - interpolate 到 model_divisor 对齐后的尺寸
     - 采样完成后 crop 回原始 y 尺寸
@@ -121,40 +125,16 @@ class ResshiftTrainer(BaseTrainer):
             aligned_h, aligned_w = orig_h, orig_w
         x = F.interpolate(x, size=(aligned_h, aligned_w), mode='bicubic', align_corners=False)
 
-        B, C, H, W = x.shape
+        model_kwargs = {'lq': x}
+        model = self._unwrap()
 
-        tt = torch.randint(
-                    0, self.base_diffusion.num_timesteps,
-                    size=(y.shape[0],),
-                    device=x.device,
-                    )
-
-        indices = np.linspace(
-                    0,
-                    self.base_diffusion.num_timesteps,
-                    self.base_diffusion.num_timesteps if self.base_diffusion.num_timesteps < 5 else 4,
-                    endpoint=False,
-                    dtype=np.int64,
-                    ).tolist()
-
-        if not (self.base_diffusion.num_timesteps-1) in indices:
-            indices.append(self.base_diffusion.num_timesteps-1)
-
-        im_lq = x
-
-        model_kwargs = {'lq':x,}
-
-        tt = torch.tensor(
-                        [self.base_diffusion.num_timesteps, ]*im_lq.shape[0],
-                        dtype=torch.int64,
-                        device= x.device
-                        )
-
-        self._unwrap()
-
+        # NOTE: ResShift p_sample() 的后验系数是按连续步 t→t-1 推导的，
+        # 不支持跳步采样。若要加速推理，应在 diffusion 创建时设置
+        # timestep_respacing 参数（通过 SpacedDiffusion 重算后验系数）。
+        # 当前配置 steps=15 已经很快，保持全步采样。
         y_pred = self.base_diffusion.p_sample_loop(
-                        y=im_lq,
-                        model=self.model,
+                        y=x,
+                        model=model,
                         first_stage_model=None,
                         noise=None,
                         clip_denoised=None,
@@ -166,5 +146,4 @@ class ResshiftTrainer(BaseTrainer):
         # crop 回原始尺寸
         y_pred = y_pred[:, :, :orig_h, :orig_w]
         y_pred = y_pred.permute(0, 2, 3, 1)
-        y = y.permute(0, 2, 3, 1)
         return y_pred

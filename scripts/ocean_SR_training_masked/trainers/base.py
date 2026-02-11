@@ -4,9 +4,20 @@ Base trainer for ocean SR training (masked version).
 @author Leizheng
 @contributors kongzhiquan
 @date 2026-02-06
-@version 4.5.1
+@version 5.1.1
 
 @changelog
+  - 2026-02-11 Leizheng: v5.1.1 predict() 重复推理注释说明
+    - _save_test_samples() 调用处添加注释，说明与 predict 循环的重复推理问题
+  - 2026-02-11 Leizheng: v5.1.0 predict() 结构化事件输出 + 错误捕获
+    - predict_start / predict_progress / predict_end 事件供 TypeScript 进程管理器感知
+    - try-catch 包裹并输出 training_error + phase="predict"
+    - predict() 完成后调用 _save_test_samples() 生成可视化数据
+  - 2026-02-11 Leizheng: v5.0.0 Patch 模式全图重建 + 独立推理流程
+    - 新增 _full_coverage_positions() 全覆盖 patch 网格函数（含边界补丁）
+    - 新增 _reconstruct_full_image() 方法：patch 拼接 + 重叠平均 + 反归一化
+    - 改造 _save_test_samples(): patch 模式下调用全图重建，输出物理值全图
+    - 新增 predict() 方法：对测试集全样本执行全图 SR 推理并保存 NPY
   - 2026-02-09 kongzhiquan: v4.5.1 test_samples.npz 追加经纬度/变量名/文件名元数据
   - 2026-02-09 kongzhiquan: v4.5.0 测试样本保存用于可视化
     - 新增 _save_test_samples() 方法，保存前 N 条测试样本的 LR/SR/HR 到 npz
@@ -728,90 +739,323 @@ class BaseTrainer:
             loss_record.dist_reduce()
         return loss_record
 
+    @staticmethod
+    def _full_coverage_positions(H, W, ps):
+        """生成确保全覆盖的 patch 位置列表（含边界补丁）。
+
+        使用非重叠步进，若尾部不整除则额外添加从末尾对齐的补丁，
+        重叠区域在拼接时取平均。
+
+        Args:
+            H: 全图高度
+            W: 全图宽度
+            ps: patch 尺寸
+
+        Returns:
+            list of (top, left) 元组
+        """
+        def _axis_positions(length, size):
+            pos = list(range(0, length - size + 1, size))
+            if not pos or pos[-1] + size < length:
+                pos.append(max(0, length - size))
+            return sorted(set(pos))
+
+        rows = _axis_positions(H, ps)
+        cols = _axis_positions(W, ps)
+        return [(r, c) for r in rows for c in cols]
+
+    def _reconstruct_full_image(self, sample_idx, split='test'):
+        """对单个时间步做全图 SR 重建（patch 拼接 + 反归一化）。
+
+        绕过 DataLoader 的 patch 裁剪，直接从 dataset 取全图数据，
+        切成全覆盖 patch → 逐 patch 推理 → 重叠平均拼接 → decode 反归一化。
+
+        Args:
+            sample_idx: 时间步索引（在原始样本序列中的位置）
+            split: 数据集 split（默认 'test'）
+
+        Returns:
+            dict with keys 'lr', 'sr', 'hr' — numpy arrays in physical value space
+                lr: [h, w, C], sr: [H, W, C], hr: [H, W, C]
+        """
+        dataset = self.test_loader.dataset
+
+        # 1. 拿到全图数据（归一化后的张量）
+        x_full = dataset.x[sample_idx]   # [h, w, C]
+        y_full = dataset.y[sample_idx]   # [H, W, C]
+
+        H, W, C = y_full.shape
+        ps = dataset.patch_size
+        scale = dataset.scale
+
+        # 2. 计算全覆盖 grid
+        positions = self._full_coverage_positions(H, W, ps)
+
+        # 3. 逐 patch 推理，累加到全图画布
+        canvas_sum = torch.zeros(H, W, C)
+        canvas_cnt = torch.zeros(H, W, 1)
+
+        for (top, left) in positions:
+            # 裁剪 HR patch
+            y_patch = y_full[top:top+ps, left:left+ps, :]
+
+            # 推导对应的 LR patch 坐标
+            lr_ps = ps // scale
+            lr_top = top // scale
+            lr_left = left // scale
+            x_patch = x_full[lr_top:lr_top+lr_ps, lr_left:lr_left+lr_ps, :]
+
+            # 推理（添加 batch 维度）
+            x_batch = x_patch.unsqueeze(0).to(self.device)
+            y_batch = y_patch.unsqueeze(0).to(self.device)
+            with torch.amp.autocast('cuda', enabled=self.use_amp):
+                y_pred = self.inference(x_batch, y_batch)
+
+            # 累加到画布
+            canvas_sum[top:top+ps, left:left+ps, :] += y_pred[0].cpu().float()
+            canvas_cnt[top:top+ps, left:left+ps, :] += 1
+
+        # 4. 平均重叠区域
+        sr_full = canvas_sum / canvas_cnt.clamp(min=1)
+
+        # 5. decode 反归一化（全图尺寸，PGN 维度匹配）
+        norm_hr = self.normalizer.get('hr') if isinstance(self.normalizer, dict) else self.normalizer
+        norm_lr = self.normalizer.get('lr') if isinstance(self.normalizer, dict) else self.normalizer
+
+        if norm_hr is not None:
+            sr_dec = norm_hr.decode(sr_full.unsqueeze(0)).squeeze(0)  # [H, W, C]
+            hr_dec = norm_hr.decode(y_full.unsqueeze(0)).squeeze(0)
+        else:
+            sr_dec = sr_full
+            hr_dec = y_full
+
+        if norm_lr is not None:
+            lr_dec = norm_lr.decode(x_full.unsqueeze(0)).squeeze(0)   # [h, w, C]
+        else:
+            lr_dec = x_full
+
+        return {
+            'lr': lr_dec.cpu().float().numpy(),   # [h, w, C] 物理值
+            'sr': sr_dec.cpu().float().numpy(),   # [H, W, C] 物理值
+            'hr': hr_dec.cpu().float().numpy(),   # [H, W, C] 物理值
+        }
+
     def _save_test_samples(self, num_samples=2):
         """保存测试集前 num_samples 条样本的 LR / SR / HR 数据用于可视化。
 
+        patch_mode=True 时使用全图重建（patch 拼接 + 反归一化），
+        输出为物理值全图而非裁剪的归一化 patch。
+
         输出文件: {saving_path}/test_samples.npz
         包含:
-            lr  - 低分辨率输入 [N, H_lr, W_lr, C]
-            sr  - 模型推理输出 [N, H_hr, W_hr, C]
-            hr  - 高分辨率真值 [N, H_hr, W_hr, C]
-            mask_hr - (可选) 陆地掩码 [N, H_hr, W_hr, 1]，per-sample patch mask
+            lr  - 低分辨率输入 [N, H_lr, W_lr, C]  物理值
+            sr  - 模型推理输出 [N, H_hr, W_hr, C]  物理值
+            hr  - 高分辨率真值 [N, H_hr, W_hr, C]  物理值
+            mask_hr - (可选) 陆地掩码 [1, H_hr, W_hr, 1]
         """
         if not self.check_main_process():
             return
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         self.model.eval()
-        saved_lr, saved_sr, saved_hr, saved_mask = [], [], [], []
-        count = 0
+        saved_lr, saved_sr, saved_hr = [], [], []
 
-        with torch.no_grad(), torch.amp.autocast('cuda', enabled=self.use_amp):
-            for batch in self.test_loader:
-                if len(batch) == 3:
-                    x, y, mask_patch = batch
-                else:
-                    x, y = batch
-                    mask_patch = None
+        dataset = self.test_loader.dataset
+        # 真实样本数（patch 模式下 len(dataset) 是 patch 总数）
+        if self.patch_mode and hasattr(dataset, '_grid_positions') and dataset._grid_positions is not None:
+            n_real_samples = len(dataset.x)
+        else:
+            n_real_samples = len(dataset)
+        actual_num = min(num_samples, n_real_samples)
 
-                x = x.to(self.device, non_blocking=True)
-                y = y.to(self.device, non_blocking=True)
-                y_pred = self.inference(x, y)
+        with torch.no_grad():
+            if self.patch_mode:
+                # 全图重建模式：逐样本 patch 拼接 + 反归一化
+                for i in range(actual_num):
+                    result = self._reconstruct_full_image(i)
+                    saved_lr.append(result['lr'])
+                    saved_sr.append(result['sr'])
+                    saved_hr.append(result['hr'])
+            else:
+                # 全图训练模式：直接 decode
+                count = 0
+                with torch.amp.autocast('cuda', enabled=self.use_amp):
+                    for batch in self.test_loader:
+                        if len(batch) == 3:
+                            x, y, _ = batch
+                        else:
+                            x, y = batch
 
-                # 解码回原始数据空间
-                _norm_hr = self.normalizer.get('hr') if isinstance(self.normalizer, dict) else self.normalizer
-                if not self.patch_mode and _norm_hr is not None:
-                    y_pred_dec = _norm_hr.decode(y_pred)
-                    y_dec = _norm_hr.decode(y)
-                else:
-                    y_pred_dec = y_pred
-                    y_dec = y
+                        x = x.to(self.device, non_blocking=True)
+                        y = y.to(self.device, non_blocking=True)
+                        y_pred = self.inference(x, y)
 
-                _norm_lr = self.normalizer.get('lr') if isinstance(self.normalizer, dict) else self.normalizer
-                if not self.patch_mode and _norm_lr is not None:
-                    x_dec = _norm_lr.decode(x)
-                else:
-                    x_dec = x
+                        _norm_hr = self.normalizer.get('hr') if isinstance(self.normalizer, dict) else self.normalizer
+                        _norm_lr = self.normalizer.get('lr') if isinstance(self.normalizer, dict) else self.normalizer
 
-                bs = x.size(0)
-                for i in range(bs):
-                    if count >= num_samples:
-                        break
-                    saved_lr.append(x_dec[i].detach().cpu().float().numpy())
-                    saved_sr.append(y_pred_dec[i].detach().cpu().float().numpy())
-                    saved_hr.append(y_dec[i].detach().cpu().float().numpy())
-                    if mask_patch is not None:
-                        saved_mask.append(mask_patch[i].detach().cpu().numpy())
-                    count += 1
-                if count >= num_samples:
-                    break
+                        if _norm_hr is not None:
+                            y_pred_dec = _norm_hr.decode(y_pred)
+                            y_dec = _norm_hr.decode(y)
+                        else:
+                            y_pred_dec = y_pred
+                            y_dec = y
+
+                        if _norm_lr is not None:
+                            x_dec = _norm_lr.decode(x)
+                        else:
+                            x_dec = x
+
+                        bs = x.size(0)
+                        for i in range(bs):
+                            if count >= actual_num:
+                                break
+                            saved_lr.append(x_dec[i].detach().cpu().float().numpy())
+                            saved_sr.append(y_pred_dec[i].detach().cpu().float().numpy())
+                            saved_hr.append(y_dec[i].detach().cpu().float().numpy())
+                            count += 1
+                        if count >= actual_num:
+                            break
 
         save_data = {
             'lr': np.array(saved_lr),
             'sr': np.array(saved_sr),
             'hr': np.array(saved_hr),
         }
-        # 保存 per-sample mask（与 lr/sr/hr 空间尺寸一致）
-        if saved_mask:
-            save_data['mask_hr'] = np.array(saved_mask)
 
-        # 保存元数据（经纬度、文件名、变量名）
+        # 保存全图 mask（不再保存 per-patch mask）
+        if self.mask_hr is not None:
+            save_data['mask_hr'] = self.mask_hr.cpu().numpy()  # [1, H, W, 1]
+
+        # 保存元数据（经纬度、文件名、变量名）— 使用全图坐标
         test_ds = self.test_loader.dataset
         if hasattr(test_ds, 'get_meta'):
-            meta = test_ds.get_meta(0)
-            if meta['lon_hr'] is not None:
-                save_data['lon_hr'] = meta['lon_hr']
-            if meta['lat_hr'] is not None:
-                save_data['lat_hr'] = meta['lat_hr']
-            if meta['lon_lr'] is not None:
-                save_data['lon_lr'] = meta['lon_lr']
-            if meta['lat_lr'] is not None:
-                save_data['lat_lr'] = meta['lat_lr']
-            if meta['dyn_vars'] is not None:
-                save_data['dyn_vars'] = np.array(meta['dyn_vars'])
-            if meta['filename'] is not None:
-                save_data['filename'] = np.array(meta['filename'])
+            # patch_idx=None 使其返回全图坐标：直接用 sample_idx=0
+            # 对于 patch 模式，传 idx=0 并手动获取全图元数据
+            if self.patch_mode:
+                # 直接访问 dataset 的全图属性，绕过 patch 裁剪
+                if test_ds.lon_hr is not None:
+                    save_data['lon_hr'] = test_ds.lon_hr
+                if test_ds.lat_hr is not None:
+                    save_data['lat_hr'] = test_ds.lat_hr
+                if test_ds.lon_lr is not None:
+                    save_data['lon_lr'] = test_ds.lon_lr
+                if test_ds.lat_lr is not None:
+                    save_data['lat_lr'] = test_ds.lat_lr
+                if test_ds.dyn_vars is not None:
+                    save_data['dyn_vars'] = np.array(test_ds.dyn_vars)
+                if test_ds.filenames is not None and len(test_ds.filenames) > 0:
+                    save_data['filename'] = np.array(test_ds.filenames[0])
+            else:
+                meta = test_ds.get_meta(0)
+                if meta['lon_hr'] is not None:
+                    save_data['lon_hr'] = meta['lon_hr']
+                if meta['lat_hr'] is not None:
+                    save_data['lat_hr'] = meta['lat_hr']
+                if meta['lon_lr'] is not None:
+                    save_data['lon_lr'] = meta['lon_lr']
+                if meta['lat_lr'] is not None:
+                    save_data['lat_lr'] = meta['lat_lr']
+                if meta['dyn_vars'] is not None:
+                    save_data['dyn_vars'] = np.array(meta['dyn_vars'])
+                if meta['filename'] is not None:
+                    save_data['filename'] = np.array(meta['filename'])
 
         save_path = os.path.join(self.saving_path, 'test_samples.npz')
         np.savez(save_path, **save_data)
-        self.main_log("Saved {} test samples (LR/SR/HR) to {}".format(count, save_path))
+        self.main_log("Saved {} test samples (LR/SR/HR) to {}".format(actual_num, save_path))
+
+    def predict(self, output_dir=None):
+        """对测试集执行全图推理，保存 SR 输出到 NPY 文件。
+
+        patch_mode=True 时使用全图重建（patch 拼接 + 反归一化），
+        否则直接推理全图。所有输出为物理值空间。
+
+        输出结构化事件供 TypeScript 进程管理器感知：
+        - predict_start: 推理启动（TypeScript waitForEvent 等待此事件）
+        - predict_progress: 逐样本进度
+        - predict_end: 推理完成
+        - training_error + phase="predict": 异常时
+
+        Args:
+            output_dir: 输出目录，默认 {saving_path}/predictions/
+        """
+        if not self.check_main_process():
+            return
+        output_dir = output_dir or os.path.join(self.saving_path, 'predictions')
+        os.makedirs(output_dir, exist_ok=True)
+
+        dataset = self.test_loader.dataset
+        # 真实样本数（patch 模式下 len(dataset) 是 patch 总数，需要用原始样本数）
+        n_samples = len(dataset.x)
+
+        try:
+            # 发射 predict_start 事件（TypeScript 等待此事件确认启动成功）
+            self._log_json_event("predict_start",
+                n_samples=n_samples, output_dir=output_dir,
+                patch_mode=self.patch_mode, model_name=self.model_name)
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            self.model.eval()
+            saved_files = []
+
+            with torch.no_grad():
+                for i in range(n_samples):
+                    if self.patch_mode:
+                        result = self._reconstruct_full_image(i)
+                    else:
+                        # 全图模式直接推理
+                        x = dataset.x[i]   # [h, w, C]
+                        y = dataset.y[i]   # [H, W, C]
+                        x_b = x.unsqueeze(0).to(self.device)
+                        y_b = y.unsqueeze(0).to(self.device)
+                        with torch.amp.autocast('cuda', enabled=self.use_amp):
+                            y_pred = self.inference(x_b, y_b)
+
+                        norm_hr = self.normalizer.get('hr') if isinstance(self.normalizer, dict) else self.normalizer
+                        if norm_hr is not None:
+                            sr_dec = norm_hr.decode(y_pred).squeeze(0).cpu().float().numpy()
+                            hr_dec = norm_hr.decode(y_b).squeeze(0).cpu().float().numpy()
+                        else:
+                            sr_dec = y_pred.squeeze(0).cpu().float().numpy()
+                            hr_dec = y_b.squeeze(0).cpu().float().numpy()
+                        result = {'sr': sr_dec, 'hr': hr_dec}
+
+                    # 保存
+                    fname = dataset.filenames[i] if hasattr(dataset, 'filenames') and dataset.filenames else f'{i:06d}'
+                    np.save(os.path.join(output_dir, f'{fname}_sr.npy'), result['sr'])
+                    saved_files.append(f'{fname}_sr.npy')
+
+                    self.main_log(f"Predicted {i+1}/{n_samples}: {fname}")
+
+                    # 进度事件
+                    self._log_json_event("predict_progress",
+                        current=i+1, total=n_samples, filename=fname)
+
+            # 保存测试样本用于可视化（复用已有逻辑）
+            # NOTE: _save_test_samples() 会对前 N 个样本独立执行推理，
+            # 与上面 predict 循环存在重复推理。这是已知的效率问题。
+            # 后续优化方向：将 predict 循环已得到的 SR 结果缓存后传给
+            # _save_test_samples()，避免二次推理。当前改动需改变
+            # _save_test_samples() 接口，暂保留现状。
+            self._save_test_samples(num_samples=min(4, n_samples))
+
+            self._log_json_event("predict_end",
+                n_samples=n_samples, output_dir=output_dir,
+                saved_files=saved_files)
+            self.main_log(f"Predictions saved to {output_dir}")
+
+        except Exception as e:
+            import traceback
+            tb = traceback.format_exc()
+            error_type = type(e).__name__
+            self.main_log(f"[FATAL] Predict crashed: {error_type}: {e}")
+            self.main_log(tb)
+            self._log_json_event(
+                "training_error",
+                error_type=error_type,
+                error_message=str(e),
+                traceback=tb,
+                phase="predict",
+            )
+            raise
