@@ -183,6 +183,9 @@ bun.lockb
 yarn.lock
 pnpm-lock.yaml
 
+# Backup files
+*.bak
+
 # Archive files
 *.zip
 *.tar.gz

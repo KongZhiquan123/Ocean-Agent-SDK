@@ -19,6 +19,8 @@
  */
 
 import dotenv from 'dotenv'
+import fs from 'fs'
+import path from 'path'
 dotenv.config({ override: true })
 import {
   JSONStore,
@@ -50,7 +52,29 @@ export const config = {
 } as const
 console.log('[config] 最终使用模型:', config.anthropicModelId)
 
-const skillsWhiteList= ['ocean-preprocess', 'ocean-SR-training']
+
+function loadSkillsWhitelist(skillsDir: string, defaults: string[]): string[] {
+  const whitelist = new Set(defaults)
+  try {
+    const resolvedDir = path.resolve(skillsDir)
+    if (fs.existsSync(resolvedDir)) {
+      const entries = fs.readdirSync(resolvedDir, { withFileTypes: true })
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue
+        const skillPath = path.join(resolvedDir, entry.name, 'SKILL.md')
+        if (fs.existsSync(skillPath)) {
+          whitelist.add(entry.name)
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[config] 读取 skills 目录失败:', err)
+  }
+  return Array.from(whitelist)
+}
+
+const skillsWhiteList = loadSkillsWhitelist(config.skillsDir, ['ocean-preprocess', 'ocean-SR-training'])
+console.log('[config] Skills 白名单:', skillsWhiteList)
 
 // ========================================
 // 配置验证

@@ -1,6 +1,6 @@
 model:
   name: 'SRNO'
-  input_channels: 1
+  input_channels: 2
   output_channels: 1
   use_coord_input: True
   width: 256
@@ -13,7 +13,7 @@ model:
     res_scale: 1.0
     scale: 2
     no_upsampling: True
-    input_channels: 1
+    input_channels: 2
     output_channels: 64
 
 
