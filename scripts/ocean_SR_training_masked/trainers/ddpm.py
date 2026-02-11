@@ -3,9 +3,10 @@ DDPM Trainer (masked version).
 
 @author Leizheng
 @date 2026-02-06
-@version 3.0.0
+@version 3.1.0
 
 @changelog
+  - 2026-02-10 Leizheng: v3.1.0 inference 改用动态 crop 替代脆弱的 reshape
   - 2026-02-07 Leizheng: v3.0.0 AMP 混合精度 + Gradient Checkpointing
     - train() 使用 autocast + GradScaler
     - gradient checkpointing 包装扩散模型 forward
@@ -94,5 +95,7 @@ class DDPMTrainer(BaseTrainer):
     def inference(self, x, y, **kwargs):
         x = x.permute(0, 3, 1, 2)
         y_pred = self._unwrap().super_resolution(x, continous=False)
-        y_pred = y_pred.permute(0, 2, 3, 1).reshape(y.shape)
+        y_pred = y_pred.permute(0, 2, 3, 1)  # [B, C, H', W'] -> [B, H', W', C]
+        # 动态 crop 到 y 的空间尺寸（alignment padding 安全网）
+        y_pred = y_pred[:, :y.shape[1], :y.shape[2], :]
         return y_pred
