@@ -1,14 +1,18 @@
 ---
 name: ocean-SR-training
-description: 海洋超分辨率模型训练技能 - 支持多种模型架构的训练、测试与推理（含陆地掩码处理 + OOM 自动防护 + 错误实时反馈）
-version: 4.2.0
+description: 海洋超分辨率模型训练技能 - 支持多种模型架构的训练、测试、推理（含陆地掩码处理 + OOM 自动防护 + 错误实时反馈 + predict 全图预测）
+version: 4.3.0
 author: Leizheng
 contributors: kongzhiquan
-last_modified: 2026-02-09
+last_modified: 2026-02-11
 ---
 
 <!--
 Changelog:
+  - 2026-02-11 Leizheng: v4.3.0 新增 predict 模式全图预测工作流
+    - predict 快速通道：跳过训练工作流直接启动推理
+    - predict 结构化事件：predict_start / predict_progress / predict_end
+    - predict 可视化：generate_predict_plots.py 生成 SR 对比图
   - 2026-02-09 Leizheng: v4.2.0 默认参数与模型接入策略对齐
     - batch_size / eval_batch_size 默认值调整为 4
     - gradient_checkpointing 默认开启（允许用户手动关闭）
@@ -61,9 +65,9 @@ Changelog:
 |------|------|
 | `ocean_sr_check_gpu` | 查看可用 GPU |
 | `ocean_sr_list_models` | 列出可用模型 |
-| `ocean_sr_train` | 启动训练（含事件驱动启动监控） |
-| `ocean_sr_train_status` | 查询训练状态/日志/终止训练/等待状态变化 |
-| `ocean_sr_visualize` | 生成训练可视化图表 |
+| `ocean_sr_train` | 启动训练或推理（含事件驱动启动监控，predict 模式跳过训练工作流） |
+| `ocean_sr_train_status` | 查询训练/推理状态/日志/终止训练/等待状态变化 |
+| `ocean_sr_visualize` | 生成训练可视化图表（mode=train）或推理对比图（mode=predict） |
 | `ocean_sr_generate_report` | 生成训练报告 |
 
 ---
@@ -106,6 +110,66 @@ Changelog:
    ↓
 10. 完成 → 展示报告路径和关键结果
 ```
+
+---
+
+## 预测工作流程（Predict Mode）
+
+predict 模式对测试集执行全图 SR 推理，输出物理值空间的 NPY 文件。
+跳过训练工作流的 4 阶段确认（OOM/shape/FFT 检查），直接启动。
+
+### 触发条件
+- 用户要求"对测试集做推理/预测/predict"
+- 训练完成后需要生成完整 SR 输出
+
+### 工作流
+
+```
+1. 确认参数 → dataset_root, log_dir, model_name, ckpt_path（可选，默认 best_model.pth）
+   ↓
+2. 启动推理 → ocean_sr_train({ mode: "predict", dataset_root, log_dir, model_name, ... })
+   │  工具内部等待 predict_start 事件（最长 5 分钟）
+   │  若返回 status="error"：展示错误 + 建议
+   ↓
+3. 等待完成 → ocean_sr_train_status({ action: "wait", process_id, timeout: 300 })
+   │  若 process_status="completed"：主动询问是否生成可视化
+   │  若 process_status="failed"：展示错误 + 建议
+   ↓
+4. 可视化 → ocean_sr_visualize({ log_dir, mode: "predict", dataset_root, dyn_vars })
+   ↓
+5. 完成 → 展示 predictions/ 路径和可视化图表
+```
+
+### predict 参数
+
+| 参数 | 必需 | 说明 |
+|------|------|------|
+| `mode` | 是 | 固定为 `"predict"` |
+| `dataset_root` | 是 | 预处理数据目录 |
+| `log_dir` | 是 | 训练输出目录（需含 best_model.pth 或指定 ckpt_path） |
+| `model_name` | 是 | 模型名称 |
+| `ckpt_path` | 否 | 模型权重路径（默认 log_dir/best_model.pth） |
+| `dyn_vars` | 条件必填 | 动态变量列表（推理启动不需要，但 predict 可视化必填） |
+| `scale` | 否 | 超分辨率倍数 |
+| `patch_size` | 否 | HR Patch 尺寸（若训练时用了 patch） |
+
+### 输出目录
+
+```
+log_dir/
+├── predictions/
+│   ├── {filename}_sr.npy    ← 全图 SR 输出 [H, W, C]
+│   └── ...
+├── test_samples.npz          ← LR/SR/HR 对比数据（前 4 条）
+└── plots/
+    ├── predict_comparison_00.png ← 可视化对比图
+    └── ...
+```
+
+### 注意事项
+- predict 不需要训练参数确认（不走 4 阶段状态机）
+- predict 始终使用单卡推理
+- 如果 log_dir 中没有 best_model.pth，必须显式传入 ckpt_path
 
 ---
 
@@ -180,13 +244,19 @@ log_dir/                       ← 训练输出目录（由配置指定）
 ├── config.yaml                ← 训练配置
 ├── train.log                  ← 训练日志
 ├── best_model.pth             ← 最佳模型权重
+├── test_samples.npz           ← 测试/推理样本数据
 ├── training_report.md         ← 训练报告
+├── predictions/               ← predict 模式输出
+│   ├── {filename}_sr.npy
+│   └── ...
 └── plots/                     ← 可视化图表
     ├── loss_curve.png
     ├── metrics_curve.png
     ├── lr_curve.png
     ├── metrics_comparison.png
-    └── training_summary.png
+    ├── training_summary.png
+    ├── sample_comparison.png
+    └── predict_comparison_XX.png ← predict 模式
 ```
 
 ---

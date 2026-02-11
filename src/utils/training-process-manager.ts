@@ -11,9 +11,15 @@
  * @author kongzhiquan
  * @contributors Leizheng
  * @date 2026-02-07
- * @version 3.0.0
+ * @version 3.1.0
  *
  * @changelog
+ *   - 2026-02-11 Leizheng: v3.1.0 Predict 模式进度追踪
+ *     - TrainingProgress 扩展 predict 字段（currentSample/totalSamples/samplesPerMinute/currentFilename）
+ *     - TrainingNotification.type 新增 predict_start / predict_end
+ *     - parseEventMarkers() 新增 predict_start/predict_progress/predict_end 事件处理
+ *     - computeProgress() 适配 predict 模式（sample 粒度进度 + ETA）
+ *     - 进程日志头尾文案根据 mode 区分 Training / Predict
  *   - 2026-02-11 kongzhiquan: v3.0.0 精简重构
  *     - 删除死代码 cleanupCompleted / dequeueNotifications
  *     - sampleRuntimeStats 改为独立定时采样，不再阻塞 getter
@@ -53,11 +59,18 @@ export interface ErrorSummary {
 }
 
 export interface TrainingProgress {
-  currentEpoch: number
-  totalEpochs: number
-  estimatedRemainingSeconds: number | null
+  // Training 模式（epoch 粒度）
+  currentEpoch?: number
+  totalEpochs?: number
   epochsPerHour?: number | null
   latestMetrics?: Record<string, number>
+  // Predict 模式（sample 粒度）
+  currentSample?: number
+  totalSamples?: number
+  samplesPerMinute?: number | null
+  currentFilename?: string
+  // 共用
+  estimatedRemainingSeconds: number | null
 }
 
 export interface RuntimeStats {
@@ -79,7 +92,7 @@ export interface RuntimeStats {
 
 export interface TrainingNotification {
   id: string
-  type: 'training_start' | 'training_error' | 'process_exit'
+  type: 'training_start' | 'training_error' | 'process_exit' | 'predict_start' | 'predict_end'
   timestamp: string
   processId: string
   payload?: Record<string, unknown>
@@ -105,6 +118,7 @@ export interface TrainingProcessInfo {
     configPath?: string
     workspaceDir?: string
     deviceIds?: number[]
+    mode?: string
   }
   // 错误摘要（失败时填充）
   errorSummary?: ErrorSummary
@@ -139,6 +153,19 @@ interface ManagedProcess {
   trainingMeta: {
     totalEpochs: number
     startTimestamp: string
+  } | null
+  // Predict 模式元信息（来自 predict_start 事件）
+  predictMeta: {
+    totalSamples: number
+    outputDir: string
+    startTimestamp: string
+  } | null
+  // 最近一次 predict_progress 信息
+  lastPredictProgress: {
+    current: number
+    total: number
+    filename: string
+    timestamp: string
   } | null
   // 日志滚动锁
   rotatingLog: boolean
@@ -441,9 +468,36 @@ class TrainingProcessManager {
   }
 
   /**
-   * 从 managed process 计算训练进度
+   * 从 managed process 计算进度（训练模式或 predict 模式）
    */
   private computeProgress(managed: ManagedProcess): TrainingProgress | undefined {
+    // ---- Predict 模式 ----
+    if (managed.predictMeta) {
+      const total = managed.predictMeta.totalSamples
+      if (!managed.lastPredictProgress) {
+        // predict 已启动但还没产出第一个样本
+        return {
+          currentSample: 0,
+          totalSamples: total,
+          estimatedRemainingSeconds: null,
+        }
+      }
+      const current = managed.lastPredictProgress.current
+      const startTime = new Date(managed.predictMeta.startTimestamp).getTime()
+      const progressTime = new Date(managed.lastPredictProgress.timestamp).getTime()
+      const elapsed = progressTime - startTime
+      const avgPerSample = current > 0 ? elapsed / current : 0
+      const remaining = avgPerSample * (total - current)
+      return {
+        currentSample: current,
+        totalSamples: total,
+        estimatedRemainingSeconds: current > 0 ? Math.round(remaining / 1000) : null,
+        samplesPerMinute: avgPerSample > 0 ? Math.round(60000 / avgPerSample * 10) / 10 : null,
+        currentFilename: managed.lastPredictProgress.filename,
+      }
+    }
+
+    // ---- Training 模式 ----
     if (!managed.lastEpochInfo || !managed.trainingMeta || managed.trainingMeta.totalEpochs <= 0) {
       return undefined
     }
@@ -628,6 +682,39 @@ class TrainingProcessManager {
               )
             }
           }
+
+          // ---- Predict 模式事件 ----
+          if (eventType === 'predict_start') {
+            managed.predictMeta = {
+              totalSamples: event.n_samples as number,
+              outputDir: event.output_dir as string,
+              startTimestamp: event.timestamp as string,
+            }
+            if (isFirst) {
+              this.pushNotification(
+                managed,
+                this.createNotification(managed, 'predict_start', event),
+              )
+            }
+          }
+
+          if (eventType === 'predict_progress') {
+            managed.lastPredictProgress = {
+              current: event.current as number,
+              total: event.total as number,
+              filename: event.filename as string,
+              timestamp: event.timestamp as string,
+            }
+          }
+
+          if (eventType === 'predict_end') {
+            if (isFirst) {
+              this.pushNotification(
+                managed,
+                this.createNotification(managed, 'predict_end', event),
+              )
+            }
+          }
         }
       } catch {
         /* ignore parse errors */
@@ -678,9 +765,10 @@ class TrainingProcessManager {
     this.attachStreamErrorHandler(errorLogStream, id, 'error')
 
     // 写入启动信息
+    const processLabel = metadata?.mode === 'predict' ? 'Predict' : 'Training'
     const startHeader = `
 ================================================================================
-Training Process Started
+${processLabel} Process Started
 ID: ${id}
 Command: ${cmd} ${args.join(' ')}
 Working Directory: ${cwd}
@@ -731,6 +819,8 @@ Start Time: ${new Date().toISOString()}
       receivedEvents: new Set(),
       lastEpochInfo: null,
       trainingMeta: null,
+      predictMeta: null,
+      lastPredictProgress: null,
       rotatingLog: false,
       rotatingErrorLog: false,
       runtimeStats: null,
@@ -813,9 +903,10 @@ Start Time: ${new Date().toISOString()}
       )
 
       // 写入结束信息
+      const endLabel = managed.info.metadata?.mode === 'predict' ? 'Predict' : 'Training'
       const endFooter = `
 ================================================================================
-Training Process ${managed.info.status.toUpperCase()}
+${endLabel} Process ${managed.info.status.toUpperCase()}
 Exit Code: ${code}
 Signal: ${signal || 'none'}
 End Time: ${new Date().toISOString()}

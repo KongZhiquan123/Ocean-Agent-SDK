@@ -4,9 +4,13 @@ main_ddp.py - 多卡 DDP 训练入口
 @author Leizheng
 @contributors kongzhiquan
 @date 2026-02-07
-@version 1.2.0
+@version 1.4.0
 
 @changelog
+  - 2026-02-11 Leizheng: v1.4.0 predict 模式禁用 load_ckpt 避免冗余加载
+    - trainer 构建前将 load_ckpt 设为 False，predict 分支显式调 load_model
+  - 2026-02-11 Leizheng: v1.3.0 新增 --mode predict 分支
+    - predict 模式下加载最佳模型，调用 trainer.predict() 生成全图 SR 输出
   - 2026-02-07 Leizheng: v1.2.0 始终输出错误事件（不限 startup 阶段）
     - 训练阶段崩溃时 base.py 已输出详细 training_error，这里作为兜底
     - 区分 phase: startup / training，TypeScript 侧以最后收到的事件为准
@@ -66,10 +70,22 @@ def main():
         torch.cuda.set_device(local_rank)
 
         # ============ Step 5. 构建 trainer（内部会构建 model、dataloader） ============
+        # predict 模式不需要 __init__ 中的 load_ckpt（避免加载 optimizer/scheduler 状态），
+        # 由 predict 分支显式调用 load_model 只加载模型权重
+        mode = args.get('mode', 'train')
+        if mode == 'predict':
+            args['train']['load_ckpt'] = False
+
         trainer = _trainer_dict[args['model']['name']](args)
 
-        # ============ Step 6. 启动训练 ============
-        trainer.process()
+        # ============ Step 6. 根据 mode 执行对应流程 ============
+        if mode == 'train':
+            trainer.process()
+        elif mode == 'predict':
+            # 加载最佳模型
+            ckpt_path = args['train'].get('ckpt_path', '') or os.path.join(saving_path, 'best_model.pth')
+            trainer.load_model(ckpt_path)
+            trainer.predict()
     except Exception as e:
         # 始终输出结构化错误事件，确保 TypeScript 进程管理器能捕获
         # base.py 的 process() 可能已经输出过 training_error（带 epoch 等详细信息），
