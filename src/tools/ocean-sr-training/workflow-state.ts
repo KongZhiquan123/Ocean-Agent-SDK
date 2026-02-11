@@ -44,13 +44,14 @@ const NO_PATCH_MODELS = new Set([
   'MWT2d',
   'M2NO2d',
 ])
-const AMP_AUTO_DISABLE_MODELS = new Set([
+const FFT_AMP_SENSITIVE_MODELS = new Set([
   'FNO2d',
   'HiNOTE',
   'MWT2d',
   'M2NO2d',
   'MG-DDPM',
 ])
+const AMP_DEFAULT_OFF_MODELS = new Set([...FFT_AMP_SENSITIVE_MODELS, 'SRNO'])
 const HEAVY_MODELS = new Set([
   'Galerkin_Transformer',
   'MWT2d',
@@ -77,8 +78,10 @@ function gcd(a: number, b: number): number {
 
 function getModelDivisor(modelName?: string): number {
   if (!modelName) return 1
+  // ResShift 使用 channel_mult=[1,2,2,4]，divisor = 2^3 = 8
   if (modelName === 'Resshift' || modelName === 'ResShift') return 8
-  if (['DDPM', 'SR3', 'MG-DDPM', 'Resshift', 'ReMiG', 'ResShift'].includes(modelName)) {
+  // 其他扩散模型使用 channel_mults=[1,1,2,2,4,4]，divisor = 2^5 = 32
+  if (['DDPM', 'SR3', 'MG-DDPM', 'ReMiG'].includes(modelName)) {
     return 32
   }
   if (modelName === 'UNet2d') return 16
@@ -144,7 +147,7 @@ function resolveUseAmp(params: TrainingWorkflowParams): boolean {
   if (params.use_amp !== undefined) {
     return Boolean(params.use_amp)
   }
-  if (params.model_name && AMP_AUTO_DISABLE_MODELS.has(params.model_name)) {
+  if (params.model_name && AMP_DEFAULT_OFF_MODELS.has(params.model_name)) {
     return false
   }
   return true
@@ -204,6 +207,7 @@ export interface TrainingWorkflowParams {
   device_ids?: number[]
   distribute?: boolean
   distribute_mode?: string
+  master_port?: number
   patience?: number
   eval_freq?: number
   normalize?: boolean
@@ -815,6 +819,9 @@ ${gpuStr}
 - device_ids: [${currentDeviceIds.join(', ')}]（选择使用的 GPU）
 - distribute: ${currentDistribute}（是否多卡训练）
 - distribute_mode: ${currentDistributeMode}（多卡模式: DP / DDP）
+- master_port: ${currentDistribute && currentDistributeMode === 'DDP' ? (params.master_port ?? '自动选择') : '不适用'}（DDP 通信端口）
+
+${currentDistribute && currentDeviceIds.length <= 1 ? '⚠️ device_ids 只有 1 张 GPU 时无法使用 DDP/DP，将自动降级为单卡。' : ''}
 
 ${gpuInfo && gpuInfo.gpu_count > 1 ? `💡 检测到 ${gpuInfo.gpu_count} 张 GPU，建议使用多卡 DDP 训练以加速。` : ''}
 
@@ -824,11 +831,11 @@ ${gpuInfo && gpuInfo.gpu_count > 1 ? `💡 检测到 ${gpuInfo.gpu_count} 张 GP
 ${params.ckpt_path ? `- ckpt_path: ${params.ckpt_path}（恢复训练检查点）` : ''}
 
 【OOM 防护参数】
-- use_amp: ${currentUseAmp}（AMP 混合精度，减少约 40-50% 显存，FFT 默认关闭）
+- use_amp: ${currentUseAmp}（AMP 混合精度，减少约 40-50% 显存，FFT/数值敏感模型默认关闭）
 - gradient_checkpointing: ${currentGradientCheckpointing}（梯度检查点，减少约 60% 激活显存）
 - patch_size: ${patchStrategy}（Patch 裁剪尺寸，需为 scale 整数倍）
 
-💡 显存不足时可尝试 use_amp=true；FFT 模型需注意 cuFFT 尺寸限制。
+💡 显存不足时可尝试 use_amp=true；FFT 模型需注意 cuFFT 尺寸限制，SRNO 开启 AMP 可能出现 NaN。
    训练前系统会自动进行显存预估并在必要时自动降低 batch_size。
 
 ================================================================================
@@ -859,6 +866,7 @@ ${params.ckpt_path ? `- ckpt_path: ${params.ckpt_path}（恢复训练检查点�
           device_ids: currentDeviceIds,
           distribute: currentDistribute,
           distribute_mode: currentDistributeMode,
+          master_port: params.master_port,
           patience: currentPatience,
           eval_freq: currentEvalFreq,
           normalize: currentNormalize,
@@ -949,6 +957,7 @@ ${datasetInfo ? `- HR 尺寸: ${datasetInfo.hr_shape?.join(' × ') ?? '?'}
 【GPU 配置】
 - 运行模式: ${gpuModeStr}
 ${gpuNames ? `- GPU: ${gpuNames}` : ''}
+${distribute && distributeMode === 'DDP' ? `- master_port: ${params.master_port ?? '自动选择'}` : ''}
 
 【其他】
 - 归一化: ${params.normalize ?? true} (${params.normalizer_type ?? 'PGN'})
@@ -989,6 +998,7 @@ ${params.ckpt_path ? `- 检查点恢复: ${params.ckpt_path}` : ''}
           device_ids: params.device_ids,
           distribute: params.distribute,
           distribute_mode: params.distribute_mode,
+          master_port: params.master_port,
           patience: params.patience,
           eval_freq: params.eval_freq,
           optimizer: params.optimizer,

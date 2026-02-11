@@ -33,12 +33,13 @@ export const oceanSrTrainStatusTool = defineTool({
 **增量日志**：传入 process_id 和 offset 参数获取自上次读取后的新日志
 **终止训练**：传入 action="kill" 和 process_id 终止训练进程
 **列出所有**：传入 action="list" 列出所有训练进程
-**等待变化**：传入 action="wait" 和 process_id，等待训练状态变化（长轮询）`,
+**等待变化**：传入 action="wait" 和 process_id，等待训练状态变化（长轮询）
+**推送通知**：传入 action="watch" 和 process_id，等待训练启动/报错/结束事件（长轮询）`,
 
   params: {
     action: {
       type: 'string',
-      description: '操作类型: "status"(默认), "logs", "kill", "list", "wait"',
+      description: '操作类型: "status"(默认), "logs", "kill", "list", "wait", "watch"',
       required: false,
       default: 'status',
     },
@@ -60,7 +61,7 @@ export const oceanSrTrainStatusTool = defineTool({
     },
     timeout: {
       type: 'number',
-      description: 'wait 模式的超时秒数（默认 120）',
+      description: 'wait/watch 模式的超时秒数（默认 120）',
       required: false,
       default: 120,
     },
@@ -90,6 +91,7 @@ export const oceanSrTrainStatusTool = defineTool({
           exitCode: p.exitCode,
           logFile: p.logFile,
           progress: p.progress,
+          runtime_stats: p.status === 'running' ? p.runtimeStats : undefined,
           errorSummary: p.errorSummary
             ? {
                 failureType: p.errorSummary.failureType,
@@ -124,6 +126,35 @@ export const oceanSrTrainStatusTool = defineTool({
 
       // 返回完整状态信息（与 status 查询一致）
       return buildStatusResponse(process_id, result)
+    }
+
+    // watch 模式：等待关键通知（训练开始/报错/结束）
+    if (action === 'watch') {
+      const timeoutMs = (timeout ?? 120) * 1000
+      const result = await trainingProcessManager.waitForNotification(process_id, { timeoutMs })
+      if (result.processStatus === 'unknown') {
+        return {
+          status: 'error',
+          error: `未找到进程: ${process_id}`,
+          suggestion: '进程可能已被清理或 ID 不正确',
+        }
+      }
+
+      const processInfo = trainingProcessManager.getProcess(process_id)
+      return {
+        status: 'ok',
+        process_id,
+        process_status: result.processStatus,
+        pushed: result.found,
+        notification: result.notification,
+        message: result.found
+          ? getNotificationMessage(result.notification?.type)
+          : '等待超时：暂无新的关键事件（启动成功/报错/结束）',
+        error_summary:
+          result.notification?.type === 'process_exit' && processInfo?.status === 'failed'
+            ? processInfo.errorSummary
+            : undefined,
+      }
     }
 
     const processInfo = trainingProcessManager.getProcess(process_id)
@@ -230,6 +261,11 @@ function buildStatusResponse(
     response.progress = processInfo.progress
   }
 
+  // running 时附加资源监控信息
+  if (processInfo.status === 'running' && processInfo.runtimeStats) {
+    response.runtime_stats = processInfo.runtimeStats
+  }
+
   // failed 时附加错误详情
   if (processInfo.status === 'failed') {
     if (processInfo.errorSummary) {
@@ -250,6 +286,7 @@ function buildStatusResponse(
       ? [
           `查看日志: ocean_sr_train_status({ action: "logs", process_id: "${process_id}", tail: 50 })`,
           `等待完成: ocean_sr_train_status({ action: "wait", process_id: "${process_id}", timeout: 120 })`,
+          `等待推送: ocean_sr_train_status({ action: "watch", process_id: "${process_id}", timeout: 300 })`,
           `终止训练: ocean_sr_train_status({ action: "kill", process_id: "${process_id}" })`,
         ]
       : [
@@ -257,6 +294,20 @@ function buildStatusResponse(
         ]
 
   return response
+}
+
+
+function getNotificationMessage(type?: string): string {
+  switch (type) {
+    case 'training_start':
+      return '训练启动成功，已开始执行。'
+    case 'training_error':
+      return '训练过程中捕获到错误事件。'
+    case 'process_exit':
+      return '训练进程已结束。'
+    default:
+      return '收到训练关键事件。'
+  }
 }
 
 function formatDuration(ms: number): string {
