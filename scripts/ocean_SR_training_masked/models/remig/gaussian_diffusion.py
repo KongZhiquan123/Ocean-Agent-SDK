@@ -1,3 +1,18 @@
+"""
+ReMiG Gaussian Diffusion.
+
+@author Leizheng
+@date 2026-02-06
+@version 1.3.0
+
+@changelog
+  - 2026-02-11 Leizheng: v1.3.0
+    - 添加 __call__ 方法，兼容 DDPM/SR3 trainer 的 model({'SR': x, 'HR': y}) 调用模式
+    - 修复 training_losses 中 pred_zstart 未定义的 NameError
+    - 初始化 A_module/G_module/beta_corr 避免推理时 AttributeError
+    - 修复之前版本 timestep_respacing 和 self.kappa 的问题
+"""
+
 import enum
 import math
 
@@ -133,9 +148,12 @@ class _WrappedModel:
         return self.model(x, new_ts, **kwargs)
 
 
-class GaussianDiffusion:
+class GaussianDiffusion(th.nn.Module):
     """
     Utilities for training and sampling diffusion models.
+
+    Inherits from nn.Module for compatibility with BaseTrainer
+    (to/train/eval/parameters/state_dict).
 
     :param sqrt_etas: a 1-D numpy array of etas for each diffusion timestep,
                 starting at T and going to 1.
@@ -149,6 +167,7 @@ class GaussianDiffusion:
     """
 
     def __init__(self, model, model_args):
+        super().__init__()
         self.model = model
         self.model_args = model_args
         self.image_size = model_args.get('image_size', None)
@@ -163,7 +182,8 @@ class GaussianDiffusion:
             kappa=model_args.get('kappa', 1.0),
             kwargs=model_args.get('schedule_kwargs', None),
         )
-        
+
+        timestep_respacing = model_args.get('timestep_respacing', None)
         if timestep_respacing is None:
             timestep_respacing = steps
 
@@ -194,7 +214,7 @@ class GaussianDiffusion:
         self.alpha = self.etas - self.etas_prev
 
         # calculations for posterior q(x_{t-1} | x_t, x_0)
-        self.posterior_variance = kappa**2 * self.etas_prev / self.etas * self.alpha
+        self.posterior_variance = self.kappa**2 * self.etas_prev / self.etas * self.alpha
         self.posterior_variance_clipped = np.append(
                 self.posterior_variance[1], self.posterior_variance[1:]
                 )
@@ -204,7 +224,9 @@ class GaussianDiffusion:
         self.posterior_mean_coef1 = self.etas_prev / self.etas
         self.posterior_mean_coef2 = self.alpha / self.etas
 
-        model_mean_type = model_args.get('model_mean_type', 'xstart')
+        model_mean_type = model_args.get('model_mean_type', None)
+        if model_mean_type is None:
+            model_mean_type = model_args.get('predict_type', 'xstart')
         if model_mean_type == 'xstart':
             self.model_mean_type = ModelMeanType.START_X
         elif model_mean_type == 'epsilon':
@@ -216,17 +238,49 @@ class GaussianDiffusion:
         else:
             raise ValueError(f'Unknown model_mean_type {model_mean_type}')
         # weight for the mse loss
-        if model_mean_type in [ModelMeanType.START_X, ModelMeanType.RESIDUAL]:
+        if self.model_mean_type in [ModelMeanType.START_X, ModelMeanType.RESIDUAL]:
             weight_loss_mse = 0.5 / self.posterior_variance_clipped * (self.alpha / self.etas)**2
-        elif model_mean_type in [ModelMeanType.EPSILON, ModelMeanType.EPSILON_SCALE]  :
+        elif self.model_mean_type in [ModelMeanType.EPSILON, ModelMeanType.EPSILON_SCALE]  :
             weight_loss_mse = 0.5 / self.posterior_variance_clipped * (
-                    kappa * self.alpha / ((1-self.etas) * self.sqrt_etas)
+                    self.kappa * self.alpha / ((1-self.etas) * self.sqrt_etas)
                     )**2
         else:
-            raise NotImplementedError(model_mean_type)
+            raise NotImplementedError(self.model_mean_type)
 
         # self.weight_loss_mse = np.append(weight_loss_mse[1],  weight_loss_mse[1:])
         self.weight_loss_mse = weight_loss_mse
+
+        # Physics-guided correction modules (optional, set externally)
+        self.A_module = None
+        self.G_module = None
+        self.beta_corr = None
+
+    def forward(self, data):
+        """
+        Training call compatible with DDPM/SR3 trainer pattern.
+
+        :param data: dict with 'SR' (low-res [B,C,H_lr,W_lr]) and 'HR' (high-res [B,C,H,W]).
+        :return: scalar loss tensor (total MSE sum).
+        """
+        x = data['SR']
+        y = data['HR']
+
+        if x.shape[2:] != y.shape[2:]:
+            x_up = F.interpolate(x, size=y.shape[2:], mode='bicubic', align_corners=False)
+        else:
+            x_up = x
+
+        B = y.shape[0]
+        device = y.device
+        t = th.randint(0, self.num_timesteps, size=(B,), device=device)
+        model_kwargs = {'lq': x_up}
+
+        loss, _, _ = self.training_losses(
+            x_start=y, y=x_up, t=t,
+            loss_fn=lambda pred, tgt: ((pred - tgt) ** 2).sum(),
+            first_stage_model=None, model_kwargs=model_kwargs,
+        )
+        return loss
 
     def q_mean_variance(self, x_start, y, t):
         """
@@ -520,6 +574,12 @@ class GaussianDiffusion:
             device = next(self.model.parameters()).device
         z_y = self.encode_first_stage(y, first_stage_model, up_sample=True)
 
+        # Auto-set lq conditioning for UNet (upsampled LR)
+        if model_kwargs is None:
+            model_kwargs = {}
+        if 'lq' not in model_kwargs:
+            model_kwargs['lq'] = z_y
+
         # generating noise
         if noise is None:
             noise = th.randn_like(z_y)
@@ -554,10 +614,10 @@ class GaussianDiffusion:
         data_dtype = z_sample.dtype
 
         if consistencydecoder is None:
-            pass
-            # model = first_stage_model
-            # decoder = first_stage_model.decode
-            # model_dtype = next(model.parameters()).dtype
+            model = first_stage_model
+            if first_stage_model is not None:
+                decoder = first_stage_model.decode
+                model_dtype = next(model.parameters()).dtype
         else:
             model = consistencydecoder
             decoder = consistencydecoder
@@ -578,13 +638,13 @@ class GaussianDiffusion:
 
     def encode_first_stage(self, y, first_stage_model, up_sample=False):
         data_dtype = y.dtype
-        # model_dtype = next(first_stage_model.parameters()).dtype
         if up_sample and self.sf != 1:
             y = F.interpolate(y, scale_factor=self.sf, mode='bicubic')
-            
+
         if first_stage_model is None:
             return y
         else:
+            model_dtype = next(first_stage_model.parameters()).dtype
             if model_dtype != data_dtype:
                 y = y.type(model_dtype)
             with th.no_grad():
@@ -651,6 +711,22 @@ class GaussianDiffusion:
         }[self.model_mean_type]
         assert model_output.shape == target.shape == z_start.shape
         loss = loss_fn(model_output, target)
+
+        # Compute pred_zstart for diagnostics
+        if self.model_mean_type == ModelMeanType.START_X:
+            pred_zstart = model_output
+        elif self.model_mean_type == ModelMeanType.RESIDUAL:
+            pred_zstart = z_y - model_output
+        elif self.model_mean_type == ModelMeanType.EPSILON:
+            pred_zstart = self._predict_xstart_from_eps(
+                x_t=z_t, y=z_y, t=t, eps=model_output
+            )
+        elif self.model_mean_type == ModelMeanType.EPSILON_SCALE:
+            pred_zstart = self._predict_xstart_from_eps_scale(
+                x_t=z_t, y=z_y, t=t, eps=model_output
+            )
+        else:
+            pred_zstart = None
 
         return loss, z_t, pred_zstart
     

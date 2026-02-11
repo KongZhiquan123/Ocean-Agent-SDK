@@ -4,9 +4,12 @@
 @description 根据参数生成训练配置 YAML 文件
 @author Leizheng
 @date 2026-02-09
-@version 3.9.0
+@version 3.10.0
 
 @changelog
+  - 2026-02-11 Leizheng: v3.10.0 ResShift divisor 修正为 64
+    - Swin Attention window_size=8 要求最深层特征图可被 8 整除
+    - 旧值 8 导致 auto-patch 计算出不兼容尺寸（如 200），训练时 reshape 失败
   - 2026-02-10 Leizheng: v3.9.0 auto-patch 逻辑统一为配置生成时唯一入口
     - 区分 'auto'(未指定) / None(显式禁用) / int(显式值) 三种 patch_size 输入
     - OceanNPY 不再重复计算 auto-patch，只读取配置值
@@ -152,13 +155,19 @@ def compute_model_divisor(model_name: str, model_config: dict) -> int:
 
     Returns:
         divisor (int): 输入空间尺寸必须能被此值整除。
-            - DDPM/SR3/ReMiG/ResShift: 2^(len(channel_mults)-1)，通常 = 32
+            - ResShift: 64（downsample 2^3=8 × Swin window_size=8）
+            - DDPM/SR3/ReMiG: 2^(len(channel_mults)-1)，通常 = 32
             - UNet2d: 16（4 次 MaxPool）
             - SwinIR/FNO2d/EDSR/HiNOTE/M2NO2d: 1（无约束）
     """
     DIFFUSION_LIKE = {"ResShift", "Resshift"}
 
-    if model_name in DIFFUSION_MODELS or model_name in DIFFUSION_LIKE:
+    if model_name in DIFFUSION_LIKE:
+        # ResShift: 2^(len(channel_mult)-1) = 8 的下采样，
+        # 但 Swin Attention window_size=8 要求最深层特征图可被 8 整除
+        # 所以 divisor = 8 * 8 = 64
+        return 64
+    if model_name in DIFFUSION_MODELS:
         channel_mults = model_config.get(
             "channel_mults",
             model_config.get("channel_mult", [1, 1, 2, 2, 4, 4])
@@ -505,6 +514,23 @@ def generate_config(params):
     template_cfg = load_template_config(model_name)
     if template_cfg:
         config = deep_merge(template_cfg, config)
+
+    # ReMiG: 模板 remig.yaml 的 resshift section 含默认值（NavierStokes 1通道 64x64）
+    # 需要动态覆盖为实际数据集参数
+    if model_name == "ReMiG" and "resshift" in config:
+        rs_model_params = config["resshift"].get("model", {}).get("params", {})
+        rs_diff_params = config["resshift"].get("diffusion", {}).get("params", {})
+        image_size = patch_size if patch_size else hr_shape[0]
+        # 更新 UNet 参数
+        rs_model_params["in_channels"] = n_channels
+        rs_model_params["out_channels"] = n_channels
+        rs_model_params["image_size"] = image_size
+        rs_model_params["lq_size"] = image_size
+        # 更新 Diffusion 参数
+        rs_diff_params["sf"] = scale
+        # 更新 m2no_params（如果存在）
+        if "m2no_params" in rs_diff_params:
+            rs_diff_params["m2no_params"]["in_channels"] = n_channels
 
     if model_name in DIFFUSION_MODELS:
         try:

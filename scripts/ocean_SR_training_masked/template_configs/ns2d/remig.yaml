@@ -28,7 +28,7 @@ resshift:
       lq_size: 64
 
   diffusion:
-    target: models.remig.script_util.create_gaussian_diffusion
+    target: models.remig.gaussian_diffusion.GaussianDiffusion
     params:
       sf: 4
       schedule_name: exponential

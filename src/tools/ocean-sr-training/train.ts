@@ -7,9 +7,12 @@
  * @author Leizheng
  * @contributors kongzhiquan
  * @date 2026-02-09
- * @version 4.2.7
+ * @version 4.3.0
  *
  * @changelog
+ *   - 2026-02-11 Leizheng: v4.3.0 ResShift divisor 修正 + TOKEN_INVALID GPU 信息
+ *     - ResShift divisor 8→64（Swin window_size=8）
+ *     - TOKEN_INVALID 状态下也获取 GPU 信息供重新确认
  *   - 2026-02-09 Leizheng: v4.2.7 FFT 模型 AMP 默认策略修复 + 模型支持性预检
  *   - 2026-02-09 Leizheng: v4.2.6 默认 batch_size 下调为 4 + 默认开启 gradient_checkpointing
  *   - 2026-02-09 Leizheng: v4.2.5 训练前输出尺寸预检 + 默认 batch_size 下调
@@ -157,8 +160,8 @@ function countPowerOfTwoFactor(value: number): number {
 
 function getModelDivisor(modelName?: string): number {
   if (!modelName) return 1
-  // ResShift 使用 channel_mult=[1,2,2,4]，divisor = 2^3 = 8（优先于通用扩散模型的 32）
-  if (modelName === 'Resshift' || modelName === 'ResShift') return 8
+  // ResShift: downsample 2^3=8, Swin window_size=8, divisor=8*8=64
+  if (modelName === 'Resshift' || modelName === 'ResShift') return 64
   if (DIFFUSION_MODELS.has(modelName)) return 32
   if (modelName === 'UNet2d') return 16
   return 1
@@ -758,7 +761,8 @@ export const oceanSrTrainTool = defineTool({
       // 阶段3+需要 GPU 信息
       if (
         stateCheck.currentState === TrainingState.AWAITING_PARAMETERS ||
-        stateCheck.currentState === TrainingState.AWAITING_EXECUTION
+        stateCheck.currentState === TrainingState.AWAITING_EXECUTION ||
+        stateCheck.currentState === TrainingState.TOKEN_INVALID
       ) {
         const gpuScript = path.join(trainingDir, 'check_gpu.py')
         const gpuResult = await ctx.sandbox.exec(
@@ -1027,6 +1031,18 @@ export const oceanSrTrainTool = defineTool({
       )
 
       if (shapeResult.code !== 0) {
+        // 优先从 stdout 提取 tagged JSON（stderr 可能只含 FutureWarning 等无关警告）
+        const shapeInfoOnError = extractTaggedJson(shapeResult.stdout, 'shape_check')
+        if (shapeInfoOnError) {
+          return {
+            status: 'error',
+            error: shapeInfoOnError.error ?? `输出尺寸预检失败 (exit code ${shapeResult.code})`,
+            reason: shapeInfoOnError.reason ?? '无法完成模型输出尺寸检查',
+            details: shapeInfoOnError.details,
+            suggestion: '请检查模型配置或数据目录是否可用'
+          }
+        }
+        // stdout 无结构化输出时才回退到 stderr
         return {
           status: 'error',
           error: `输出尺寸预检失败: ${shapeResult.stderr || shapeResult.stdout}`,

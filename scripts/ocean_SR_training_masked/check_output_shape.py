@@ -57,6 +57,7 @@ def main():
     model_entry = _model_dict.get(model_name)
     diffusion_entry = None
     resshift_names = {'Resshift', 'ResShift'}
+    remig_names = {'ReMiG'}
     if isinstance(model_entry, dict):
         diffusion_entry = model_entry
     elif model_entry is None:
@@ -273,6 +274,78 @@ def main():
                         'status': 'error',
                         'error': f'ResShift preflight failed: {exc}',
                         'reason': 'Exception during Resshift preflight',
+                        'details': {
+                            'model': model_name,
+                        },
+                    }
+                    emit(result)
+                    return 1
+
+            if model_name in remig_names:
+                resshift_cfg = cfg.get('resshift')
+                if not isinstance(resshift_cfg, dict):
+                    result = {
+                        'status': 'error',
+                        'error': 'Missing resshift config',
+                        'reason': 'resshift section is required for ReMiG preflight',
+                        'details': {
+                            'model': model_name,
+                        },
+                    }
+                    emit(result)
+                    return 0
+
+                try:
+                    import torch.nn.functional as F
+
+                    model_params = resshift_cfg.get('model', {}).get('params', {})
+                    diffusion_params = resshift_cfg.get('diffusion', {}).get('params', {})
+
+                    # ReMiG uses _ddpm_dict classes directly (not get_obj_from_str)
+                    remig_model_cls = _ddpm_dict[model_name]['model']
+                    remig_diff_cls = _ddpm_dict[model_name]['diffusion']
+
+                    # UNetModelSwin takes model_args dict, not **kwargs
+                    unet = remig_model_cls(model_params)
+                    unet = unet.to(device)
+                    unet.eval()
+
+                    diffusion = remig_diff_cls(unet, model_args=diffusion_params)
+
+                    x_up = F.interpolate(x_nchw, size=y_nchw.shape[2:], mode='bicubic', align_corners=False)
+                    with torch.no_grad():
+                        loss = diffusion({'SR': x_up, 'HR': y_nchw})
+
+                    if not isinstance(loss, torch.Tensor):
+                        result = {
+                            'status': 'error',
+                            'error': 'ReMiG output is not a Tensor',
+                            'reason': 'Unsupported diffusion output type',
+                            'details': {
+                                'output_type': str(type(loss)),
+                                'model': model_name,
+                            },
+                        }
+                        emit(result)
+                        return 0
+
+                    result = {
+                        'status': 'ok',
+                        'details': {
+                            'lr_shape': [lr_h, lr_w, lr_c],
+                            'hr_shape': [hr_h, hr_w, hr_c],
+                            'model': model_name,
+                            'kind': 'diffusion',
+                            'note': 'remig_forward_checked',
+                        },
+                    }
+                    emit(result)
+                    return 0
+                except Exception as exc:
+                    result = {
+                        'status': 'error',
+                        'error': f'ReMiG preflight failed: {exc}',
+                        'reason': 'Exception during ReMiG preflight',
                         'details': {
                             'model': model_name,
                         },

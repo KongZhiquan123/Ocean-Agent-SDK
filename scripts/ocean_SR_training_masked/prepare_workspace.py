@@ -140,6 +140,7 @@ def main():
             '_model_dict = {}\n\n'
             '_ddpm_dict = {}\n'
         )
+        pkg_name = "resshift"
     elif is_diffusion:
         # 扩散模型：entry = {"model": ddpm.UNet, "diffusion": ddpm.GaussianDiffusion}
         model_cls = model_entry['model']

@@ -6,9 +6,15 @@
  * @author Leizheng
  * @contributors kongzhiquan
  * @date 2026-02-09
- * @version 2.4.5
+ * @version 2.5.0
  *
  * @changelog
+ *   - 2026-02-11 Leizheng: v2.5.0 Token 校验恢复 + ResShift divisor 修正
+ *     - 恢复 determineCurrentState() 中的 token 强校验（v2.3.0 误禁用）
+ *     - use_amp 从 token 签名中移除（系统自动调整不触发振荡）
+ *     - TOKEN_SALT 升级 v1→v2，作废旧 token
+ *     - TOKEN_INVALID 分支返回详细参数快照
+ *     - ResShift divisor 8→64（Swin window_size=8）
  *   - 2026-02-09 Leizheng: v2.4.5 FFT 模型 AMP 默认策略 + 模型列表支持标记
  *   - 2026-02-09 Leizheng: v2.4.4 默认 batch_size 下调为 4 + 默认开启 gradient_checkpointing
  *   - 2026-02-09 Leizheng: v2.4.3 默认 batch_size 下调为 16
@@ -78,8 +84,8 @@ function gcd(a: number, b: number): number {
 
 function getModelDivisor(modelName?: string): number {
   if (!modelName) return 1
-  // ResShift 使用 channel_mult=[1,2,2,4]，divisor = 2^3 = 8
-  if (modelName === 'Resshift' || modelName === 'ResShift') return 8
+  // ResShift: downsample 2^3=8, Swin window_size=8, divisor=8*8=64
+  if (modelName === 'Resshift' || modelName === 'ResShift') return 64
   // 其他扩散模型使用 channel_mults=[1,1,2,2,4,4]，divisor = 2^5 = 32
   if (['DDPM', 'SR3', 'MG-DDPM', 'ReMiG'].includes(modelName)) {
     return 32
@@ -313,7 +319,7 @@ export interface ModelInfo {
 export class TrainingWorkflow {
   private params: TrainingWorkflowParams
 
-  private static readonly TOKEN_SALT = 'ocean-sr-training-v1'
+  private static readonly TOKEN_SALT = 'ocean-sr-training-v2'
 
   constructor(params: TrainingWorkflowParams) {
     // 统一填充 schema 声明的默认值，消除展示层（??）和判断层（!== undefined）的不一致
@@ -347,7 +353,8 @@ export class TrainingWorkflow {
    */
   generateConfirmationToken(): string {
     const { params } = this
-    const resolvedUseAmp = resolveUseAmp(params)
+    // use_amp 不参与签名：系统可能自动调整 use_amp（如 OOM 防护），
+    // 不应因此导致 token 失效引发振荡
     const tokenData = {
       dataset_root: params.dataset_root,
       log_dir: params.log_dir,
@@ -361,7 +368,6 @@ export class TrainingWorkflow {
       device_ids: params.device_ids?.join(','),
       distribute: params.distribute,
       distribute_mode: params.distribute_mode,
-      use_amp: resolvedUseAmp,
       gradient_checkpointing: params.gradient_checkpointing,
       patch_size: params.patch_size,
     }
@@ -385,14 +391,22 @@ export class TrainingWorkflow {
     const { params } = this
 
     // ========== 阶段5: PASS ==========
-    // 简化：user_confirmed=true + 所有必需参数齐全即通过
-    // Token 仅供展示参考，不做强校验（避免 Agent 修改参数后 token 振荡）
+    // user_confirmed=true + 所有必需参数齐全 + Token 校验通过
     if (params.user_confirmed === true && this.hasAllRequiredParams()) {
+      if (!this.validateConfirmationToken()) {
+        return {
+          currentState: TrainingState.TOKEN_INVALID,
+          missingParams: [],
+          canProceed: false,
+          stageDescription: '参数已被修改，Token 校验失败，需重新确认',
+          tokenError: `Token 不匹配：用户确认后参数被修改（如 device_ids、batch_size 等），请重新走确认流程。提供的 token: ${params.confirmation_token ?? '(空)'}，期望 token: ${this.generateConfirmationToken()}`
+        }
+      }
       return {
         currentState: TrainingState.PASS,
         missingParams: [],
         canProceed: true,
-        stageDescription: '所有参数已确认，可以执行训练'
+        stageDescription: '所有参数已确认，Token 验证通过，可以执行训练'
       }
     }
 
@@ -510,12 +524,56 @@ export class TrainingWorkflow {
       case TrainingState.TOKEN_INVALID:
         return {
           status: TrainingState.TOKEN_INVALID,
-          message: stateCheck.tokenError || 'Token 验证失败',
+          message: `================================================================================
+                    ⚠️ Token 校验失败 — 参数已被修改
+================================================================================
+
+${stateCheck.tokenError || 'Token 验证失败'}
+
+用户确认后，有参数被修改（可能是 Agent 自动调整了 device_ids、batch_size、
+patch_size 等），导致 Token 失效。
+
+【当前参数快照】
+- dataset_root: ${this.params.dataset_root}
+- log_dir: ${this.params.log_dir}
+- model_name: ${this.params.model_name}
+- dyn_vars: ${this.params.dyn_vars?.join(', ')}
+- scale: ${this.params.scale}
+- epochs: ${this.params.epochs}
+- lr: ${this.params.lr}
+- batch_size: ${this.params.batch_size}
+- device_ids: [${this.params.device_ids?.join(', ')}]
+- distribute: ${this.params.distribute}
+- use_amp: ${resolveUseAmp(this.params)}（不参与 Token 签名，系统可自动调整）
+- gradient_checkpointing: ${this.params.gradient_checkpointing}
+- patch_size: ${this.params.patch_size ?? '未设置'}
+
+================================================================================
+
+请向用户重新展示以上参数，获得确认后使用新 Token 重新调用。
+
+================================================================================`,
           canExecute: false,
           data: {
             error_type: 'token_invalid',
             expected_token: this.generateConfirmationToken(),
-            provided_token: this.params.confirmation_token
+            provided_token: this.params.confirmation_token,
+            current_params: {
+              dataset_root: this.params.dataset_root,
+              log_dir: this.params.log_dir,
+              model_name: this.params.model_name,
+              dyn_vars: this.params.dyn_vars,
+              scale: this.params.scale,
+              epochs: this.params.epochs,
+              lr: this.params.lr,
+              batch_size: this.params.batch_size,
+              device_ids: this.params.device_ids,
+              distribute: this.params.distribute,
+              distribute_mode: this.params.distribute_mode,
+              use_amp: resolveUseAmp(this.params),
+              gradient_checkpointing: this.params.gradient_checkpointing,
+              patch_size: this.params.patch_size,
+            }
           }
         }
 

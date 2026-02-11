@@ -5,12 +5,15 @@
  * @author kongzhiquan
  * @contributors Leizheng
  * @date 2026-02-02
- * @version 1.5.0
+ * @version 1.6.0
  *
  * @changelog
+ *   - 2026-02-11 Leizheng: v1.6.0 sandbox allowPaths 添加 scripts 目录
+ *     - Agent 可使用 fs_read/fs_write 访问 scripts/ 下的训练框架代码
  *   - 2026-02-10 kongzhiquan: v1.5.0 新增 transformToolResult 集中格式转换器
  *     - 对 ocean_preprocess_full 工具结果做裁剪，只保留当前步骤进度信息
  *     - 未注册的工具名原样透传
+ *   - 2026-02-10 Leizheng: v1.5.0 SSE 输出截断 + 生产环境错误信息脱敏
  *   - 2026-02-08 Leizheng: v1.4.0 增加受控 bash 白名单与安全路径检查
  *   - 2026-02-07 Leizheng: v1.3.0 修复 KODE SDK 内部处理超时（5分钟→2小时）
  *   - 2026-02-07 Leizheng: v1.2.0 sandbox 添加 allowPaths: ['/data'] 允许访问数据目录
@@ -66,7 +69,7 @@ export async function createAgent(config: AgentConfig): Promise<Agent> {
   const sandboxConfig = {
     kind: 'local' as const,
     workDir: config.workingDir,
-    allowPaths: ['/data', `${process.cwd()}/.skills`], // 允许访问数据目录和技能目录
+    allowPaths: ['/data', `${process.cwd()}/.skills`, `${process.cwd()}/scripts`], // 允许访问数据目录、技能目录和脚本目录
   }
 
   const agent = await Agent.create(

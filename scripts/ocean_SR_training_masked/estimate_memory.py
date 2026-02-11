@@ -25,9 +25,12 @@ estimate_memory.py - 训练前 GPU 显存预估工具
 
 @author Leizheng
 @date 2026-02-07
-@version 1.0.0
+@version 1.0.1
 
 @changelog
+  - 2026-02-11 Leizheng: v1.0.1 修复 torch 局部变量遮蔽
+    - `import torch.utils.checkpoint` 改为 `from torch.utils import checkpoint`
+    - 避免 Python 将 torch 视为局部变量导致 UnboundLocalError
   - 2026-02-07 Leizheng: v1.0.0 初始版本
     - dry-run forward + backward 测量峰值显存
     - 支持 AMP / gradient_checkpointing / patch_size 组合
@@ -181,10 +184,10 @@ def estimate_memory(config_path, device_id=0):
         with torch.amp.autocast('cuda', enabled=use_amp):
             if is_diffusion:
                 if gradient_checkpointing:
-                    import torch.utils.checkpoint
+                    from torch.utils import checkpoint
                     def _forward(sr, hr):
                         return model({'SR': sr, 'HR': hr})
-                    pix_loss = torch.utils.checkpoint.checkpoint(
+                    pix_loss = checkpoint.checkpoint(
                         _forward, data['SR'], data['HR'], use_reentrant=False
                     )
                 else:
@@ -205,8 +208,8 @@ def estimate_memory(config_path, device_id=0):
                 loss = losses['mse']
             else:
                 if gradient_checkpointing:
-                    import torch.utils.checkpoint
-                    y_pred = torch.utils.checkpoint.checkpoint(
+                    from torch.utils import checkpoint
+                    y_pred = checkpoint.checkpoint(
                         model, x, use_reentrant=False
                     )
                 else:
