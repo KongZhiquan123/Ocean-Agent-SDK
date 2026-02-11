@@ -22,6 +22,10 @@ import { defineTool } from '@shareai-lab/kode-sdk'
 import { findFirstPythonPath } from '@/utils/python-manager'
 import path from 'node:path'
 
+function shellEscapeDouble(str: string): string {
+  return str.replace(/[\\"$`!]/g, '\\$&')
+}
+
 export interface MetricsResult {
   status: 'success' | 'error'
   config: {
@@ -91,14 +95,14 @@ export const oceanMetricsTool = defineTool({
     }
 
     // 2. 准备路径
-    const pythonCmd = `"${pythonPath}"`
+    const pythonCmd = `"${shellEscapeDouble(pythonPath)}"`
     const scriptPath = path.resolve(process.cwd(), 'scripts/ocean_preprocess/metrics.py')
     const tempDir = path.resolve(ctx.sandbox.workDir, 'ocean_preprocess_temp')
     const outputPath = path.join(tempDir, 'metrics_result.json')
 
     // 3. 构建命令
-    const splitsArg = splits.join(' ')
-    const cmd = `${pythonCmd} "${scriptPath}" --dataset_root "${dataset_root}" --scale ${scale} --splits ${splitsArg} --output "${outputPath}"`
+    const splitsArg = splits.map((split) => `"${shellEscapeDouble(String(split))}"`).join(' ')
+    const cmd = `${pythonCmd} "${shellEscapeDouble(scriptPath)}" --dataset_root "${shellEscapeDouble(dataset_root)}" --scale ${scale} --splits ${splitsArg} --output "${shellEscapeDouble(outputPath)}"`
 
     // 4. 执行 Python 脚本
     const result = await ctx.sandbox.exec(cmd, { timeoutMs: 600000 })

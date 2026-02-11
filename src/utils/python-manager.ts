@@ -39,7 +39,13 @@ export function findFirstPythonPath(): string | undefined {
 // 查找包含指定模块的 Python 路径（如 findPythonWithModule('torch')）
 // 会缓存结果避免重复检测
 const _moduleCache = new Map<string, string | undefined>()
+/** 合法的 Python 模块名格式（防止命令注入） */
+const MODULE_NAME_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_.]*$/
 export function findPythonWithModule(moduleName: string): string | undefined {
+  if (!MODULE_NAME_PATTERN.test(moduleName)) {
+    console.error(`[python-manager] Invalid module name: "${moduleName}"`)
+    return undefined
+  }
   if (_moduleCache.has(moduleName)) {
     return _moduleCache.get(moduleName)
   }

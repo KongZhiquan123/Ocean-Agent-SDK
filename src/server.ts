@@ -5,9 +5,10 @@
  *              支持 SSE 流式对话和多轮会话管理
  * Author: leizheng, kongzhiquan
  * Time: 2026-02-02
- * Version: 2.1.0
+ * Version: 2.2.0
  *
  * Changelog:
+ *   - 2026-02-10 Leizheng: v2.2.0 速率限制 + 请求体大小限制 + 优雅关闭修复
  *   - 2026-02-07 kongzhiquan: v2.1.0 服务器关闭时清理训练进程
  *   - 2026-02-03 kongzhiquan: v2.0.0 适配持久化会话管理器
  *   - 2026-02-02 leizheng: v1.2.0 简化为直接使用 agentId 复用会话
@@ -35,11 +36,55 @@ import { trainingProcessManager } from './utils/training-process-manager'
 validateConfig()
 
 const app = express()
-app.use(express.json())
+app.use(express.json({ limit: '2mb' }))
 
 console.log(
   `[server] 启动中，端口=${config.port}, NODE_ENV=${process.env.NODE_ENV}`,
 )
+
+// ========================================
+// 简单的内存速率限制器
+// ========================================
+
+const RATE_LIMIT_WINDOW_MS = 60 * 1000 // 1 分钟窗口
+const RATE_LIMIT_MAX_REQUESTS = 30      // 每窗口最多 30 请求
+
+const rateLimitMap = new Map<string, { count: number; resetAt: number }>()
+
+function getRateLimitKey(req: Request): string {
+  const forwarded = req.headers['x-forwarded-for']
+  if (typeof forwarded === 'string') return forwarded.split(',')[0].trim()
+  return req.ip || 'unknown'
+}
+
+// 定期清理过期条目（每 5 分钟），防止 Map 无限增长
+setInterval(() => {
+  const now = Date.now()
+  for (const [key, entry] of rateLimitMap) {
+    if (now > entry.resetAt) rateLimitMap.delete(key)
+  }
+}, 5 * 60 * 1000).unref()
+
+function rateLimitMiddleware(req: Request, res: Response, next: NextFunction): void {
+  const key = getRateLimitKey(req)
+  const now = Date.now()
+  let entry = rateLimitMap.get(key)
+
+  if (!entry || now > entry.resetAt) {
+    entry = { count: 0, resetAt: now + RATE_LIMIT_WINDOW_MS }
+    rateLimitMap.set(key, entry)
+  }
+
+  entry.count++
+  if (entry.count > RATE_LIMIT_MAX_REQUESTS) {
+    const retryAfter = Math.ceil((entry.resetAt - now) / 1000)
+    res.setHeader('Retry-After', String(retryAfter))
+    sendError(res, 429, 'RATE_LIMITED', `Rate limit exceeded. Retry after ${retryAfter}s`)
+    return
+  }
+
+  next()
+}
 
 // ========================================
 // SSE 工具函数
@@ -120,7 +165,7 @@ app.get('/health', (req: Request, res: Response) => {
 // @modified 2026-02-02 leizheng: 使用 agentId 复用会话
 // ========================================
 
-app.post('/api/chat/stream', requireAuth, async (req: Request, res: Response) => {
+app.post('/api/chat/stream', rateLimitMiddleware, requireAuth, async (req: Request, res: Response) => {
   const reqId = res.locals.reqId
   const { message, mode = 'edit', outputsPath, context = {}, agentId: inputAgentId } = req.body
 
@@ -310,25 +355,49 @@ const server = app.listen(config.port, () => {
   console.log(`[server] 服务已启动在 http://localhost:${config.port}`)
 })
 
-// 关闭
-process.on('SIGTERM', async () => {
-  console.log('[server] 收到 SIGTERM 信号，开始关闭...')
-  conversationManager.shutdown()
-  await trainingProcessManager.shutdown()
+// 优雅关闭（防止重复执行）
+let isShuttingDown = false
+async function gracefulShutdown(signal: string): Promise<void> {
+  if (isShuttingDown) return
+  isShuttingDown = true
+
+  console.log(`[server] 收到 ${signal} 信号，开始关闭...`)
+
+  // 1. 先停止接受新连接
   server.close(() => {
-    console.log('[server] 服务器已关闭')
-    process.exit(0)
+    console.log('[server] HTTP 服务器已停止接受新连接')
   })
+
+  // 2. 清理会话管理器
+  conversationManager.shutdown()
+
+  // 3. 等待训练进程关闭
+  try {
+    await trainingProcessManager.shutdown()
+  } catch (err) {
+    console.error('[server] 训练进程关闭失败:', err)
+  }
+
+  console.log('[server] 服务器已关闭')
+  process.exit(0)
+}
+
+// 硬超时保护：如果优雅关闭超过 15 秒，强制退出
+function scheduleForceExit(): void {
+  setTimeout(() => {
+    console.error('[server] 优雅关闭超时，强制退出')
+    process.exit(1)
+  }, 15000).unref()
+}
+
+process.on('SIGTERM', () => {
+  scheduleForceExit()
+  gracefulShutdown('SIGTERM')
 })
 
-process.on('SIGINT', async () => {
-  console.log('[server] 收到 SIGINT 信号，开始关闭...')
-  conversationManager.shutdown()
-  await trainingProcessManager.shutdown()
-  server.close(() => {
-    console.log('[server] 服务器已关闭')
-    process.exit(0)
-  })
+process.on('SIGINT', () => {
+  scheduleForceExit()
+  gracefulShutdown('SIGINT')
 })
 
 // 全局错误处理

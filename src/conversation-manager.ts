@@ -6,9 +6,10 @@
  *              不再维护内存 Map，节省内存资源
  * Author: leizheng, kongzhiquan
  * Time: 2026-02-02
- * Version: 2.0.0
+ * Version: 2.1.0
  *
  * Changelog:
+ *   - 2026-02-10 Leizheng: v2.1.0 agentId 格式验证 + 路径遍历防护
  *   - 2026-02-03 kongzhiquan: v2.0.0 重构为从磁盘持久化读取，移除内存缓存和过期清理
  *   - 2026-02-02 leizheng: v1.1.0 简化为直接使用 agentId
  *   - 2026-02-02 leizheng: v1.0.0 初始版本
@@ -27,6 +28,9 @@ interface ConversationManagerConfig {
   storePath?: string  // .kode 文件夹路径
 }
 
+// agentId 格式：agt- 前缀 + 字母数字/下划线/连字符（防路径遍历）
+const AGENT_ID_PATTERN = /^agt-[a-zA-Z0-9_-]+$/
+
 // ========================================
 // 会话管理器类
 // @author leizheng, kongzhiquan
@@ -35,18 +39,32 @@ interface ConversationManagerConfig {
 
 class ConversationManager {
   private storePath: string
+  private resolvedStorePath: string
 
   constructor(config: ConversationManagerConfig = {}) {
     this.storePath = config.storePath || './.kode'
+    this.resolvedStorePath = path.resolve(this.storePath)
     console.log('[ConversationManager] 初始化完成', {
       storePath: this.storePath,
     })
   }
 
   /**
+   * 验证 agentId 格式，防止路径遍历攻击
+   */
+  private isValidAgentId(agentId: string): boolean {
+    if (!agentId || typeof agentId !== 'string') return false
+    if (!AGENT_ID_PATTERN.test(agentId)) return false
+    // 防御性检查：resolve 后路径必须在 storePath 内
+    const resolved = path.resolve(this.resolvedStorePath, agentId)
+    return resolved.startsWith(this.resolvedStorePath + path.sep)
+  }
+
+  /**
    * 检查 agentId 对应的会话是否存在于磁盘
    */
   hasSession(agentId: string): boolean {
+    if (!this.isValidAgentId(agentId)) return false
     const agentDir = path.join(this.storePath, agentId)
     const metaPath = path.join(agentDir, 'meta.json')
 
@@ -62,6 +80,10 @@ class ConversationManager {
    * 从磁盘加载 agentId 对应的 Agent 实例
    */
   async getAgent(agentId: string): Promise<Agent | null> {
+    if (!this.isValidAgentId(agentId)) {
+      console.warn(`[ConversationManager] 非法 agentId 格式: ${agentId}`)
+      return null
+    }
     if (!this.hasSession(agentId)) {
       console.log(`[ConversationManager] 会话不存在: ${agentId}`)
       return null
@@ -105,7 +127,7 @@ class ConversationManager {
 
       const entries = fs.readdirSync(this.storePath, { withFileTypes: true })
       return entries
-        .filter(entry => entry.isDirectory() && entry.name.startsWith('agt-'))
+        .filter(entry => entry.isDirectory() && AGENT_ID_PATTERN.test(entry.name))
         .map(entry => entry.name)
     } catch (error) {
       console.error('[ConversationManager] 列出会话失败:', error)
@@ -128,6 +150,10 @@ class ConversationManager {
    * 删除指定会话（从磁盘删除）
    */
   removeSession(agentId: string): boolean {
+    if (!this.isValidAgentId(agentId)) {
+      console.warn(`[ConversationManager] 拒绝删除非法 agentId: ${agentId}`)
+      return false
+    }
     const agentDir = path.join(this.storePath, agentId)
 
     try {

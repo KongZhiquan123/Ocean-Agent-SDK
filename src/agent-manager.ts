@@ -5,9 +5,10 @@
  * @author kongzhiquan
  * @contributors Leizheng
  * @date 2026-02-02
- * @version 1.4.0
+ * @version 1.5.0
  *
  * @changelog
+ *   - 2026-02-10 Leizheng: v1.5.0 SSE 输出截断 + 生产环境错误信息脱敏
  *   - 2026-02-08 Leizheng: v1.4.0 增加受控 bash 白名单与安全路径检查
  *   - 2026-02-07 Leizheng: v1.3.0 修复 KODE SDK 内部处理超时（5分钟→2小时）
  *   - 2026-02-07 Leizheng: v1.2.0 sandbox 添加 allowPaths: ['/data'] 允许访问数据目录
@@ -245,6 +246,25 @@ export function setupAgentHandlers(agent: Agent, reqId: string): void {
 // Progress 事件转换为 SSE 事件
 // ========================================
 
+/** SSE 输出截断：防止大量文件内容通过 SSE 传输导致内存/带宽问题 */
+const MAX_SSE_FIELD_LENGTH = 50000 // 50KB
+function truncateForSSE(value: unknown): unknown {
+  if (value === null || value === undefined) return value
+  if (typeof value === 'string') {
+    if (value.length > MAX_SSE_FIELD_LENGTH) {
+      return value.slice(0, MAX_SSE_FIELD_LENGTH) + `\n... [truncated, ${value.length} chars total]`
+    }
+    return value
+  }
+  if (typeof value === 'object') {
+    const str = JSON.stringify(value)
+    if (str.length > MAX_SSE_FIELD_LENGTH) {
+      return { _truncated: true, preview: str.slice(0, 1000) + '...' }
+    }
+  }
+  return value
+}
+
 export function convertProgressToSSE(event: ProgressEvent, reqId: string): SSEEvent | null {
   console.log(`[agent-manager] [req ${reqId}] Progress 事件: ${event.type}`)
 
@@ -261,7 +281,7 @@ export function convertProgressToSSE(event: ProgressEvent, reqId: string): SSEEv
         type: 'tool_use',
         tool: event.call.name,
         id: event.call.id,
-        input: event.call.inputPreview,
+        input: truncateForSSE(event.call.inputPreview),
         timestamp: Date.now(),
       }
 
@@ -269,7 +289,7 @@ export function convertProgressToSSE(event: ProgressEvent, reqId: string): SSEEv
       return {
         type: 'tool_result',
         tool_use_id: event.call.id,
-        result: event.call.result ?? null,
+        result: truncateForSSE(event.call.result ?? null),
         is_error: event.call.state === 'FAILED',
         timestamp: Date.now(),
       }
@@ -278,7 +298,9 @@ export function convertProgressToSSE(event: ProgressEvent, reqId: string): SSEEv
       return {
         type: 'tool_error',
         tool: event.call.name,
-        error: event.error,
+        error: process.env.NODE_ENV === 'production'
+          ? 'Tool execution failed'
+          : event.error,
         timestamp: Date.now(),
       }
 
