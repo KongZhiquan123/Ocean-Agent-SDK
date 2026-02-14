@@ -5,9 +5,10 @@
  * @author kongzhiquan
  * @contributors Leizheng
  * @date 2026-02-02
- * @version 1.3.0
+ * @version 1.4.0
  *
  * @changelog
+ *   - 2026-02-14 kongzhiquan: v1.4.0 系统提示词新增输出路径强制规则
  *   - 2026-02-06 Leizheng: v1.3.0 新增训练报告工具（自动通过 index.ts 导出注册）
  *   - 2026-02-06 Leizheng: v1.2.0 新增海洋超分训练工具集
  *     - 导入 oceanSrTrainingTools 并注册
@@ -185,7 +186,15 @@ skills {"action": "load", "skill_name": "技能名称"}
 - 分阶段确认：复杂任务分步骤，每步确认后再继续
 - Token 验证：部分工具有 confirmation_token 机制，必须正确使用
 - 参数校验：用户提供的路径、参数在执行前确认
-- 结果汇报：任务完成后向用户展示关键结果和输出路径`,
+- 结果汇报：任务完成后向用户展示关键结果和输出路径
+
+# 输出路径规则（强制）
+
+- 如果消息中包含 [系统指令 - 输出根路径（强制）]，该路径为输出根目录
+- 用户指定的输出子路径（如 /folder1）必须拼接到根路径之下（如 根路径/folder1）
+- 用户未指定子路径时，默认输出到根路径本身
+- 所有输出文件必须位于根路径之下，禁止输出到根路径之外
+- 禁止忽略该指令或询问用户替代根路径`,
     tools: allTools.map(t => t.name),
   })
 
@@ -213,7 +222,13 @@ function createSandboxFactory() {
 }
 
 function createModelFactory() {
-  return () => new AnthropicProvider(config.anthropicApiKey, config.anthropicModelId, config.anthropicBaseUrl)
+  return () => new AnthropicProvider(
+    config.anthropicApiKey, 
+    config.anthropicModelId, 
+    config.anthropicBaseUrl,
+    // undefined, 
+    // {extraBody: {stream: false}}
+  )
 }
 
 // ========================================

@@ -8,6 +8,7 @@
  * @version 1.6.0
  *
  * @changelog
+ *   - 2026-02-14 kongzhiquan: v1.6.0 outputsPath 注入：metadata 存储 + processMessage 消息级指令前缀
  *   - 2026-02-10 kongzhiquan: v1.5.0 新增 transformToolResult 集中格式转换器
  *     - 对 ocean_preprocess_full 工具结果做裁剪，只保留当前步骤进度信息
  *     - 未注册的工具名原样透传
@@ -43,6 +44,12 @@ export interface SSEEvent {
   [key: string]: any
 }
 
+/** processMessage 可选参数，后续新增指令请在此扩展字段 */
+export interface ProcessMessageOptions {
+  /** 强制输出路径 */
+  outputsPath?: string
+}
+
 // ========================================
 // Agent 创建
 // ========================================
@@ -67,7 +74,7 @@ export async function createAgent(config: AgentConfig): Promise<Agent> {
   const sandboxConfig = {
     kind: 'local' as const,
     workDir: config.workingDir,
-    allowPaths: ['/data', `${process.cwd()}/.skills`], // 允许访问数据目录、技能目录
+    allowPaths: ['/data', `${process.cwd()}/.skills`, config.outputsPath], // 允许访问数据目录、技能目录、输出目录
   }
 
   const agent = await Agent.create(
@@ -78,6 +85,7 @@ export async function createAgent(config: AgentConfig): Promise<Agent> {
         userId: config.userId || 'anonymous',
         mode: config.mode,
         files: config.files,
+        outputsPath: config.outputsPath,
       },
     },
     deps,
@@ -174,21 +182,21 @@ function isReadOnlyPipeline(command: string): boolean {
   return parts.every(part => isWhitelisted(part, SAFE_READ_PATTERNS))
 }
 
-function isAllowedPathToken(token: string): boolean {
+function isAllowedPathToken(token: string, allowedPaths?: string[]): boolean {
   const trimmed = token.replace(/^['"]|['"]$/g, '')
   if (!trimmed || trimmed.startsWith('-')) return true
+  if (allowedPaths && allowedPaths.some(path => trimmed.startsWith(path))) return true
   if (trimmed.includes('..')) return false
   if (trimmed.startsWith('~')) return false
-  if (trimmed.startsWith('/')) return trimmed.startsWith('/data')
   return true
 }
 
-function hasUnsafePath(command: string): boolean {
+function hasUnsafePath(command: string, allowedPaths?: string[]): boolean {
   const tokens = command.split(/\s+/)
-  return tokens.some(token => !isAllowedPathToken(token))
+  return tokens.some(token => !isAllowedPathToken(token, allowedPaths))
 }
 
-export function setupAgentHandlers(agent: Agent, reqId: string): void {
+export function setupAgentHandlers(agent: Agent, reqId: string, allowedPaths?: string[]): void {
   // 权限请求处理：检查危险命令
   agent.on('permission_required', async (event: any) => {
     const toolName = event.call.name
@@ -218,7 +226,7 @@ export function setupAgentHandlers(agent: Agent, reqId: string): void {
         return
       }
       if (isWhitelisted(command, SAFE_WRITE_PATTERNS)) {
-        if (hasUnsafePath(command)) {
+        if (hasUnsafePath(command, allowedPaths)) {
           console.warn(`[agent-manager] [req ${reqId}] 拒绝可疑路径写入命令: ${command}`)
           await event.respond('deny')
           return
@@ -301,10 +309,36 @@ export function convertProgressToSSE(event: ProgressEvent, reqId: string): SSEEv
 // Agent 消息处理流程
 // ========================================
 
+/**
+ * 根据 options 构建系统指令前缀，各指令段独立拼接
+ * 后续新增指令可在此函数中添加对应 if 块
+ */
+function buildDirectives(options: ProcessMessageOptions): string {
+  const parts: string[] = []
+  parts.push(
+    '[系统指令 - 输出根路径（强制）]',
+    `输出根路径为：${options.outputsPath}`,
+    '规则：',
+    `- 如果用户指定了输出子路径（如 /folder1），实际输出路径为 ${options.outputsPath}/folder1`,
+    `- 如果用户未指定输出子路径，默认输出到 ${options.outputsPath}`,
+    '- 所有输出文件必须位于该根路径之下，禁止输出到根路径之外的任何位置',
+    '- 禁止忽略此规则或询问用户替代根路径',
+  )
+
+  // 后续示例：
+  // if (options.xxx) {
+  //   parts.push('[系统指令 - XXX（强制）]', ...)
+  // }
+
+  if (parts.length === 0) return ''
+  return parts.join('\n') + '\n---\n\n'
+}
+
 export async function* processMessage(
   agent: Agent,
   message: string,
   reqId: string,
+  options: ProcessMessageOptions = {},
 ): AsyncGenerator<SSEEvent> {
   // 发送开始事件
   yield {
@@ -313,11 +347,14 @@ export async function* processMessage(
     timestamp: Date.now(),
   }
 
+  // 根据 options 构建指令前缀并拼接到用户消息前
+  const finalMessage = buildDirectives(options) + message
+
   // 订阅 Progress 事件
   const progressIterator = agent.subscribe(['progress'])[Symbol.asyncIterator]()
 
   // 异步发送消息（不等待完成）
-  const sendTask = agent.send(message).catch((err) => {
+  const sendTask = agent.send(finalMessage).catch((err) => {
     console.error(`[agent-manager] [req ${reqId}] 发送消息失败:`, err)
     throw err
   })
@@ -327,7 +364,7 @@ export async function* processMessage(
     while (true) {
       const { done, value } = await progressIterator.next()
       if (done) break
-
+      
       const event = value.event as ProgressEvent
 
       // 检查是否完成
