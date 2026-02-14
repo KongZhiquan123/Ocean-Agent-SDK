@@ -96,9 +96,6 @@ function shellEscapeDouble(str: string): string {
   return str.replace(/[\\"$`!]/g, '\\$&')
 }
 
-/** model_name 白名单格式（仅字母、数字、下划线、连字符） */
-const MODEL_NAME_PATTERN = /^[a-zA-Z0-9_-]+$/
-
 async function isPortFree(port: number): Promise<boolean> {
   return new Promise((resolve) => {
     const server = net.createServer()
@@ -701,13 +698,6 @@ export const oceanSrTrainTool = defineTool({
   },
 
   async exec(args, ctx) {
-    // model_name 格式白名单校验（防止 shell 注入）
-    if (args.model_name && typeof args.model_name === 'string') {
-      if (!MODEL_NAME_PATTERN.test(args.model_name)) {
-        throw new Error(`model_name 格式不合法: "${args.model_name}"。只允许字母、数字、下划线和连字符。`)
-      }
-    }
-
     // 训练工具需要 torch，优先查找安装了 torch 的 Python
     const pythonPath = findPythonWithModule('torch') || findFirstPythonPath()
     if (!pythonPath) {

@@ -82,6 +82,7 @@ async function chat(message: string, mode: 'ask' | 'edit' = 'edit'): Promise<str
     const body: any = {
       message,
       mode,
+      outputsPath: './test_outputs',
       context: {
         userId: 'test-user',
         workingDir: './work_ocean',

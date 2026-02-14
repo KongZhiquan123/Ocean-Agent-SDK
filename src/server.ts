@@ -5,9 +5,10 @@
  *              支持 SSE 流式对话和多轮会话管理
  * Author: leizheng, kongzhiquan
  * Time: 2026-02-02
- * Version: 2.2.0
+ * Version: 2.3.0
  *
  * Changelog:
+ *   - 2026-02-14 kongzhiquan: v2.3.0 传递 outputsPath 到 processMessage 以注入 Agent 指令
  *   - 2026-02-10 Leizheng: v2.2.0 速率限制 + 请求体大小限制 + 优雅关闭修复
  *   - 2026-02-07 kongzhiquan: v2.1.0 服务器关闭时清理训练进程
  *   - 2026-02-03 kongzhiquan: v2.0.0 适配持久化会话管理器
@@ -28,7 +29,8 @@ import {
 } from './agent-manager'
 import { conversationManager } from './conversation-manager'
 import { trainingProcessManager } from './utils/training-process-manager'
-
+import fs from 'fs'
+import path from 'path'
 // ========================================
 // 初始化
 // ========================================
@@ -167,8 +169,7 @@ app.get('/health', (req: Request, res: Response) => {
 
 app.post('/api/chat/stream', rateLimitMiddleware, requireAuth, async (req: Request, res: Response) => {
   const reqId = res.locals.reqId
-  const { message, mode = 'edit', outputsPath, context = {}, agentId: inputAgentId } = req.body
-
+  const { message, mode = 'edit', context = {}, agentId: inputAgentId } = req.body
   // 参数验证
   const validateField = (value: any, fieldName: string) => {
     if (!value || typeof value !== 'string') {
@@ -181,9 +182,11 @@ app.post('/api/chat/stream', rateLimitMiddleware, requireAuth, async (req: Reque
   if (!validateField(message, 'message')) return
   if (!validateField(context?.userId, 'context.userId')) return
   if (!validateField(context?.workingDir, 'context.workingDir')) return
+  if (!validateField(req.body.outputsPath, 'outputsPath')) return
 
   const userId = context.userId
-  const workingDir = context.workingDir
+  const workingDir = path.resolve(context.workingDir)
+  const outputsPath = path.resolve(req.body.outputsPath)
   const files = Array.isArray(context.files) ? context.files : []
 
   console.log(
@@ -208,12 +211,24 @@ app.post('/api/chat/stream', rateLimitMiddleware, requireAuth, async (req: Reque
         console.log(`[server] [req ${reqId}] 加载会话: ${inputAgentId}`)
       }
     }
-
+    // 如果输出目录和工作目录不存在，创建它
+    try {
+      if (outputsPath && !fs.existsSync(outputsPath)) {
+        fs.mkdirSync(outputsPath, { recursive: true })
+      }
+      if (workingDir && !fs.existsSync(workingDir)) {
+        fs.mkdirSync(workingDir, { recursive: true })
+      }
+    } catch (err) {
+      console.warn(`[server] [req ${reqId}] 创建目录失败:`, err)
+      sendError(res, 500, 'INTERNAL_ERROR', 'Failed to create working or outputs directory')
+      return
+    }
     // 如果没有可用会话，创建新的
     if (!agent) {
       const agentConfig: AgentConfig = { mode, workingDir, outputsPath, userId, files }
       agent = await createAgent(agentConfig)
-      setupAgentHandlers(agent, reqId)
+      setupAgentHandlers(agent, reqId, [outputsPath, workingDir, '/data']) // 传递允许访问的路径列表
 
       // 注册到会话管理器
       conversationManager.registerSession(agent)
@@ -286,7 +301,7 @@ app.post('/api/chat/stream', rateLimitMiddleware, requireAuth, async (req: Reque
 
   // 处理消息并流式返回
   try {
-    for await (const event of processMessage(agent, message, reqId)) {
+    for await (const event of processMessage(agent, message, reqId, { outputsPath })) {
       if (res.writableEnded || clientDisconnected) {
         console.log(`[server] [req ${reqId}] 检测到连接已断开，停止处理`)
         break
