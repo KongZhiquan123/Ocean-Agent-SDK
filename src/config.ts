@@ -5,10 +5,11 @@
  * @author kongzhiquan
  * @contributors Leizheng
  * @date 2026-02-02
- * @version 1.4.0
+ * @version 1.3.1
  *
  * @changelog
- *   - 2026-02-14 kongzhiquan: v1.4.0 系统提示词新增输出路径强制规则
+ *   - 2026-02-24 Leizheng: v1.3.1 修复 AnthropicProvider extended thinking 兼容性问题
+ *     - 设置 reasoningTransport: 'omit' 禁用 thinking，避免代理端 budget_tokens 缺失报错
  *   - 2026-02-06 Leizheng: v1.3.0 新增训练报告工具（自动通过 index.ts 导出注册）
  *   - 2026-02-06 Leizheng: v1.2.0 新增海洋超分训练工具集
  *     - 导入 oceanSrTrainingTools 并注册
@@ -223,11 +224,11 @@ function createSandboxFactory() {
 
 function createModelFactory() {
   return () => new AnthropicProvider(
-    config.anthropicApiKey, 
-    config.anthropicModelId, 
+    config.anthropicApiKey,
+    config.anthropicModelId,
     config.anthropicBaseUrl,
-    // undefined, 
-    // {extraBody: {stream: false}}
+    undefined,  // proxyUrl
+    { reasoningTransport: 'omit' },  // 禁用 extended thinking，避免代理端不支持 budget_tokens
   )
 }
 
