@@ -83,7 +83,10 @@ def estimate_memory(config_path, device_id=0):
     torch.cuda.set_device(device_id)
     device = torch.device(f'cuda:{device_id}')
     gpu_name = torch.cuda.get_device_name(device_id)
-    gpu_total_bytes = torch.cuda.get_device_properties(device_id).total_mem
+    try:
+        gpu_total_bytes = torch.cuda.get_device_properties(device_id).total_memory
+    except AttributeError:
+        gpu_total_bytes = torch.cuda.get_device_properties(device_id).total_mem
     gpu_total_mb = gpu_total_bytes / (1024 ** 2)
 
     # 构建模型
