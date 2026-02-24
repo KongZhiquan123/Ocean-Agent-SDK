@@ -199,7 +199,7 @@ app.post('/api/chat/stream', rateLimitMiddleware, requireAuth, async (req: Reque
   res.setHeader('Connection', 'keep-alive')
   res.flushHeaders()
 
-  let agent
+  let agent = undefined
   let isNewSession = false
 
   try {
@@ -213,10 +213,10 @@ app.post('/api/chat/stream', rateLimitMiddleware, requireAuth, async (req: Reque
     }
     // 如果输出目录和工作目录不存在，创建它
     try {
-      if (outputsPath && !fs.existsSync(outputsPath)) {
+      if (!fs.existsSync(outputsPath)) {
         fs.mkdirSync(outputsPath, { recursive: true })
       }
-      if (workingDir && !fs.existsSync(workingDir)) {
+      if (!fs.existsSync(workingDir)) {
         fs.mkdirSync(workingDir, { recursive: true })
       }
     } catch (err) {

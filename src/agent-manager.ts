@@ -47,7 +47,7 @@ export interface SSEEvent {
 /** processMessage 可选参数，后续新增指令请在此扩展字段 */
 export interface ProcessMessageOptions {
   /** 强制输出路径 */
-  outputsPath?: string
+  outputsPath: string
 }
 
 // ========================================
@@ -338,7 +338,7 @@ export async function* processMessage(
   agent: Agent,
   message: string,
   reqId: string,
-  options: ProcessMessageOptions = {},
+  options: ProcessMessageOptions,
 ): AsyncGenerator<SSEEvent> {
   // 发送开始事件
   yield {

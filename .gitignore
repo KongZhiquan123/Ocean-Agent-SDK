@@ -221,3 +221,4 @@ era5_*
 ERA5_*
 .Ocean_agent**
 /config.json
+/test_outputs/
