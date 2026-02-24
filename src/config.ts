@@ -8,8 +8,9 @@
  * @version 1.3.1
  *
  * @changelog
- *   - 2026-02-24 Leizheng: v1.3.1 修复 AnthropicProvider extended thinking 兼容性问题
- *     - 设置 reasoningTransport: 'omit' 禁用 thinking，避免代理端 budget_tokens 缺失报错
+ *   - 2026-02-24 Leizheng, kongzhiquan: v1.3.2 修复 AnthropicProvider extended thinking 兼容性问题
+ *     - 修复budget_tokens参数缺失导致的错误
+ *   - 2026-02-14 kongzhiquan: v1.3.1 约束agent输出路径
  *   - 2026-02-06 Leizheng: v1.3.0 新增训练报告工具（自动通过 index.ts 导出注册）
  *   - 2026-02-06 Leizheng: v1.2.0 新增海洋超分训练工具集
  *     - 导入 oceanSrTrainingTools 并注册
@@ -227,8 +228,14 @@ function createModelFactory() {
     config.anthropicApiKey,
     config.anthropicModelId,
     config.anthropicBaseUrl,
-    undefined,  // proxyUrl
-    { reasoningTransport: 'omit' },  // 禁用 extended thinking，避免代理端不支持 budget_tokens
+    undefined,  // 直接连接baseURL，不使用代理
+    { 
+      reasoningTransport: 'provider', 
+      thinking: {
+        enabled: true,
+        budgetTokens: 2048,  // 设置合理的 token 预算，避免过度 thinking
+      }
+    },
   )
 }
 
