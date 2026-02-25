@@ -29,7 +29,7 @@ import {
 } from './agent-manager'
 import { conversationManager } from './conversation-manager'
 import { trainingProcessManager } from './utils/training-process-manager'
-import fs from 'fs'
+import fs from 'fs/promises'
 import path from 'path'
 // ========================================
 // 初始化
@@ -202,6 +202,17 @@ app.post('/api/chat/stream', rateLimitMiddleware, requireAuth, async (req: Reque
   let agent = undefined
   let isNewSession = false
 
+  // 如果输出目录和工作目录不存在，创建它
+  try {
+    await fs.mkdir(outputsPath, { recursive: true })
+    await fs.mkdir(workingDir, { recursive: true })
+  } catch (err) {
+    console.error(`[server] [req ${reqId}] 创建目录失败:`, err)
+    sendError(res, 500, 'INTERNAL_ERROR', 'Failed to create working or outputs directory')
+    res.end()
+    return
+  }
+
   try {
     // 尝试加载已有会话
     if (inputAgentId && conversationManager.hasSession(inputAgentId)) {
@@ -211,19 +222,7 @@ app.post('/api/chat/stream', rateLimitMiddleware, requireAuth, async (req: Reque
         console.log(`[server] [req ${reqId}] 加载会话: ${inputAgentId}`)
       }
     }
-    // 如果输出目录和工作目录不存在，创建它
-    try {
-      if (!fs.existsSync(outputsPath)) {
-        fs.mkdirSync(outputsPath, { recursive: true })
-      }
-      if (!fs.existsSync(workingDir)) {
-        fs.mkdirSync(workingDir, { recursive: true })
-      }
-    } catch (err) {
-      console.warn(`[server] [req ${reqId}] 创建目录失败:`, err)
-      sendError(res, 500, 'INTERNAL_ERROR', 'Failed to create working or outputs directory')
-      return
-    }
+    
     // 如果没有可用会话，创建新的
     if (!agent) {
       const agentConfig: AgentConfig = { mode, workingDir, outputsPath, userId, files }
@@ -348,10 +347,7 @@ app.post('/api/chat/stream', rateLimitMiddleware, requireAuth, async (req: Reque
 app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
   const reqId = res.locals.reqId || 'unknown'
   console.error(`[server] [req ${reqId}] 未处理的错误:`, err)
-
-  if (!res.headersSent) {
-    sendError(res, 500, 'INTERNAL_ERROR', 'Internal server error')
-  }
+  sendError(res, 500, 'INTERNAL_ERROR', 'Internal server error')
 })
 
 // ========================================

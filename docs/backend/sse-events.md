@@ -131,9 +131,24 @@ AI 生成的文本增量，客户端需拼接所有 `content` 得到完整回复
 ```
 注意，即使发生工具异常，`tool_result` 事件仍会正常返回，且 `is_error` 为 `true`，以便客户端统一处理工具结果。
 
-## 7. `error`
+## 7. `agent_error`
 
-服务端不可恢复的错误。
+agent工作过程中遇到的异常（例如无法连接到api提供商、api余额不足等情况）
+
+```jsonc
+{
+  "type": "agent_error",
+  "error:": "Agent处理异常",
+  "phase": "model" | "tool" | "system" | "lifecycle",
+  "severity": "error" | "info" | "warn",
+  "timestamp": 1707500006000,
+}
+```
+`phase`指的是在工作的哪个阶段出现了异常，`severity`指的是异常的严重程度
+
+## 8. `error`
+
+agent服务端不可恢复的错误。
 
 ```jsonc
 {
@@ -146,7 +161,7 @@ AI 生成的文本增量，客户端需拼接所有 `content` 得到完整回复
 
 `error` 取值：`"INTERNAL_ERROR"` | `"REQUEST_TIMEOUT"`
 
-## 8. `done`
+## 9. `done`
 
 本次请求处理完毕，是最后一个事件。
 
