@@ -5,7 +5,7 @@
  * @author kongzhiquan
  * @contributors Leizheng
  * @date 2026-02-02
- * @version 1.3.1
+ * @version 1.3.2
  *
  * @changelog
  *   - 2026-02-24 Leizheng, kongzhiquan: v1.3.2 修复 AnthropicProvider extended thinking 兼容性问题

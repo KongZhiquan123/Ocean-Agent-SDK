@@ -5,9 +5,10 @@
  * @author kongzhiquan
  * @contributors Leizheng
  * @date 2026-02-02
- * @version 1.6.0
+ * @version 1.7.0
  *
  * @changelog
+ *   - 2026-02-25 kongzhiquan: v1.7.0 processMessage 订阅 monitor 通道，agent 错误事件转换为 SSE error 事件
  *   - 2026-02-14 kongzhiquan: v1.6.0 outputsPath 注入：metadata 存储 + processMessage 消息级指令前缀
  *   - 2026-02-10 kongzhiquan: v1.5.0 新增 transformToolResult 集中格式转换器
  *     - 对 ocean_preprocess_full 工具结果做裁剪，只保留当前步骤进度信息
@@ -22,7 +23,7 @@
  *   - 2026-02-06 Leizheng: v1.1.1 修复 tool:end 事件 result 可能为 undefined
  */
 
-import { Agent, type ProgressEvent } from '@shareai-lab/kode-sdk'
+import { Agent, type ProgressEvent, type AgentEvent, type MonitorErrorEvent } from '@shareai-lab/kode-sdk'
 import { getDependencies } from './config'
 import { transformToolResult } from './utils/tool-result-transformer'
 import { transformToolUse } from './utils/tool-use-transformer'
@@ -243,14 +244,8 @@ export function setupAgentHandlers(agent: Agent, reqId: string, allowedPaths?: s
     await event.respond('allow')
   })
 
-  // 错误处理
-  agent.on('error', (event: any) => {
-    console.error(`[agent-manager] [req ${reqId}] Agent 错误:`, {
-      phase: event.phase,
-      message: event.message,
-      severity: event.severity,
-    })
-  })
+  // 注意：monitor 通道的 error 事件已在 processMessage 中通过
+  // subscribe(['progress', 'monitor']) 统一处理并转换为 SSE 事件
 }
 
 // ========================================
@@ -350,8 +345,8 @@ export async function* processMessage(
   // 根据 options 构建指令前缀并拼接到用户消息前
   const finalMessage = buildDirectives(options) + message
 
-  // 订阅 Progress 事件
-  const progressIterator = agent.subscribe(['progress'])[Symbol.asyncIterator]()
+  // 订阅 Progress 和 Monitor 事件（monitor 用于捕获 agent 错误）
+  const eventIterator = agent.subscribe(['progress', 'monitor'])[Symbol.asyncIterator]()
 
   // 异步发送消息（不等待完成）
   const sendTask = agent.send(finalMessage).catch((err) => {
@@ -359,21 +354,49 @@ export async function* processMessage(
     throw err
   })
 
-  // 处理 Progress 事件流
+  // 处理事件流
   try {
     while (true) {
-      const { done, value } = await progressIterator.next()
+      const { done, value } = await eventIterator.next()
       if (done) break
-      
-      const event = value.event as ProgressEvent
+
+      const event = value.event as AgentEvent
+
+      // 处理 Monitor 通道的错误事件
+      if (event.channel === 'monitor' && event.type === 'error') {
+        const monitorErr = event as MonitorErrorEvent
+        console.error(`[agent-manager] [req ${reqId}] Agent 错误:`, {
+          phase: monitorErr.phase,
+          message: monitorErr.message,
+          severity: monitorErr.severity,
+        })
+        yield {
+          type: 'agent_error',
+          error: process.env.NODE_ENV === 'production'
+            ? 'Agent 处理异常'
+            : monitorErr.message,
+          phase: monitorErr.phase,
+          severity: monitorErr.severity,
+          timestamp: Date.now(),
+        }
+        continue
+      }
+
+      // 跳过其他 monitor 事件（state_changed, step_complete 等）
+      if (event.channel === 'monitor') {
+        continue
+      }
+
+      // 处理 Progress 通道事件
+      const progressEvent = event as ProgressEvent
 
       // 检查是否完成
-      if (event.type === 'done') {
+      if (progressEvent.type === 'done') {
         break
       }
 
       // 转换并发送 SSE 事件
-      const sseEvent = convertProgressToSSE(event, reqId)
+      const sseEvent = convertProgressToSSE(progressEvent, reqId)
       if (sseEvent) {
         yield sseEvent
       }

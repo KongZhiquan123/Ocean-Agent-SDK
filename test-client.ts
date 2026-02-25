@@ -166,6 +166,10 @@ async function chat(message: string, mode: 'ask' | 'edit' = 'edit'): Promise<str
                 console.log('错误详情:', event.error)
                 break
 
+              case 'agent_error':
+                console.error(`\n[Agent 错误] ${event.error}`)
+                break
+                
               case 'done':
                 console.log('\n\n[完成] 处理结束')
                 break
