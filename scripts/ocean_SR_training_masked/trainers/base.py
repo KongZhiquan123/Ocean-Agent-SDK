@@ -4,9 +4,14 @@ Base trainer for ocean SR training (masked version).
 @author Leizheng
 @contributors kongzhiquan
 @date 2026-02-06
-@version 5.1.1
+@version 5.2.0
 
 @changelog
+  - 2026-02-25 Leizheng: v5.2.0 修复 __event__ 双重输出 Bug
+    - _log_json_event 恢复 print 到 stdout（tqdm 默认走 stderr，无冲突）
+    - 移除 self.main_log(json_str)：经 StreamHandler 写 stderr，
+      TypeScript 同时解析 stdout/stderr 两个 buffer 导致事件被处理两次
+    - except 块补充 epoch_bar.close() 防止异常路径资源泄漏
   - 2026-02-11 Leizheng: v5.1.1 predict() 重复推理注释说明
     - _save_test_samples() 调用处添加注释，说明与 predict 循环的重复推理问题
   - 2026-02-11 Leizheng: v5.1.0 predict() 结构化事件输出 + 错误捕获
@@ -73,6 +78,8 @@ from torch import nn
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 from tqdm import tqdm
+from tqdm.contrib.logging import logging_redirect_tqdm
+import sys
 from utils.loss import LossRecord, LpLoss, MaskedLpLoss
 from utils.ddp import debug_barrier
 from utils.metrics import Evaluator, MaskedEvaluator
@@ -420,6 +427,7 @@ class BaseTrainer:
 
         事件通过 stdout 发出 __event__JSON__event__ 标记，
         由 TypeScript 进程管理器解析。
+        tqdm 默认渲染到 stderr，stdout 与其不冲突，无需重定向。
 
         - training_error: 任何 rank 都输出（崩溃可能在非主进程）
         - 其他事件: 仅主进程输出（避免多卡重复）
@@ -430,22 +438,23 @@ class BaseTrainer:
             **data
         }
         json_str = f"__event__{json.dumps(event, ensure_ascii=False)}__event__"
-        # 直接 print 到 stdout，确保 TypeScript 能通过 stdout pipe 捕获
         if event_type == "training_error":
             # 错误事件：所有 rank 都输出（崩溃可能发生在任意 rank）
             print(json_str, flush=True)
         elif self.check_main_process():
             # 普通事件：仅主进程输出
             print(json_str, flush=True)
-        # 同时记录到日志系统（仅主进程，用于 Python 侧 train.log）
-        self.main_log(json_str)
 
     def process(self, **kwargs):
         training_start_time = datetime.now()
         self.main_log("Start training")
         self._current_epoch = None
+        self._batch_bar = None
+        _is_main = self.check_main_process()
+        _ew = len(str(self.epochs))  # epoch 数字宽度，用于对齐
+
         try:
-            # 输出训练开始事件
+            # 训练开始事件
             self._log_json_event(
                 "training_start",
                 model_name=self.model_name,
@@ -478,83 +487,143 @@ class BaseTrainer:
 
             if dist.is_initialized():
                 dist.barrier()
-            bar = tqdm(total=self.epochs - self.start_epoch) if self.check_main_process() else None
 
-            for epoch in range(self.start_epoch, self.epochs):
-                self._current_epoch = epoch
-                train_loss_record = self.train(epoch)
-                lr = self.optimizer.param_groups[0]["lr"]
-                self.main_log("Epoch {} | {} | lr: {:.4f}".format(epoch, train_loss_record, lr))
+            # 外层 epoch 进度条（贯穿整个训练，leave=True 保留在终端）
+            epoch_bar = tqdm(
+                total=self.epochs - self.start_epoch,
+                desc="Epochs",
+                unit="ep",
+                leave=True,
+                dynamic_ncols=True,
+                disable=not _is_main,
+            )
 
-                # 输出 epoch 训练事件
-                self._log_json_event(
-                    "epoch_train",
-                    epoch=epoch,
-                    metrics=train_loss_record.to_dict(),
-                    lr=lr,
-                )
-
-                if self.check_main_process() and self.wandb:
-                    wandb.log(train_loss_record.to_dict())
-
-                if self.check_main_process() and self.saving_ckpt and (epoch + 1) % self.ckpt_freq == 0:
-                    self.save_ckpt(epoch)
-                    self.main_log("Epoch {} | save checkpoint in {}".format(epoch, self.saving_path))
-
-                if (epoch + 1) % self.eval_freq == 0:
-                    valid_loss_record = self.evaluate(split="valid")
-                    self.main_log("Epoch {} | {}".format(epoch, valid_loss_record))
-                    valid_metrics = valid_loss_record.to_dict()
-
-                    # 输出 epoch 验证事件
-                    is_best = not best_metrics or valid_metrics['valid_loss'] < best_metrics['valid_loss']
-                    self._log_json_event(
-                        "epoch_valid",
-                        epoch=epoch,
-                        metrics=valid_metrics,
-                        is_best=is_best,
+            # logging_redirect_tqdm 使 logging.info() 通过 tqdm.write() 输出，避免破坏进度条
+            with logging_redirect_tqdm():
+                if _is_main:
+                    n_train = len(self.train_loader.dataset)
+                    n_valid = len(self.valid_loader.dataset)
+                    n_test  = len(self.test_loader.dataset)
+                    tqdm.write(
+                        f"\n{'═' * 56}\n"
+                        f"  {self.model_name}"
+                        f"  ·  train {n_train}  ·  val {n_valid}  ·  test {n_test}\n"
+                        f"{'═' * 56}"
                     )
 
-                    # 记录历史
-                    epoch_history.append({
-                        "epoch": epoch,
-                        "train_loss": train_loss_record.to_dict().get('train_loss'),
-                        "valid_metrics": valid_metrics,
-                    })
+                for epoch in range(self.start_epoch, self.epochs):
+                    self._current_epoch = epoch
+                    ep_label = f"[{epoch + 1:>{_ew}d}/{self.epochs}]"
 
-                    if self.check_main_process() and self.wandb:
-                        wandb.log(valid_loss_record.to_dict())
+                    # 内层 batch 进度条（每个 epoch 结束后自动消失，leave=False）
+                    _orig_loader = self.train_loader
+                    if _is_main:
+                        self._batch_bar = tqdm(
+                            _orig_loader,
+                            desc=f"{ep_label} train",
+                            leave=False,
+                            dynamic_ncols=True,
+                        )
+                        self.train_loader = self._batch_bar
+                    else:
+                        self._batch_bar = None
 
-                    if is_best:
-                        counter = 0
-                        best_epoch = epoch
-                        best_metrics = valid_metrics
-                        if self.check_main_process() and self.saving_best:
-                            self.save_model(best_path)
-                    elif self.patience != -1:
-                        counter += 1
-                        if counter >= self.patience:
-                            early_stopped = True
-                            self.main_log("Early stop at epoch {}".format(epoch))
-                            self._log_json_event("early_stop", epoch=epoch, patience=self.patience)
-                            if not self.dist:
-                                break
-                            stop_flag = torch.tensor(0, device=self.device)
-                            if self.check_main_process():
-                                if self.patience != -1 and counter >= self.patience:
+                    try:
+                        train_loss_record = self.train(epoch)
+                    finally:
+                        self.train_loader = _orig_loader
+                        if self._batch_bar is not None:
+                            self._batch_bar.close()
+                        self._batch_bar = None
+
+                    lr = self.optimizer.param_groups[0]["lr"]
+                    train_dict = train_loss_record.to_dict()
+                    elapsed = train_loss_record.elapsed()
+
+                    # epoch 训练摘要（tqdm.write 不会破坏进度条位置）
+                    if _is_main:
+                        metrics_str = "  ".join(f"{k}={v:.4f}" for k, v in train_dict.items())
+                        tqdm.write(f"{ep_label}  train  {metrics_str}  lr={lr:.2e}  t={elapsed:.1f}s")
+
+                    # 更新外层 epoch bar postfix
+                    train_loss_val = next(iter(train_dict.values())) if train_dict else 0.0
+                    epoch_bar.set_postfix({"loss": f"{train_loss_val:.4f}", "lr": f"{lr:.2e}"}, refresh=False)
+                    epoch_bar.update(1)
+
+                    # 结构化事件
+                    self._log_json_event("epoch_train", epoch=epoch, metrics=train_dict, lr=lr)
+
+                    if _is_main and self.wandb:
+                        wandb.log(train_dict)
+
+                    if _is_main and self.saving_ckpt and (epoch + 1) % self.ckpt_freq == 0:
+                        self.save_ckpt(epoch)
+                        tqdm.write(f"{ep_label}  ckpt saved → {self.saving_path}")
+
+                    if (epoch + 1) % self.eval_freq == 0:
+                        valid_loss_record = self.evaluate(split="valid")
+                        valid_metrics = valid_loss_record.to_dict()
+
+                        is_best = not best_metrics or valid_metrics['valid_loss'] < best_metrics['valid_loss']
+                        self._log_json_event("epoch_valid", epoch=epoch, metrics=valid_metrics, is_best=is_best)
+
+                        epoch_history.append({
+                            "epoch": epoch,
+                            "train_loss": train_dict.get('train_loss'),
+                            "valid_metrics": valid_metrics,
+                        })
+
+                        if _is_main:
+                            val_str = "  ".join(f"{k}={v:.4f}" for k, v in valid_metrics.items())
+                            best_mark = "  ★ best" if is_best else ""
+                            tqdm.write(f"{ep_label}  valid  {val_str}{best_mark}")
+
+                        if _is_main and self.wandb:
+                            wandb.log(valid_metrics)
+
+                        if is_best:
+                            counter = 0
+                            best_epoch = epoch
+                            best_metrics = valid_metrics
+                            # 更新 epoch bar 显示 val loss
+                            val_loss_val = next(iter(valid_metrics.values())) if valid_metrics else 0.0
+                            epoch_bar.set_postfix(
+                                {"loss": f"{train_loss_val:.4f}", "val": f"{val_loss_val:.4f}", "best": f"{epoch + 1}"},
+                                refresh=False,
+                            )
+                            if _is_main and self.saving_best:
+                                self.save_model(best_path)
+                        elif self.patience != -1:
+                            counter += 1
+                            if counter >= self.patience:
+                                early_stopped = True
+                                tqdm.write(f"{ep_label}  early stop (patience={self.patience})")
+                                self._log_json_event("early_stop", epoch=epoch, patience=self.patience)
+                                if not self.dist:
+                                    break
+                                stop_flag = torch.tensor(0, device=self.device)
+                                if _is_main and self.patience != -1 and counter >= self.patience:
                                     stop_flag += 1
-                            if self.dist and dist.is_initialized():
-                                dist.broadcast(stop_flag, src=0)
-                            if stop_flag.item() > 0:
-                                break
-                if self.check_main_process():
-                    bar.update(1)
-            if self.check_main_process():
-                if bar is not None:
-                    bar.close()
+                                if self.dist and dist.is_initialized():
+                                    dist.broadcast(stop_flag, src=0)
+                                if stop_flag.item() > 0:
+                                    break
+
+            epoch_bar.close()
+
+            if _is_main:
+                total_sec = (datetime.now() - training_start_time).total_seconds()
+                h, rem = divmod(int(total_sec), 3600)
+                m, s = divmod(rem, 60)
+                tqdm.write(
+                    f"\n{'═' * 56}\n"
+                    f"  完成  best_epoch={best_epoch + 1}  总耗时={h}h {m}m {s}s\n"
+                    f"{'═' * 56}\n"
+                )
+
             self.main_log("Optimization Finished!")
 
-            if self.check_main_process() and not best_metrics:
+            if _is_main and not best_metrics:
                 self.save_model(best_path)
 
             if self.dist and dist.is_initialized():
@@ -573,7 +642,7 @@ class BaseTrainer:
             self.main_log("Test metrics: {}".format(test_loss_record))
             self._log_json_event("final_test", metrics=test_loss_record.to_dict(), best_epoch=best_epoch)
 
-            # 输出训练结束事件
+            # 训练结束事件
             training_end_time = datetime.now()
             training_duration = (training_end_time - training_start_time).total_seconds()
             actual_epochs = epoch + 1 if 'epoch' in locals() else self.epochs
@@ -587,7 +656,7 @@ class BaseTrainer:
                 final_test_metrics=test_loss_record.to_dict(),
             )
 
-            if self.check_main_process() and self.wandb:
+            if _is_main and self.wandb:
                 wandb.run.summary["best_epoch"] = best_epoch
                 wandb.run.summary.update(test_loss_record.to_dict())
                 wandb.finish()
@@ -595,6 +664,8 @@ class BaseTrainer:
             if self.dist and dist.is_initialized():
                 dist.barrier()
         except Exception as e:
+            if 'epoch_bar' in locals():
+                epoch_bar.close()
             import traceback
             tb = traceback.format_exc()
             error_type = type(e).__name__
@@ -634,6 +705,11 @@ class BaseTrainer:
                 loss = self.loss_fn(y_pred, y, mask=mask_hr)
             loss_record.update({"train_loss": loss.sum().item()}, n=x.size(0))
             loss = loss.mean()
+            # 实时更新内层 batch 进度条的 loss 显示
+            if self._batch_bar is not None:
+                self._batch_bar.set_postfix(
+                    {"loss": f"{loss_record.to_dict()['train_loss']:.4f}"}, refresh=False
+                )
             self.optimizer.zero_grad()
             self.scaler.scale(loss).backward()
             self.scaler.step(self.optimizer)

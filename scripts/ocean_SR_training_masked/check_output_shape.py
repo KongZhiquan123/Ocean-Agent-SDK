@@ -1,8 +1,18 @@
 #!/usr/bin/env python3
 """
-check_output_shape.py
+@file check_output_shape.py
 
-Preflight check for model output shape vs HR target.
+@description Preflight check for model output shape vs HR target.
+@author kongzhiquan
+@contributors Leizheng
+@date 2026-02-07
+@version 1.1.0
+
+@changelog
+  - 2026-02-24 Leizheng: v1.1.0 放宽形状校验：pred >= target 时视为通过
+    - FNO2d 等 FFT 模型对奇数维度输出多 1px，trainer 的 _crop_to_original() 已正确处理
+    - 严格相等检查会误拒可正常训练的模型配置
+  - 原始版本: v1.0.0 严格相等检查
 """
 import argparse
 import inspect
@@ -467,15 +477,33 @@ def main():
             emit(result)
             return 0
 
-        if list(y_pred.shape) != list(y.shape):
+        pred_h, pred_w = y_pred.shape[1], y_pred.shape[2]
+        tgt_h, tgt_w = y.shape[1], y.shape[2]
+
+        if pred_h < tgt_h or pred_w < tgt_w:
+            # 模型输出比目标小，无法裁剪补救，属于真正的形状错误
             result = {
                 'status': 'error',
                 'error': 'Model output shape mismatch',
-                'reason': 'Output shape does not match HR target',
+                'reason': 'Output spatial dims smaller than HR target (cannot crop)',
                 'details': {
                     'pred_shape': list(y_pred.shape),
                     'target_shape': list(y.shape),
                     'model': model_name,
+                },
+            }
+            emit(result)
+            return 0
+
+        if pred_h != tgt_h or pred_w != tgt_w:
+            # 模型输出比目标大，trainer 会自动裁剪（_crop_to_original）
+            result = {
+                'status': 'ok',
+                'details': {
+                    'pred_shape': list(y_pred.shape),
+                    'target_shape': list(y.shape),
+                    'model': model_name,
+                    'note': f'Output will be cropped from [{pred_h},{pred_w}] to [{tgt_h},{tgt_w}]',
                 },
             }
             emit(result)

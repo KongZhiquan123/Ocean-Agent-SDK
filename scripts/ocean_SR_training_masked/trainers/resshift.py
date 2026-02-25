@@ -100,7 +100,11 @@ class ResshiftTrainer(BaseTrainer):
                     loss = losses['mse']
 
             loss_record.update({"train_loss": loss.item()}, n=B)
-
+            # 实时更新内层 batch 进度条的 loss 显示
+            if getattr(self, '_batch_bar', None) is not None:
+                self._batch_bar.set_postfix(
+                    {"loss": f"{loss_record.to_dict()['train_loss']:.4f}"}, refresh=False
+                )
             self.optimizer.zero_grad()
             self.scaler.scale(loss).backward()
             self.scaler.step(self.optimizer)

@@ -3,22 +3,49 @@
 
 @description Matplotlib style constants and utility functions for training plots.
 @author kongzhiquan
+@contributors Leizheng
 @date 2026-02-09
-@version 1.0.0
+@version 1.1.0
 
 @changelog
+    - 2026-02-25 Leizheng: v1.1.0 自动检测 CJK 字体，支持中文变量名/数据集名正确显示
+        - 使用 sans-serif 字体族 + 优先级列表实现字符级 fallback
+        - 优先使用系统已安装的 CJK 字体（当前环境: Droid Sans Fallback）
     - 2026-02-09 kongzhiquan: v1.0.0 extracted from generate_training_plots.py
 """
 
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
 from matplotlib.patches import FancyBboxPatch
+
+
+def _detect_cjk_font() -> str | None:
+    """检测系统中可用的 CJK（中文）字体，返回第一个找到的字体名，未找到返回 None。"""
+    candidates = [
+        'SimHei', 'SimSun', 'Microsoft YaHei',
+        'WenQuanYi Micro Hei', 'WenQuanYi Zen Hei',
+        'Noto Sans CJK SC', 'Noto Sans CJK', 'Source Han Sans CN',
+        'PingFang SC', 'STSong', 'AR PL UMing CN',
+        'Droid Sans Fallback',
+    ]
+    available = {f.name for f in fm.fontManager.ttflist}
+    for font in candidates:
+        if font in available:
+            return font
+    return None
+
+
+_cjk_font = _detect_cjk_font()
+# DejaVu Sans 在前处理英文/符号，CJK 字体追加在后补充中文字符
+_sans_serif_list = ['DejaVu Sans', _cjk_font] if _cjk_font else ['DejaVu Sans']
 
 # 现代化样式配置 — import 时立即生效
 plt.style.use('seaborn-v0_8-whitegrid')
 plt.rcParams.update({
-    'font.family': 'DejaVu Sans',
+    'font.family': 'sans-serif',
+    'font.sans-serif': _sans_serif_list,
     'font.size': 11,
     'axes.unicode_minus': False,
     'axes.titlesize': 14,
@@ -42,6 +69,10 @@ plt.rcParams.update({
     'savefig.facecolor': '#fafafa',
     'savefig.edgecolor': 'none',
 })
+
+# 屏蔽字体 fallback 的 "Glyph missing" 提示（属于正常 fallback 行为，非错误）
+import warnings
+warnings.filterwarnings('ignore', message='Glyph .* missing from font')
 
 # 现代配色方案
 COLORS = {

@@ -225,14 +225,15 @@ class LossRecord:
         for key, value in update_dict.items():
             self.loss_dict[key].update(value, n)
     
-    def format_metrics(self):
-        result = ""
-        for loss in self.loss_list:
-            result += "{}: {:.8f} | ".format(loss, self.loss_dict[loss].avg)
-        result += "Time: {:.2f}s".format(time() - self.start_time)
+    def elapsed(self) -> float:
+        """返回自创建以来经过的秒数"""
+        return time() - self.start_time
 
-        return result
-    
+    def format_metrics(self):
+        parts = ["{}: {:.4f}".format(k, self.loss_dict[k].avg) for k in self.loss_list]
+        parts.append("t={:.1f}s".format(self.elapsed()))
+        return "  ".join(parts)
+
     def to_dict(self):
         return {
             loss: self.loss_dict[loss].avg for loss in self.loss_list
