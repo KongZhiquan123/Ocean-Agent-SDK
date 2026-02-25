@@ -10,9 +10,11 @@
  * @author kongzhiquan
  * @contributors Leizheng
  * @date 2026-02-07
- * @version 2.1.0
+ * @version 2.2.0
  *
  * @changelog
+ *   - 2026-02-25 Leizheng: v2.2.0 training_end 通知消息支持
+ *     - getNotificationMessage() 新增 training_end case
  *   - 2026-02-11 Leizheng: v2.1.0 Predict 模式适配
  *     - buildStatusResponse() 操作提示根据 mode 区分训练/推理
  *     - getNotificationMessage() 新增 predict_start / predict_end 消息
@@ -305,6 +307,8 @@ function getNotificationMessage(type?: string): string {
   switch (type) {
     case 'training_start':
       return '训练启动成功，已开始执行。'
+    case 'training_end':
+      return '训练已完成，最终指标见 notification.payload。'
     case 'predict_start':
       return '推理启动成功，已开始执行。'
     case 'training_error':

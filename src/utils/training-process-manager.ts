@@ -11,9 +11,13 @@
  * @author kongzhiquan
  * @contributors Leizheng
  * @date 2026-02-07
- * @version 3.1.0
+ * @version 3.2.0
  *
  * @changelog
+ *   - 2026-02-25 Leizheng: v3.2.0 修复三个事件系统 Bug
+ *     - parseEventMarkers: lastIndexOf → indexOf，防止不完整事件被错误清除
+ *     - computeProgress: epoch 0-indexed 修正，avgPerEpoch = elapsed/(epoch+1)
+ *     - training_end: 推送 notification + 存储事件数据，供 watch 模式获取最终指标
  *   - 2026-02-11 Leizheng: v3.1.0 Predict 模式进度追踪
  *     - TrainingProgress 扩展 predict 字段（currentSample/totalSamples/samplesPerMinute/currentFilename）
  *     - TrainingNotification.type 新增 predict_start / predict_end
@@ -92,7 +96,7 @@ export interface RuntimeStats {
 
 export interface TrainingNotification {
   id: string
-  type: 'training_start' | 'training_error' | 'process_exit' | 'predict_start' | 'predict_end'
+  type: 'training_start' | 'training_end' | 'training_error' | 'process_exit' | 'predict_start' | 'predict_end'
   timestamp: string
   processId: string
   payload?: Record<string, unknown>
@@ -137,6 +141,8 @@ interface ManagedProcess {
   stderrRingBuffer: string[]
   // 来自 Python 的结构化错误事件
   lastTrainingError: Record<string, unknown> | null
+  // 来自 Python 的训练结束事件（含 best_epoch / final_metrics）
+  lastTrainingEnd: Record<string, unknown> | null
   // stdout 缓冲区（处理跨 chunk 的 __event__ 标记）
   stdoutBuffer: string
   // stderr 事件缓冲区（Python logging.info → StreamHandler → stderr 也可能包含 __event__）
@@ -506,9 +512,11 @@ class TrainingProcessManager {
     const startTime = new Date(managed.trainingMeta.startTimestamp).getTime()
     const epochTime = new Date(managed.lastEpochInfo.timestamp).getTime()
     const elapsed = epochTime - startTime
-    const avgPerEpoch = current > 0 ? elapsed / current : 0
-    const remaining = avgPerEpoch * (total - current)
-    const estimatedRemainingSeconds = current > 0 ? Math.round(remaining / 1000) : null
+    // epoch 是 0-indexed，completedEpochs 是已完成轮数
+    const completedEpochs = current + 1
+    const avgPerEpoch = elapsed / completedEpochs
+    const remaining = avgPerEpoch * (total - completedEpochs)
+    const estimatedRemainingSeconds = Math.round(remaining / 1000)
     const epochsPerHour = avgPerEpoch > 0 ? Math.round(3600000 / avgPerEpoch) : null
     return {
       currentEpoch: current,
@@ -715,17 +723,29 @@ class TrainingProcessManager {
               )
             }
           }
+
+          if (eventType === 'training_end') {
+            managed.lastTrainingEnd = event
+            if (isFirst) {
+              this.pushNotification(
+                managed,
+                this.createNotification(managed, 'training_end', event),
+              )
+            }
+          }
         }
       } catch {
         /* ignore parse errors */
       }
     }
 
-    // 保留从最后一个未完成的 __event__ 开始的内容
-    const lastStart = managed[bufferKey].lastIndexOf(EVENT_START, searchFrom > 0 ? searchFrom - 1 : managed[bufferKey].length)
-    if (lastStart >= searchFrom) {
-      // 有不完整的事件标记
-      managed[bufferKey] = managed[bufferKey].substring(lastStart)
+    // 保留从下一个未完整事件标记开始的内容
+    // 注意：EVENT_START 和 EVENT_END 是同一字符串（'__event__'），使用 indexOf 向前查找
+    // 而非 lastIndexOf 向后查找，以防止不完整事件在已完整事件之后被错误清除
+    const nextStart = managed[bufferKey].indexOf(EVENT_START, searchFrom)
+    if (nextStart !== -1) {
+      // 存在未处理完的 __event__ 标记（事件跨 chunk，保留等待下一个 chunk）
+      managed[bufferKey] = managed[bufferKey].substring(nextStart)
     } else {
       // 所有事件都已处理
       managed[bufferKey] = ''
@@ -814,6 +834,7 @@ Start Time: ${new Date().toISOString()}
       errorLogStream,
       stderrRingBuffer: [],
       lastTrainingError: null,
+      lastTrainingEnd: null,
       stdoutBuffer: '',
       stderrEventBuffer: '',
       receivedEvents: new Set(),

@@ -4,10 +4,13 @@
 @description Test sample LR/SR/HR comparison visualization with error maps.
     Uses pcolormesh for geo-referenced plotting when lon/lat metadata is available.
 @author kongzhiquan
+@contributors Leizheng
 @date 2026-02-09
-@version 2.1.0
+@version 2.2.0
 
 @changelog
+    - 2026-02-24 Leizheng: v2.2.0 修复非日期格式文件名导致 strptime 崩溃
+        - try/except 包裹日期解析，非日期文件名（如序号 "000000"）回退为原始名称
     - 2026-02-09 kongzhiquan: v2.1.0 修复 2D 经纬度坐标无法传入 pcolormesh 的问题
         - 2D lon/lat 直接作为坐标网格传给 pcolormesh（shading='auto'）
         - 1D lon/lat 仍转换为 edges 后使用 shading='flat'
@@ -187,7 +190,11 @@ def plot_sample_comparison(log_dir: str, output_dir: str) -> Optional[str]:
 
     # 标题
     if filename:
-        suptitle = f'Date: {datetime.strptime(filename, "%Y%m%d").strftime("%B %d, %Y")}  LR vs SR vs HR'
+        try:
+            date_str = datetime.strptime(filename, "%Y%m%d").strftime("%B %d, %Y")
+            suptitle = f'Date: {date_str}  LR vs SR vs HR'
+        except (ValueError, TypeError):
+            suptitle = f'Sample: {filename}  LR vs SR vs HR'
     else:
         suptitle = 'Test Sample: LR vs SR vs HR Comparison'
     fig.suptitle(suptitle, fontsize=15, fontweight='bold', y=1.0)

@@ -6,9 +6,15 @@
  * @author Leizheng
  * @contributors kongzhiquan
  * @date 2026-02-09
- * @version 2.5.0
+ * @version 2.7.0
  *
  * @changelog
+ *   - 2026-02-25 Leizheng: v2.7.0 构造函数支持 sessionOverrides，彻底修复无状态参数丢失
+ *     - 新增 sessionOverrides?: TrainingWorkflowParams 参数，合并顺序：defaults → session → definedArgs
+ *     - 新增 filterDefined() 辅助，过滤 undefined 值防止空值覆盖会话确认过的参数
+ *   - 2026-02-24 Leizheng: v2.6.0 新增 getParams() 暴露合并后参数
+ *     - 解决无状态工作流中用户确认参数在后续调用丢失的问题
+ *     - train.ts 执行阶段改用 workflow.getParams() 取值，不再依赖原始 args
  *   - 2026-02-11 Leizheng: v2.5.0 Token 校验恢复 + ResShift divisor 修正
  *     - 恢复 determineCurrentState() 中的 token 强校验（v2.3.0 误禁用）
  *     - use_amp 从 token 签名中移除（系统自动调整不触发振荡）
@@ -319,10 +325,23 @@ export interface ModelInfo {
 export class TrainingWorkflow {
   private params: TrainingWorkflowParams
 
+  /**
+   * 获取合并后的完整参数（用户传入值 > 默认值）
+   * 用于执行阶段，确保用户确认过的参数不会因后续调用缺失字段而丢失
+   */
+  getParams(): Readonly<TrainingWorkflowParams> {
+    return this.params
+  }
+
   private static readonly TOKEN_SALT = 'ocean-sr-training-v2'
 
-  constructor(params: TrainingWorkflowParams) {
-    // 统一填充 schema 声明的默认值，消除展示层（??）和判断层（!== undefined）的不一致
+  constructor(args: TrainingWorkflowParams, sessionOverrides?: TrainingWorkflowParams) {
+    // 过滤掉 args 中的 undefined 值，防止无状态调用中空值覆盖 session 中用户确认过的参数
+    const definedArgs = Object.fromEntries(
+      Object.entries(args).filter(([, v]) => v !== undefined)
+    ) as Partial<TrainingWorkflowParams>
+
+    // 合并顺序：系统默认值 → session 确认值（用户之前设置的）→ 本次调用显式传入值
     this.params = {
       mode: 'train',
       epochs: 500,
@@ -344,7 +363,8 @@ export class TrainingWorkflow {
       wandb: false,
       gradient_checkpointing: true,
       user_confirmed: false,
-      ...params,
+      ...(sessionOverrides ?? {}),
+      ...definedArgs,
     }
   }
 

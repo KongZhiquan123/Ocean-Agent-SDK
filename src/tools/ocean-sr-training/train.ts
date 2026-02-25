@@ -7,9 +7,17 @@
  * @author Leizheng
  * @contributors kongzhiquan
  * @date 2026-02-09
- * @version 4.4.0
+ * @version 4.6.0
  *
  * @changelog
+ *   - 2026-02-25 Leizheng: v4.6.0 session 文件持久化用户确认参数
+ *     - AWAITING_EXECUTION 时将全量参数保存到 {log_dir}/.ocean_sr_session.json
+ *     - PASS 执行时读取 session 文件作为 sessionOverrides 传入 TrainingWorkflow
+ *     - 彻底解决可选参数（normalizer_type 等）在无状态多轮调用中丢失的问题
+ *     - use_amp 自动设置不纳入 definedArgs，保留用户通过 session 指定的值
+ *   - 2026-02-24 Leizheng: v4.5.0 configParams 改用 workflow.getParams()
+ *     - 解决无状态工作流中用户确认参数（如 normalizer_type）在执行调用时丢失的问题
+ *     - 执行阶段从 workflow 合并参数取值，不再依赖原始 args（可能缺失字段）
  *   - 2026-02-11 Leizheng: v4.4.0 predict 快速通道
  *     - mode 参数支持 "predict"，跳过训练工作流（OOM/shape/FFT 检查）
  *     - predict 分支直接准备工作空间 → 生成配置 → 启动 → 等待 predict_start
@@ -74,10 +82,45 @@ import net from 'node:net'
 import {
   TrainingWorkflow,
   TrainingState,
+  type TrainingWorkflowParams,
   type DatasetValidationInfo,
   type GpuInfo,
   type ModelInfo,
 } from './workflow-state'
+
+/** 训练会话参数缓存文件名，用于跨无状态调用保留用户确认过的参数 */
+const SESSION_FILENAME = '.ocean_sr_session.json'
+
+/** 从 log_dir 读取保存的训练会话参数（不存在或解析失败时返回 null） */
+async function loadSessionParams(
+  logDir: string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ctx: any,
+): Promise<TrainingWorkflowParams | null> {
+  try {
+    const sessionPath = path.join(logDir, SESSION_FILENAME)
+    const content = await ctx.sandbox.fs.read(sessionPath)
+    const parsed = JSON.parse(content)
+    return (parsed?.params as TrainingWorkflowParams) ?? null
+  } catch {
+    return null
+  }
+}
+
+/** 将当前全量参数写入 log_dir 的会话缓存文件 */
+async function saveSessionParams(
+  logDir: string,
+  params: TrainingWorkflowParams,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ctx: any,
+): Promise<void> {
+  try {
+    const sessionPath = path.join(logDir, SESSION_FILENAME)
+    await ctx.sandbox.fs.write(sessionPath, JSON.stringify({ savedAt: Date.now(), params }))
+  } catch {
+    // 写入失败不影响主流程
+  }
+}
 
 /**
  * 将 JSON 字符串转义为可以安全嵌入 shell 单引号的形式
@@ -722,9 +765,14 @@ export const oceanSrTrainTool = defineTool({
       }
     }
 
-    // ===== 1. 构建工作流参数 =====
-    const workflowParams = { ...args }
-    const workflow = new TrainingWorkflow(workflowParams)
+    // ===== 1. 构建工作流参数（合并 session 缓存，防止可选参数跨调用丢失） =====
+    // use_amp 若非用户显式传入，则从 args 中移除，避免自动设置值覆盖 session 中用户的选择
+    const workflowArgs = { ...args }
+    if (!userSpecifiedUseAmp) {
+      delete workflowArgs.use_amp
+    }
+    const sessionParams = args.log_dir ? await loadSessionParams(args.log_dir, ctx) : null
+    const workflow = new TrainingWorkflow(workflowArgs, sessionParams ?? undefined)
     const stateCheck = workflow.determineCurrentState()
 
     // ===== 2. 如果未到 PASS 阶段，收集上下文信息并返回提示 =====
@@ -822,6 +870,10 @@ export const oceanSrTrainTool = defineTool({
           oom_warning: oomWarning.details,
         }
       }
+      // AWAITING_EXECUTION 时持久化全量参数，供后续执行调用恢复可选参数（如 normalizer_type）
+      if (stateCheck.currentState === TrainingState.AWAITING_EXECUTION && args.log_dir) {
+        await saveSessionParams(args.log_dir, workflow.getParams(), ctx)
+      }
       return {
         status: prompt.status,
         message: prompt.message,
@@ -879,7 +931,8 @@ export const oceanSrTrainTool = defineTool({
       }
       const prepareInfo = JSON.parse(prepareResult.stdout)
 
-      // 生成配置（predict 最小参数集）
+      // 生成配置（predict 最小参数集，normalizer_type 从 mergedParams 获取以保留用户选择）
+      const predictMergedParams = workflow.getParams()
       const generateScript = path.join(workspaceDir, 'generate_config.py')
       const configParams: Record<string, unknown> = {
         model_name, dataset_root, dyn_vars, scale, log_dir,
@@ -887,10 +940,10 @@ export const oceanSrTrainTool = defineTool({
         distribute: false, distribute_mode: 'single',
         ckpt_path: ckpt_path || path.join(log_dir, 'best_model.pth'),
         epochs: 1, batch_size: 1, eval_batch_size: 1,
-        use_amp: args.use_amp ?? false,
+        use_amp: predictMergedParams.use_amp ?? (ampDefaultOff ? false : true),
         gradient_checkpointing: false,
-        patch_size: args.patch_size,
-        normalize: args.normalize, normalizer_type: args.normalizer_type,
+        patch_size: predictMergedParams.patch_size,
+        normalize: predictMergedParams.normalize, normalizer_type: predictMergedParams.normalizer_type,
       }
       const configPath = path.join(workspaceDir, `${model_name}_config.yaml`)
       const paramsJson = JSON.stringify(configParams)
@@ -1099,7 +1152,11 @@ export const oceanSrTrainTool = defineTool({
     const generateScript = path.join(workspaceDir, 'generate_config.py')
 
     // ===== 3b. 生成配置文件 =====
-    // 显式白名单：只传递 generate_config.py 需要的参数，避免泄漏状态机内部字段
+    // 使用 workflow.getParams() 取合并后参数（用户传入值 > 默认值），
+    // 避免因 Agent 后续调用未携带某字段而丢失用户确认过的参数
+    const mergedParams = workflow.getParams()
+    // use_amp 回落：若 session 和当前调用均未明确指定，则使用模型自动计算值
+    const effectiveUseAmp = mergedParams.use_amp ?? (ampDefaultOff ? false : true)
     const configParams: Record<string, unknown> = {
       model_name,
       dataset_root,
@@ -1112,24 +1169,24 @@ export const oceanSrTrainTool = defineTool({
       distribute_mode: effectiveDistributeMode,
       master_port: masterPort ?? undefined,
       ckpt_path,
-      epochs: args.epochs,
-      lr: args.lr,
-      batch_size: args.batch_size,
-      eval_batch_size: args.eval_batch_size,
-      patience: args.patience,
-      eval_freq: args.eval_freq,
-      normalize: args.normalize,
-      normalizer_type: args.normalizer_type,
-      optimizer: args.optimizer,
-      weight_decay: args.weight_decay,
-      scheduler: args.scheduler,
-      scheduler_step_size: args.scheduler_step_size,
-      scheduler_gamma: args.scheduler_gamma,
-      seed: args.seed,
-      wandb: args.wandb,
-      use_amp: args.use_amp,
-      gradient_checkpointing: args.gradient_checkpointing,
-      patch_size: args.patch_size,
+      epochs: mergedParams.epochs,
+      lr: mergedParams.lr,
+      batch_size: mergedParams.batch_size,
+      eval_batch_size: mergedParams.eval_batch_size,
+      patience: mergedParams.patience,
+      eval_freq: mergedParams.eval_freq,
+      normalize: mergedParams.normalize,
+      normalizer_type: mergedParams.normalizer_type,
+      optimizer: mergedParams.optimizer,
+      weight_decay: mergedParams.weight_decay,
+      scheduler: mergedParams.scheduler,
+      scheduler_step_size: mergedParams.scheduler_step_size,
+      scheduler_gamma: mergedParams.scheduler_gamma,
+      seed: mergedParams.seed,
+      wandb: mergedParams.wandb,
+      use_amp: effectiveUseAmp,
+      gradient_checkpointing: mergedParams.gradient_checkpointing,
+      patch_size: mergedParams.patch_size,
     }
 
     const configPath = path.join(workspaceDir, `${model_name}_config.yaml`)
