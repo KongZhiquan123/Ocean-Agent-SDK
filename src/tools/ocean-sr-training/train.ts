@@ -7,9 +7,13 @@
  * @author Leizheng
  * @contributors kongzhiquan
  * @date 2026-02-09
- * @version 4.6.0
+ * @version 4.7.0
  *
  * @changelog
+ *   - 2026-02-25 Leizheng: v4.7.0 AWAITING_EXECUTION 阶段集成超参数推荐
+ *     - 调用 recommend_hyperparams.py 实测显存 + 数据集扫描
+ *     - 推荐 batch_size / epochs / lr，并附数据频谱分析说明
+ *     - 失败时静默跳过，不影响现有训练流程
  *   - 2026-02-25 Leizheng: v4.6.0 session 文件持久化用户确认参数
  *     - AWAITING_EXECUTION 时将全量参数保存到 {log_dir}/.ocean_sr_session.json
  *     - PASS 执行时读取 session 文件作为 sessionOverrides 传入 TrainingWorkflow
@@ -532,6 +536,119 @@ async function validateDataset(
   }
 }
 
+/**
+ * 调用 recommend_hyperparams.py 获取超参数推荐。
+ * 失败时返回 null，不抛出异常（不影响主流程）。
+ */
+async function runHyperparamRecommendation(
+  args: {
+    dataset_root?: string
+    model_name?: string
+    scale?: number
+    dyn_vars?: string[]
+    device_ids?: number[]
+  },
+  pythonPath: string,
+  trainingDir: string,
+  ctx: { sandbox: { exec: (cmd: string, options?: { timeoutMs?: number }) => Promise<{ code: number; stdout: string; stderr: string }> } },
+): Promise<Record<string, unknown> | null> {
+  if (!args.dataset_root || !args.model_name || !args.scale || !args.dyn_vars?.length) {
+    return null
+  }
+  try {
+    const recommendScript = path.join(trainingDir, 'recommend_hyperparams.py')
+    const deviceId = Number(args.device_ids?.[0] ?? 0)
+    const cmd = [
+      `cd "${shellEscapeDouble(trainingDir)}"`,
+      `&&`,
+      `CUDA_VISIBLE_DEVICES=${deviceId}`,
+      `"${shellEscapeDouble(pythonPath)}"`,
+      `"${shellEscapeDouble(recommendScript)}"`,
+      `--dataset_root "${shellEscapeDouble(args.dataset_root)}"`,
+      `--model_name "${shellEscapeDouble(args.model_name)}"`,
+      `--scale ${args.scale}`,
+      `--dyn_vars "${shellEscapeDouble(args.dyn_vars.join(','))}"`,
+      `--device 0`,
+    ].join(' ')
+    const result = await ctx.sandbox.exec(cmd, { timeoutMs: 180000 })
+    if (result.code !== 0) return null
+    return extractTaggedJson(result.stdout, 'recommend')
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 将超参数推荐结果格式化为用户可读的消息段落。
+ */
+function formatRecommendationMessage(rec: Record<string, unknown>): string {
+  const recommendations = rec.recommendations as Record<string, unknown> | undefined
+  const reasoning = rec.reasoning as Record<string, unknown> | undefined
+  const datasetInfo = rec.dataset_info as Record<string, unknown> | undefined
+  const gpuInfo = rec.gpu_info as Record<string, unknown> | undefined
+  const spectral = rec.spectral_analysis as Record<string, unknown> | undefined
+  const modelNotes = rec.model_notes as Record<string, unknown> | undefined
+
+  if (!recommendations) return ''
+
+  const lines: string[] = [
+    '================================================================================',
+    '                    💡 超参数推荐（基于实测显存 + 数据分析）',
+    '================================================================================',
+  ]
+
+  // 数据集 & GPU 基本信息
+  if (datasetInfo || gpuInfo) {
+    lines.push('\n【分析基础】')
+    if (datasetInfo) {
+      lines.push(`- 训练集：${datasetInfo.n_train} 个样本，HR ${(datasetInfo.hr_shape as number[])?.join(' × ') ?? '?'}，${datasetInfo.n_vars} 个变量`)
+    }
+    if (gpuInfo && gpuInfo.name) {
+      lines.push(`- GPU：${gpuInfo.name}（${gpuInfo.total_gb ?? '?'} GB）`)
+    }
+  }
+
+  // 推荐参数
+  lines.push('\n【推荐参数】')
+  if (recommendations.batch_size !== undefined)
+    lines.push(`- batch_size:        ${recommendations.batch_size}`)
+  if (recommendations.eval_batch_size !== undefined)
+    lines.push(`- eval_batch_size:   ${recommendations.eval_batch_size}`)
+  if (recommendations.epochs !== undefined)
+    lines.push(`- epochs:            ${recommendations.epochs}`)
+  if (recommendations.lr !== undefined)
+    lines.push(`- lr:                ${(recommendations.lr as number).toExponential(2)}`)
+  if (recommendations.gradient_checkpointing !== undefined)
+    lines.push(`- gradient_checkpointing: ${recommendations.gradient_checkpointing}`)
+
+  // 推荐理由
+  if (reasoning && Object.keys(reasoning).length > 0) {
+    lines.push('\n【推荐理由】')
+    for (const [key, val] of Object.entries(reasoning)) {
+      lines.push(`- ${key}: ${val}`)
+    }
+  }
+
+  // 频谱分析
+  if (spectral) {
+    lines.push('\n【数据频谱分析（仅供参考，不自动修改模型结构）】')
+    lines.push(`- 频率特征：${spectral.freq_desc}（k90 ≈ ${spectral.k90_mean}，max_k = ${spectral.max_k}）`)
+  }
+
+  // 模型特定提示
+  if (modelNotes) {
+    lines.push('\n【模型结构参数参考】')
+    for (const [, note] of Object.entries(modelNotes)) {
+      lines.push(`- ${note}`)
+    }
+  }
+
+  lines.push('\n⚠️ Agent 注意：以上为系统推荐值，请告知用户并询问是否采用或调整，再继续执行确认。')
+  lines.push('================================================================================')
+
+  return lines.join('\n')
+}
+
 export const oceanSrTrainTool = defineTool({
   name: 'ocean_sr_train',
   description: `执行海洋超分辨率模型训练或测试。
@@ -873,6 +990,20 @@ export const oceanSrTrainTool = defineTool({
       // AWAITING_EXECUTION 时持久化全量参数，供后续执行调用恢复可选参数（如 normalizer_type）
       if (stateCheck.currentState === TrainingState.AWAITING_EXECUTION && args.log_dir) {
         await saveSessionParams(args.log_dir, workflow.getParams(), ctx)
+      }
+      // AWAITING_EXECUTION 时运行超参数推荐（实测显存 + 数据集分析）
+      if (stateCheck.currentState === TrainingState.AWAITING_EXECUTION) {
+        const recResult = await runHyperparamRecommendation(args, pythonPath, trainingDir, ctx)
+        if (recResult?.status === 'success') {
+          const recMsg = formatRecommendationMessage(recResult)
+          if (recMsg) {
+            prompt.message = `${prompt.message}\n\n${recMsg}`
+          }
+          prompt.data = {
+            ...(prompt.data ?? {}),
+            hyperparameter_recommendations: recResult,
+          }
+        }
       }
       return {
         status: prompt.status,
