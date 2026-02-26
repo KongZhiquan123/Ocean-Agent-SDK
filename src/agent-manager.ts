@@ -5,9 +5,10 @@
  * @author kongzhiquan
  * @contributors Leizheng
  * @date 2026-02-02
- * @version 1.7.0
+ * @version 1.8.0
  *
  * @changelog
+ *   - 2026-02-26 kongzhiquan: v1.8.0 AgentConfig 新增 notebookPath 字段，写入 agent metadata
  *   - 2026-02-25 kongzhiquan: v1.7.0 processMessage 订阅 monitor 通道，agent 错误事件转换为 SSE error 事件
  *   - 2026-02-14 kongzhiquan: v1.6.0 outputsPath 注入：metadata 存储 + processMessage 消息级指令前缀
  *   - 2026-02-10 kongzhiquan: v1.5.0 新增 transformToolResult 集中格式转换器
@@ -36,6 +37,7 @@ export interface AgentConfig {
   mode: 'ask' | 'edit'
   workingDir?: string
   outputsPath?: string
+  notebookPath?: string
   userId?: string
   files?: string[]
 }
@@ -87,6 +89,7 @@ export async function createAgent(config: AgentConfig): Promise<Agent> {
         mode: config.mode,
         files: config.files,
         outputsPath: config.outputsPath,
+        notebookPath: config.notebookPath,
       },
     },
     deps,

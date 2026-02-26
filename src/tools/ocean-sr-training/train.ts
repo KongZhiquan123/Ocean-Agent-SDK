@@ -5,11 +5,16 @@
  *              集成状态机实现分阶段确认流程
  *              支持后台执行和实时日志流
  * @author Leizheng
- * @contributors kongzhiquan
+ * @contributors kongzhiquan, Leizheng
  * @date 2026-02-09
- * @version 4.7.0
+ * @version 4.8.1
  *
  * @changelog
+ *   - 2026-02-26 kongzhiquan: v4.8.1 Notebook 路径改用后端传入的 notebookPath（从 agent metadata 读取）
+ *   - 2026-02-25 kongzhiquan: v4.8.0 训练成功启动后生成可复现 Jupyter Notebook
+ *     - 在 PASS 阶段 status=started 时调用 generateTrainCells + saveOrAppendNotebook
+ *     - Notebook 保存至 {log_dir}/{basename}.ipynb
+ *     - 包含评估、推理、完整训练命令等 cells
  *   - 2026-02-25 Leizheng: v4.7.0 AWAITING_EXECUTION 阶段集成超参数推荐
  *     - 调用 recommend_hyperparams.py 实测显存 + 数据集扫描
  *     - 推荐 batch_size / epochs / lr，并附数据频谱分析说明
@@ -91,6 +96,7 @@ import {
   type GpuInfo,
   type ModelInfo,
 } from './workflow-state'
+import { generateTrainCells, saveOrAppendNotebook } from './notebook'
 
 /** 训练会话参数缓存文件名，用于跨无状态调用保留用户确认过的参数 */
 const SESSION_FILENAME = '.ocean_sr_session.json'
@@ -865,9 +871,6 @@ export const oceanSrTrainTool = defineTool({
     }
 
     const trainingDir = path.resolve(process.cwd(), 'scripts/ocean_SR_training_masked')
-    args.log_dir = args.log_dir ? path.resolve(ctx.sandbox.workDir, args.log_dir) : undefined
-    args.dataset_root = args.dataset_root ? path.resolve(ctx.sandbox.workDir, args.dataset_root) : undefined
-    args.ckpt_path = args.ckpt_path ? path.resolve(ctx.sandbox.workDir, args.ckpt_path) : undefined
 
     const userSpecifiedUseAmp = Object.prototype.hasOwnProperty.call(args, 'use_amp')
     const ampDefaultOff = isAmpDefaultOffModel(args.model_name as string | undefined)
@@ -1531,41 +1534,54 @@ export const oceanSrTrainTool = defineTool({
       }
     }
 
-    if (startupResult.found) {
-      // training_start 事件收到 → 训练正常运行中
-      return {
-        status: 'started',
-        message: '训练已启动并正常运行中。使用 ocean_sr_train_status 工具监控进度。',
-        process_id: processInfo.id,
-        pid: processInfo.pid,
-        mode,
-        model: model_name,
-        config_path: genInfo.config_path,
-        log_dir,
-        log_file: processInfo.logFile,
+    // ===== 3g. 生成 Jupyter Notebook（训练成功启动后） =====
+    const metadataNotebookPath = (ctx.agent as any)?.config?.metadata?.notebookPath as string | undefined
+    const notebookPath = metadataNotebookPath
+      ? path.resolve(metadataNotebookPath)
+      : path.resolve(ctx.sandbox.workDir, `${path.basename(ctx.sandbox.workDir)}.ipynb`)
+    try {
+      const cells = generateTrainCells({
+        logDir: log_dir,
+        datasetRoot: dataset_root ?? '',
+        modelName: model_name ?? '',
+        configPath: genInfo.config_path ?? configPath,
+        workspaceDir,
+        pythonPath,
+        deviceIds: normalizedDeviceIds,
         distribute: effectiveDistribute,
-        distribute_mode: effectiveDistributeMode,
-        device_ids: normalizedDeviceIds,
-        master_port: masterPort ?? undefined,
-        workspace_dir: workspaceDir,
-        workspace_info: prepareInfo,
-        amp_auto_disabled: autoDisabledAmp ? { model: args.model_name } : undefined,
-        warnings: execWarnings.length > 0 ? execWarnings : undefined,
-        fft_amp_warning: fftAmpWarningAtStart?.details,
-        next_steps: [
-          `调用 ocean_sr_train_status({ action: "wait", process_id: "${processInfo.id}", timeout: 120 }) 等待训练状态变化`,
-          `调用 ocean_sr_train_status({ action: "watch", process_id: "${processInfo.id}", timeout: 300 }) 等待关键推送事件`,
-          `调用 ocean_sr_train_status({ process_id: "${processInfo.id}" }) 查看训练状态`,
-          `调用 ocean_sr_train_status({ action: "logs", process_id: "${processInfo.id}", tail: 50 }) 查看最新日志`,
-          `调用 ocean_sr_train_status({ action: "kill", process_id: "${processInfo.id}" }) 终止训练`,
-        ],
-      }
+        distributeMode: effectiveDistributeMode,
+        masterPort: masterPort ?? undefined,
+        mode,
+        scale: mergedParams.scale,
+        dynVars: mergedParams.dyn_vars,
+        epochs: mergedParams.epochs,
+        lr: mergedParams.lr,
+        batchSize: mergedParams.batch_size,
+        evalBatchSize: mergedParams.eval_batch_size,
+        patience: mergedParams.patience,
+        evalFreq: mergedParams.eval_freq,
+        normalize: mergedParams.normalize,
+        normalizerType: mergedParams.normalizer_type,
+        optimizer: mergedParams.optimizer,
+        weightDecay: mergedParams.weight_decay,
+        scheduler: mergedParams.scheduler,
+        schedulerStepSize: mergedParams.scheduler_step_size,
+        schedulerGamma: mergedParams.scheduler_gamma,
+        seed: mergedParams.seed,
+        useAmp: effectiveUseAmp,
+        gradientCheckpointing: mergedParams.gradient_checkpointing,
+        patchSize: mergedParams.patch_size,
+        ckptPath: ckpt_path,
+        wandb: mergedParams.wandb,
+      })
+      await saveOrAppendNotebook(ctx, notebookPath, cells)
+    } catch (e) {
+      console.warn('Notebook 生成失败:', e)
     }
 
-    // 超时 → 进程仍在运行但还没开始训练（超大数据集加载中）
-    return {
+    // 公共基础响应
+    const baseResponse = {
       status: 'started',
-      message: '训练进程已启动，仍在初始化中（可能数据量较大）。使用 ocean_sr_train_status 监控。',
       process_id: processInfo.id,
       pid: processInfo.pid,
       mode,
@@ -1573,6 +1589,7 @@ export const oceanSrTrainTool = defineTool({
       config_path: genInfo.config_path,
       log_dir,
       log_file: processInfo.logFile,
+      notebook_path: notebookPath,
       distribute: effectiveDistribute,
       distribute_mode: effectiveDistributeMode,
       device_ids: normalizedDeviceIds,
@@ -1582,12 +1599,31 @@ export const oceanSrTrainTool = defineTool({
       amp_auto_disabled: autoDisabledAmp ? { model: args.model_name } : undefined,
       warnings: execWarnings.length > 0 ? execWarnings : undefined,
       fft_amp_warning: fftAmpWarningAtStart?.details,
+    };
+
+    if (startupResult.found) {
+      return {
+        ...baseResponse,
+        message: '训练已启动并正常运行中。使用 ocean_sr_train_status 工具监控进度。',
+        next_steps: [
+          `调用 ocean_sr_train_status({ action: "wait", process_id: "${processInfo.id}", timeout: 120 }) 等待训练状态变化`,
+          `调用 ocean_sr_train_status({ action: "watch", process_id: "${processInfo.id}", timeout: 300 }) 等待关键推送事件`,
+          `调用 ocean_sr_train_status({ process_id: "${processInfo.id}" }) 查看训练状态`,
+          `调用 ocean_sr_train_status({ action: "logs", process_id: "${processInfo.id}", tail: 50 }) 查看最新日志`,
+          `调用 ocean_sr_train_status({ action: "kill", process_id: "${processInfo.id}" }) 终止训练`,
+        ],
+      };
+    }
+
+    return {
+      ...baseResponse,
+      message: '训练进程已启动，仍在初始化中（可能数据量较大）。使用 ocean_sr_train_status 监控。',
       next_steps: [
         `调用 ocean_sr_train_status({ action: "wait", process_id: "${processInfo.id}", timeout: 120 }) 等待训练状态变化`,
         `调用 ocean_sr_train_status({ action: "watch", process_id: "${processInfo.id}", timeout: 300 }) 等待关键推送事件`,
         `调用 ocean_sr_train_status({ process_id: "${processInfo.id}" }) 查看训练状态`,
         `调用 ocean_sr_train_status({ action: "logs", process_id: "${processInfo.id}", tail: 50 }) 查看最新日志`,
       ],
-    }
+    };
   }
 })
