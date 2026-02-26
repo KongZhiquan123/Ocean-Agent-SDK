@@ -3,12 +3,13 @@
  *
  * @description 测试 kode-agent-service 的交互式客户端
  *              支持多轮对话、海洋数据预处理完整流程测试、超分训练测试
- * @author leizheng
+ * @author kongzhiquan
  * @contributors kongzhiquan, Leizheng
- * @date 2026-02-02
- * @version 3.4.0
+ * @date 2026-02-26
+ * @version 3.5.0
  *
  * @changelog
+ *   - 2026-02-26 kongzhiquan: v3.5.0 请求体添加outputsPath字段和notebookPath字段，打印agent_error事件
  *   - 2026-02-07 Leizheng: v3.4.0 训练测试更新 OOM 防护流程
  *     - testOceanSRTraining() 工作流更新为 9 步（含显存预估 + 报告生成）
  *     - 新增 OOM 防护参数提示（use_amp, gradient_checkpointing, patch_size）
@@ -86,6 +87,7 @@ async function chat(message: string, mode: 'ask' | 'edit' = 'edit'): Promise<str
       context: {
         userId: 'test-user',
         workingDir: './work_ocean',
+        notebookPath: './work_ocean/work_ocean.ipynb'
       },
     }
 

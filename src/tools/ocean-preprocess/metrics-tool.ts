@@ -8,6 +8,7 @@
  * @version 1.2.0
  *
  * @changelog
+ *   - 2026-02-25 kongzhiquan: v1.3.0 tempDir 改为基于 dataset_root 的 .ocean_preprocess_temp
  *   - 2026-02-05 kongzhiquan: v1.2.0 合并重构与沙盒修复
  *     - 移除 try-catch，统一由上层处理错误
  *     - 删除无用参数 output（改为固定输出到 ./ocean_preprocess_temp/metrics_result.json）
@@ -97,7 +98,7 @@ export const oceanMetricsTool = defineTool({
     // 2. 准备路径
     const pythonCmd = `"${shellEscapeDouble(pythonPath)}"`
     const scriptPath = path.resolve(process.cwd(), 'scripts/ocean_preprocess/metrics.py')
-    const tempDir = path.resolve(ctx.sandbox.workDir, 'ocean_preprocess_temp')
+    const tempDir = path.resolve(dataset_root, '.ocean_preprocess_temp')
     const outputPath = path.join(tempDir, 'metrics_result.json')
 
     // 3. 构建命令
