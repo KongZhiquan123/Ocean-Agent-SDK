@@ -7,16 +7,27 @@
 
 @author Leizheng
 @date 2026-02-25
-@version 1.1.0
+@version 1.3.0
 
 @changelog
+  - 2026-02-26 Leizheng: v1.4.0 增强坐标变量加载逻辑
+    - _load_coord_var 三级搜索：首选 var_names.json 配置 → 形状匹配 → 关键词兜底
+    - 读取 var_names.json 中的 lon_var/lat_var/spatial_shape 指导坐标选择
+    - 解决 ROMS 数据坐标变量（lon_rho/lat_rho）无法正确加载的问题
+  - 2026-02-26 Leizheng: v1.3.0 修复 frames 图三大问题
+    - 1D 坐标匹配：lon(W,) / lat(H,) 与 data(H,W) 按维度长度匹配，构建 extent
+    - 标题增加日期范围和样本数：{var} | {split} ({first} ~ {last}, n=N)
+    - colorbar 改用 gridspec 预留独立列（cax），消除与子图重叠
+  - 2026-02-26 Leizheng: v1.2.0 移除中文字体配置，所有标签改用英文
+    - 删除 _configure_fonts()，不再强制覆盖 font.family
+    - 根因：Droid Sans Fallback 缺少拉丁字符 glyph，导致所有文字变方框
   - 2026-02-26 Leizheng: v1.1.0 新增分布直方图
     - 新增 plot_distribution_histogram() 函数
     - 均匀采样帧合并值域，绘制填充直方图并标注 P5/P95 分位数
   - 2026-02-25 Leizheng: v1.0.0 初始版本
     - 支持从 {split}/{var_name}/*.npy 目录结构读取数据
     - 每个变量生成：样本帧空间分布图 + 时序统计图
-    - 支持中文标签（通过 matplotlib 字体配置）
+    - 英文标签（不依赖系统中文字体）
     - 自动加载 static_variables/ 中的经纬度坐标
 
 用法:
@@ -38,45 +49,73 @@ try:
     import matplotlib
     matplotlib.use('Agg')  # 非交互式后端
     import matplotlib.pyplot as plt
-    import matplotlib.font_manager as fm
 except ImportError:
     print(json.dumps({"status": "error", "errors": ["需要安装 matplotlib: pip install matplotlib"]}))
     sys.exit(1)
-
-
-# ========================================
-# 字体配置（支持中文）
-# ========================================
-
-def _configure_fonts():
-    """配置 matplotlib 字体，优先使用系统中文字体"""
-    chinese_fonts = ['SimHei', 'Microsoft YaHei', 'WenQuanYi Micro Hei', 'Noto Sans CJK SC',
-                     'Source Han Sans CN', 'PingFang SC', 'STHeiti',
-                     'Droid Sans Fallback', 'AR PL KaitiM GB', 'AR PL SungtiL GB']
-    available = {f.name for f in fm.fontManager.ttflist}
-    for font in chinese_fonts:
-        if font in available:
-            plt.rcParams['font.family'] = font
-            break
-    else:
-        plt.rcParams['font.family'] = 'DejaVu Sans'
-    plt.rcParams['axes.unicode_minus'] = False
-
 
 # ========================================
 # 辅助函数
 # ========================================
 
-def _load_coord_var(static_dir: str, keyword: str) -> Optional[np.ndarray]:
-    """从 static_variables/ 加载经纬度坐标"""
+def _load_coord_var(
+    static_dir: str,
+    keyword: str,
+    preferred_var: Optional[str] = None,
+    target_shape: Optional[tuple] = None
+) -> Optional[np.ndarray]:
+    """
+    从 static_variables/ 加载经纬度坐标。
+
+    搜索优先级：
+    1. preferred_var（var_names.json 中的 lon_var/lat_var）
+    2. 匹配 target_shape 的 2D 数组（如 lon_rho (400,441) 匹配数据的 HxW）
+    3. 任何包含 keyword 的文件（旧行为兜底）
+
+    Args:
+        static_dir: static_variables/ 目录路径
+        keyword: 搜索关键词（'lon' 或 'lat'）
+        preferred_var: 首选变量名（来自 var_names.json）
+        target_shape: 目标空间形状 (H, W)，用于筛选匹配的坐标数组
+    """
     if not os.path.isdir(static_dir):
         return None
-    for f in sorted(os.listdir(static_dir)):
+
+    files = sorted(os.listdir(static_dir))
+
+    # 辅助：从文件名提取变量名（去掉 "NN_" 编号前缀）
+    def _var_name(f: str) -> str:
+        base = f.replace('.npy', '')
+        return base.split('_', 1)[-1] if '_' in base else base
+
+    # 策略1：精确匹配 preferred_var
+    if preferred_var:
+        for f in files:
+            if f.endswith('.npy') and _var_name(f) == preferred_var:
+                try:
+                    arr = np.load(os.path.join(static_dir, f))
+                    return arr
+                except Exception:
+                    pass
+
+    # 策略2：匹配 target_shape 的 2D 坐标数组
+    if target_shape:
+        for f in files:
+            if keyword in f.lower() and f.endswith('.npy'):
+                try:
+                    arr = np.load(os.path.join(static_dir, f))
+                    if arr.ndim == 2 and arr.shape == target_shape:
+                        return arr
+                except Exception:
+                    pass
+
+    # 策略3：关键词匹配兜底
+    for f in files:
         if keyword in f.lower() and f.endswith('.npy'):
             try:
                 return np.load(os.path.join(static_dir, f))
             except Exception:
                 pass
+
     return None
 
 
@@ -116,20 +155,19 @@ def plot_sample_frames(
     n_samples: int = 4
 ):
     """
-    生成样本帧空间分布图（从时间轴均匀采样 n_samples 帧）
-    每行共用一个 colorbar，紧贴最后一列右侧（参考图风格）
+    Generate spatial distribution plots from uniformly sampled frames.
+    Supports both 1D coordinate axes and 2D coordinate grids.
+    Uses a dedicated colorbar axis to avoid overlap with subplots.
     """
     if not npy_files:
         return
 
-    # 均匀采样
     n = min(n_samples, len(npy_files))
     if n == 0:
         return
     indices = [int(i * (len(npy_files) - 1) / max(n - 1, 1)) for i in range(n)]
     selected = [npy_files[i] for i in indices]
 
-    # 加载所有数据，计算全局 vmin/vmax（对称）
     arrays = []
     for fpath in selected:
         data = _safe_load(fpath)
@@ -145,13 +183,40 @@ def plot_sample_frames(
     vabs = float(np.nanpercentile(np.abs(all_vals), 99)) if all_vals.size > 0 else 1.0
     vmin, vmax = -vabs, vabs
 
-    fig, axes = plt.subplots(1, n, figsize=(4.2 * n, 4.0), squeeze=False)
-    fig.suptitle(f'{var_name}  |  {split}', fontsize=12, y=1.01)
+    # Build extent from coordinate arrays (1D or 2D)
+    extent = None
+    has_coords = False
+    if lon_arr is not None and lat_arr is not None:
+        h, w = arrays[0].shape[:2]
+        if lon_arr.ndim == 1 and lat_arr.ndim == 1 and lon_arr.shape[0] == w and lat_arr.shape[0] == h:
+            # 1D axes: lon matches W dimension, lat matches H dimension
+            extent = [float(np.nanmin(lon_arr)), float(np.nanmax(lon_arr)),
+                      float(np.nanmin(lat_arr)), float(np.nanmax(lat_arr))]
+            has_coords = True
+        elif lon_arr.shape == arrays[0].shape and lat_arr.shape == arrays[0].shape:
+            # 2D grids matching data shape
+            extent = [float(np.nanmin(lon_arr)), float(np.nanmax(lon_arr)),
+                      float(np.nanmin(lat_arr)), float(np.nanmax(lat_arr))]
+            has_coords = True
+
+    # Title with date range from filenames
+    first_date = os.path.splitext(os.path.basename(npy_files[0]))[0]
+    last_date = os.path.splitext(os.path.basename(npy_files[-1]))[0]
+    title = f'{var_name}  |  {split}  ({first_date} ~ {last_date}, n={len(npy_files)})'
+
+    # Use gridspec to reserve a dedicated colorbar column (avoids overlap)
+    fig_width = 4.0 * n + 0.6  # extra width for colorbar
+    fig = plt.figure(figsize=(fig_width, 4.0))
+    gs = fig.add_gridspec(1, n + 1, width_ratios=[1] * n + [0.04], wspace=0.15)
+    axes = [fig.add_subplot(gs[0, i]) for i in range(n)]
+    cbar_ax = fig.add_subplot(gs[0, n])
+
+    fig.suptitle(title, fontsize=11, y=1.02)
 
     im_last = None
     arr_idx = 0
     for col, fpath in enumerate(selected):
-        ax = axes[0][col]
+        ax = axes[col]
         if arr_idx >= len(arrays):
             ax.set_visible(False)
             continue
@@ -160,28 +225,28 @@ def plot_sample_frames(
 
         fname = os.path.splitext(os.path.basename(fpath))[0]
 
-        if lon_arr is not None and lat_arr is not None and lon_arr.shape == data.shape:
-            extent = [float(np.nanmin(lon_arr)), float(np.nanmax(lon_arr)),
-                      float(np.nanmin(lat_arr)), float(np.nanmax(lat_arr))]
+        if has_coords and extent is not None:
             im = ax.imshow(data, origin='lower', extent=extent, aspect='auto',
                            cmap='viridis', vmin=vmin, vmax=vmax)
             ax.set_xlabel('Lon (°E)', fontsize=7)
             if col == 0:
                 ax.set_ylabel('Lat (°N)', fontsize=7)
+            else:
+                ax.set_yticklabels([])
         else:
             im = ax.imshow(data, origin='lower', aspect='auto',
                            cmap='viridis', vmin=vmin, vmax=vmax)
+            if col > 0:
+                ax.set_yticklabels([])
 
         ax.set_title(fname, fontsize=8)
         ax.tick_params(labelsize=6)
         im_last = im
 
-    # 每行共用一个 colorbar，紧贴最后一列右侧
     if im_last is not None:
-        cbar = fig.colorbar(im_last, ax=axes[0].tolist(), fraction=0.015, pad=0.02)
+        cbar = fig.colorbar(im_last, cax=cbar_ax)
         cbar.ax.tick_params(labelsize=7)
 
-    plt.tight_layout()
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     plt.savefig(out_path, dpi=120, bbox_inches='tight')
     plt.close(fig)
@@ -347,23 +412,32 @@ def visualize_forecast(dataset_root: str, splits: List[str], out_dir: str) -> di
         "errors": []
     }
 
-    _configure_fonts()
-
-    # 加载经纬度坐标
+    # 从 var_names.json 获取变量列表和坐标配置
     static_dir = os.path.join(dataset_root, 'static_variables')
-    lon_arr = _load_coord_var(static_dir, 'lon')
-    lat_arr = _load_coord_var(static_dir, 'lat')
-
-    # 从 var_names.json 获取变量列表
     var_names_path = os.path.join(dataset_root, 'var_names.json')
     dyn_vars = None
+    lon_var_name = None
+    lat_var_name = None
+    spatial_shape = None
     if os.path.exists(var_names_path):
         try:
             with open(var_names_path, 'r', encoding='utf-8') as f:
                 var_names_data = json.load(f)
             dyn_vars = var_names_data.get('dynamic', [])
+            lon_var_name = var_names_data.get('lon_var')
+            lat_var_name = var_names_data.get('lat_var')
+            spatial_shape = var_names_data.get('spatial_shape')
         except Exception as e:
             result["warnings"].append(f"读取 var_names.json 失败: {e}")
+
+    # 推断目标 HxW 形状（用于精确匹配坐标数组）
+    target_hw = None
+    if spatial_shape and len(spatial_shape) >= 2:
+        target_hw = tuple(spatial_shape[-2:])
+
+    # 加载经纬度坐标（优先使用 var_names.json 配置 + 形状匹配）
+    lon_arr = _load_coord_var(static_dir, 'lon', preferred_var=lon_var_name, target_shape=target_hw)
+    lat_arr = _load_coord_var(static_dir, 'lat', preferred_var=lat_var_name, target_shape=target_hw)
 
     generated_count = 0
 
