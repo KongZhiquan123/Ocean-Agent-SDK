@@ -1,6 +1,6 @@
 ---
-name: ocean-preprocess
-description: 海洋数据预处理技能 - 专用于超分辨率场景的NC到NPY数据格式转换
+name: ocean-SR-data-preprocess
+description: 海洋超分辨率数据预处理技能 - 专用于超分辨率场景的NC到NPY数据格式转换
 version: 3.3.0
 author: kongzhiquan
 contributors: leizheng

@@ -5,9 +5,12 @@
  * @author kongzhiquan
  * @contributors Leizheng
  * @date 2026-02-02
- * @version 1.7.0
+ * @version 1.7.1
  *
  * @changelog
+ *   - 2026-02-25 Leizheng: v1.7.1 修复 finally 中 await sendTask 阻塞 done 事件问题
+ *     - sendTask rejected 时会在 finally 中抛出，导致 yield done 永远不执行
+ *     - 改为 try/catch 包裹 await sendTask，保证 done 事件必然被发送
  *   - 2026-02-25 kongzhiquan: v1.7.0 processMessage 订阅 monitor 通道，agent 错误事件转换为 SSE error 事件
  *   - 2026-02-14 kongzhiquan: v1.6.0 outputsPath 注入：metadata 存储 + processMessage 消息级指令前缀
  *   - 2026-02-10 kongzhiquan: v1.5.0 新增 transformToolResult 集中格式转换器
@@ -402,8 +405,13 @@ export async function* processMessage(
       }
     }
   } finally {
-    // 确保消息发送任务完成
-    await sendTask
+    // 确保消息发送任务完成；若 sendTask 已 rejected，错误已在上方 .catch 中记录，
+    // 此处静默处理，保证 finally 正常退出，不阻塞后续 yield done 事件的发送。
+    try {
+      await sendTask
+    } catch (_err) {
+      // sendTask 的 .catch 已记录错误，此处不重复处理
+    }
   }
 
   // 发送完成事件

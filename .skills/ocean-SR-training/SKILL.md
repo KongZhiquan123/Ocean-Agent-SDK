@@ -215,7 +215,7 @@ log_dir/
 
 ## 数据目录要求
 
-需要 `ocean-preprocess` 预处理后的标准输出目录：
+需要 `ocean-SR-data-preprocess` 预处理后的标准输出目录：
 
 ```
 dataset_root/

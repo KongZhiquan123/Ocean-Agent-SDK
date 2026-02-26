@@ -96,7 +96,7 @@ export const oceanMetricsTool = defineTool({
 
     // 2. 准备路径
     const pythonCmd = `"${shellEscapeDouble(pythonPath)}"`
-    const scriptPath = path.resolve(process.cwd(), 'scripts/ocean_preprocess/metrics.py')
+    const scriptPath = path.resolve(process.cwd(), 'scripts/ocean-SR-data-preprocess/metrics.py')
     const tempDir = path.resolve(ctx.sandbox.workDir, 'ocean_preprocess_temp')
     const outputPath = path.join(tempDir, 'metrics_result.json')
 

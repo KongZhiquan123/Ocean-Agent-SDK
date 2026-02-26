@@ -422,7 +422,7 @@ export const oceanConvertNpyTool = defineTool({
     const outputPath = path.join(tempDir, 'convert_result.json')
 
     // Python 脚本路径
-    const scriptPath = path.resolve(process.cwd(), 'scripts/ocean_preprocess/convert_npy.py')
+    const scriptPath = path.resolve(process.cwd(), 'scripts/ocean-SR-data-preprocess/convert_npy.py')
 
     // 3. 准备配置
     const config = {

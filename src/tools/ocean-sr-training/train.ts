@@ -680,7 +680,7 @@ export const oceanSrTrainTool = defineTool({
   params: {
     dataset_root: {
       type: 'string',
-      description: '预处理数据根目录（ocean-preprocess 输出目录）',
+      description: '预处理数据根目录（ocean-SR-data-preprocess 输出目录）',
       required: false
     },
     log_dir: {

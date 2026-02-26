@@ -113,7 +113,7 @@ export const oceanDownsampleTool = defineTool({
 
     // 2. 准备路径
     const pythonCmd = `"${shellEscapeDouble(pythonPath)}"`
-    const scriptPath = path.resolve(process.cwd(), 'scripts/ocean_preprocess/downsample.py')
+    const scriptPath = path.resolve(process.cwd(), 'scripts/ocean-SR-data-preprocess/downsample.py')
     const tempDir = path.resolve(ctx.sandbox.workDir, 'ocean_preprocess_temp')
     const outputPath = path.join(tempDir, 'downsample_result.json')
 

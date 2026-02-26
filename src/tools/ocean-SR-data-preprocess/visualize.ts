@@ -119,7 +119,7 @@ export const oceanVisualizeTool = defineTool({
 
     // 2. 准备路径
     const pythonCmd = `"${shellEscapeDouble(pythonPath)}"`
-    const scriptPath = path.resolve(process.cwd(), 'scripts/ocean_preprocess/visualize_check.py')
+    const scriptPath = path.resolve(process.cwd(), 'scripts/ocean-SR-data-preprocess/visualize_check.py')
     const outputDir = out_dir || path.join(dataset_root, 'visualisation_data_process')
 
     // 3. 构建命令

@@ -222,7 +222,7 @@ export const oceanReportTool = defineTool({
 
     // 2. 准备路径
     const pythonCmd = `"${shellEscapeDouble(pythonPath)}"`
-    const scriptPath = path.resolve(process.cwd(), 'scripts/ocean_preprocess/generate_report.py')
+    const scriptPath = path.resolve(process.cwd(), 'scripts/ocean-SR-data-preprocess/generate_report.py')
     const reportPath = output_path || path.join(dataset_root, 'preprocessing_report.md')
 
     // 3. 准备配置
