@@ -27,6 +27,10 @@ const SIMPLE_TOOL_LABELS: Record<string, string> = {
   ocean_sr_visualize: '生成超分训练可视化图表',
   ocean_sr_train_status: '查询超分训练状态',
   ocean_sr_train: '启动超分训练',
+  ocean_forecast_visualize: '生成预报数据可视化',
+  ocean_forecast_generate_report: '生成预报数据预处理报告',
+  ocean_forecast_stats: '预报数据统计分析',
+  ocean_inspect_data: '数据检查',
 }
 
 const PREPROCESS_FULL_STEP_LABELS: Record<string, string> = {
@@ -36,6 +40,12 @@ const PREPROCESS_FULL_STEP_LABELS: Record<string, string> = {
   step_c2: 'LR 数据转换',
   step_d: '下采样',
   step_e: '可视化',
+}
+
+const FORECAST_PREPROCESS_FULL_STEP_LABELS: Record<string, string> = {
+  step_a: '数据检查',
+  step_b: '数据转换',
+  step_c: '可视化',
 }
 
 /**
@@ -57,6 +67,9 @@ export function transformToolResult(toolCall: ToolCallSnapshot): TransformedTool
   }
   if (toolName === 'ocean_preprocess_full') {
     return transformPreprocessFull(result)
+  }
+  if (toolName === 'ocean_forecast_preprocess_full') {
+    return transformForecastPreprocessFull(result)
   }
   const label = SIMPLE_TOOL_LABELS[toolName]
   if (label) {
@@ -96,6 +109,27 @@ function transformPreprocessFull(result: any): { status: 'success' | 'failed' | 
   for (const key of stepKeys) {
     if (result[key]) {
       const label = PREPROCESS_FULL_STEP_LABELS[key]
+      const success_status = ['success', 'ok', 'completed', 'pass']
+      const ok = success_status.includes(result[key].status) || success_status.includes(result[key].overall_status)
+      const op = result[key].status === 'skipped' ? '跳过' : '正在执行'
+      if (result[key].status === 'awaiting_confirmation') {
+        return { status: 'awaiting_confirmation', message: `处于步骤${label}，正在等待用户确认相关信息...` }
+      }
+      return { status: ok ? 'success' : 'failed', message: `${op}${label}步骤...` }
+    }
+  }
+
+  return { status: 'failed', message: result.message || '预处理流程正在执行未知状态' }
+}
+
+function transformForecastPreprocessFull(result: any): { status: 'success' | 'failed' | 'awaiting_confirmation'; message: string } {
+  if (!result) return { status: 'failed', message: '预处理流程执行失败' }
+
+  // 按执行顺序倒序查找最新的非空 step
+  const stepKeys = ['step_c', 'step_b', 'step_a']
+  for (const key of stepKeys) {
+    if (result[key]) {
+      const label = FORECAST_PREPROCESS_FULL_STEP_LABELS[key]
       const success_status = ['success', 'ok', 'completed', 'pass']
       const ok = success_status.includes(result[key].status) || success_status.includes(result[key].overall_status)
       const op = result[key].status === 'skipped' ? '跳过' : '正在执行'

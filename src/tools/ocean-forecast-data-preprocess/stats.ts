@@ -141,7 +141,7 @@ export const oceanForecastStatsTool = defineTool({
       process.cwd(),
       'scripts/ocean-forecast-data-preprocess/forecast_stats.py'
     )
-    const tempDir = path.resolve(ctx.sandbox.workDir, 'ocean_forecast_temp')
+    const tempDir = path.resolve(dataset_root, '.ocean_forecast_temp')
     const configPath = path.join(tempDir, 'stats_config.json')
     const outputPath = path.join(tempDir, 'stats_result.json')
 

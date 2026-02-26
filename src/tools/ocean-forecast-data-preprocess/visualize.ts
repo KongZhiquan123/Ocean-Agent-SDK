@@ -47,9 +47,14 @@ export const oceanForecastVisualizeTool = defineTool({
    - 空间均值随时间变化曲线
    - 空间标准差随时间变化曲线
 
+3. **{var}_distribution.png** - 数值分布直方图
+   - 均匀采样部分帧的像素值
+   - 标注 P5/P95 分位数范围
+
 **输出目录结构**：
 - dataset_root/visualisation_forecast/train/{var}_frames.png
 - dataset_root/visualisation_forecast/train/{var}_timeseries.png
+- dataset_root/visualisation_forecast/train/{var}_distribution.png
 - dataset_root/visualisation_forecast/valid/...
 - dataset_root/visualisation_forecast/test/...`,
 

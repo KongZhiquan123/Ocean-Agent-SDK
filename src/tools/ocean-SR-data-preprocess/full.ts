@@ -486,7 +486,7 @@ export const oceanPreprocessFullTool = defineTool({
     // ========== 复制预处理脚本到 output_base ==========
     try {
       const scriptsSourceDir = path.resolve(process.cwd(), 'scripts/ocean-SR-data-preprocess')
-      const scriptsTargetDir = path.resolve(output_base, '_ocean_preprocess_code')
+      const scriptsTargetDir = path.resolve(output_base, '_ocean_SR_preprocess_code')
       await ctx.sandbox.exec(`mkdir -p "${scriptsTargetDir}/convert_lib"`)
       await ctx.sandbox.exec(`cp -r "${scriptsSourceDir}/." "${scriptsTargetDir}/"`)
     } catch (e) {

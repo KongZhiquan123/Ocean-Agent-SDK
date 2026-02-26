@@ -27,6 +27,10 @@ const SIMPLE_TOOL_LABELS: Record<string, string> = {
   ocean_sr_visualize: '生成超分训练可视化图表',
   ocean_sr_train_status: '查询超分训练状态',
   ocean_sr_train: '启动超分训练',
+  ocean_forecast_visualize: '生成预报数据可视化',
+  ocean_forecast_generate_report: '生成预报数据预处理报告',
+  ocean_forecast_stats: '预报数据统计分析',
+  ocean_inspect_data: '数据检查',
 }
 
 /**
@@ -37,9 +41,11 @@ const SIMPLE_TOOL_LABELS: Record<string, string> = {
 export function transformToolUse(toolCall: ToolCallSnapshot): { message: string; input?: any } {
   const { name: toolName, inputPreview } = toolCall
 
-  if (toolName === 'ocean_preprocess_full') {
+  if (toolName === 'ocean_preprocess_full' || toolName === 'ocean_forecast_preprocess_full') {
     return {
-      message: '启动预处理流程...',
+      message: toolName === 'ocean_preprocess_full'
+        ? '启动超分预处理流程...'
+        : '启动预报预处理流程...',
       input: inputPreview,
     }
   }

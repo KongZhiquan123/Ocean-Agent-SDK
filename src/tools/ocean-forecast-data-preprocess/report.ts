@@ -3,10 +3,13 @@
  * @description 海洋预报数据预处理报告生成工具
  *
  * @author Leizheng
- * @date 2026-02-25
- * @version 1.0.0
+ * @contributers kongzhiquan
+ * @date 2026-02-26
+ * @version 1.1.0
  *
  * @changelog
+ *   - 2026-02-26 kongzhiquan: v1.1.0 添加了可视化结果的扫描和展示
+ *     - 在报告中新增了第7部分“可视化”，自动扫描 visualisation_forecast/ 目录下的图片，并在报告中展示样本帧分布图、时序统计图和数值分布图（如果存在）
  *   - 2026-02-25 Leizheng: v1.0.0 初始版本
  *     - 读取 preprocess_manifest.json / time_index.json / var_names.json
  *     - 在 TypeScript 内联生成 Markdown 报告（无 Python 依赖）
@@ -104,7 +107,8 @@ function generateMarkdownReport(
   timeIndex: any,
   varNames: any,
   confirmation: UserConfirmation,
-  datasetRoot: string
+  datasetRoot: string,
+  visualizations: { split: string; variable: string; frames: boolean; timeseries: boolean; distribution: boolean }[] = []
 ): string {
   const now = new Date().toISOString()
   const dynVars: string[] = varNames?.dynamic || manifest?.dyn_vars || []
@@ -127,8 +131,8 @@ function generateMarkdownReport(
 
   lines.push(`# 海洋预报数据预处理报告`)
   lines.push('')
-  lines.push(`> 生成时间: ${now}`)
-  lines.push(`> 数据集目录: \`${datasetRoot}\``)
+  lines.push(`> 生成时间: ${now} \n`)
+  lines.push(`> 数据集目录: \`${datasetRoot}\` \n`)
   lines.push('')
 
   // ---- Section 1: 数据集概览 ----
@@ -275,9 +279,49 @@ function generateMarkdownReport(
   lines.push(`\`\`\``)
   lines.push('')
 
-  // ---- Section 7: 警告 ----
+  let sectionCounter = 7
+
+  // ---- Section: 可视化 ----
+  if (visualizations.length > 0) {
+    lines.push(`## ${sectionCounter++}. 可视化`)
+    lines.push('')
+    lines.push(`> 仅展示部分样本，完整图片请查看 \`visualisation_forecast/\` 目录`)
+    lines.push('')
+    
+    // Group by Variable
+    const vars = Array.from(new Set(visualizations.map(v => v.variable)))
+    
+    for (const v of vars) {
+      lines.push(`### 变量：${v}`)
+      
+      // Filter for this var
+      const vViz = visualizations.filter(x => x.variable === v)
+      
+      for (const item of vViz) {
+          lines.push(`#### ${item.split}集`)
+          if (item.frames) {
+             lines.push(`**样本帧分布**`)
+             lines.push(`![](./visualisation_forecast/${item.split}/${v}_frames.png)`)
+             lines.push('')
+          }
+          if (item.timeseries) {
+             lines.push(`**时序统计**`)
+             lines.push(`![](./visualisation_forecast/${item.split}/${v}_timeseries.png)`)
+             lines.push('')
+          }
+          if (item.distribution) {
+             lines.push(`**数值分布**`)
+             lines.push(`![](./visualisation_forecast/${item.split}/${v}_distribution.png)`)
+             lines.push('')
+          }
+      }
+    }
+    lines.push('')
+  }
+
+  // ---- Section: 警告 ----
   if (warnings.length > 0) {
-    lines.push(`## 7. 处理警告`)
+    lines.push(`## ${sectionCounter++}. 处理警告`)
     lines.push('')
     warnings.slice(0, 20).forEach(w => lines.push(`- ⚠️ ${w}`))
     if (warnings.length > 20) {
@@ -286,8 +330,8 @@ function generateMarkdownReport(
     lines.push('')
   }
 
-  // ---- Section 8: 分析和建议（Agent 填写） ----
-  const analysisSection = warnings.length > 0 ? 8 : 7
+  // ---- Section: 分析和建议（Agent 填写） ----
+  const analysisSection = sectionCounter++
   lines.push(`## ${analysisSection}. 分析和建议`)
   lines.push('')
   lines.push(`<!-- AI_ANALYSIS_PLACEHOLDER`)
@@ -352,7 +396,8 @@ export const oceanForecastReportTool = defineTool({
 4. 数据集划分（train/valid/test 时间步数和范围）
 5. 后置验证结果（Rule 1/2/3）
 6. 输出目录结构
-7. AI 分析占位符（需 Agent 填写）
+7. 可视化（如果存在）
+8. AI 分析占位符（需 Agent 填写）
 
 **重要**：报告生成后，Agent 必须：
 1. 读取报告文件
@@ -433,13 +478,44 @@ export const oceanForecastReportTool = defineTool({
       // 继续
     }
 
+    // 扫描可视化文件
+    const visualizations: { split: string; variable: string; frames: boolean; timeseries: boolean; distribution: boolean }[] = []
+    const splits = ['train', 'valid', 'test']
+    const dynVars: string[] = varNames?.dynamic || manifest?.dyn_vars || []
+    const vizRootDir = path.join(dataset_root, 'visualisation_forecast')
+
+    for (const v of dynVars) {
+      for (const split of splits) {
+        const framesPath = path.join(vizRootDir, split, `${v}_frames.png`)
+        const seriesPath = path.join(vizRootDir, split, `${v}_timeseries.png`)
+        const distPath = path.join(vizRootDir, split, `${v}_distribution.png`)
+        
+        const [hasFrames, hasSeries, hasDist] = await Promise.all([
+            ctx.sandbox.fs.stat(framesPath).then(() => true).catch(() => false),
+            ctx.sandbox.fs.stat(seriesPath).then(() => true).catch(() => false),
+            ctx.sandbox.fs.stat(distPath).then(() => true).catch(() => false)
+        ])
+        
+        if (hasFrames || hasSeries || hasDist) {
+            visualizations.push({
+                split,
+                variable: v,
+                frames: hasFrames,
+                timeseries: hasSeries,
+                distribution: hasDist
+            })
+        }
+      }
+    }
+
     // 生成 Markdown 报告
     const reportContent = generateMarkdownReport(
       manifest,
       timeIndex,
       varNames,
       parseResult.data,
-      dataset_root
+      dataset_root,
+      visualizations
     )
 
     // 写入报告文件
