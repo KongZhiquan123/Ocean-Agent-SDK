@@ -1,11 +1,22 @@
 /**
- * 快速测试：生成训练/预处理 Notebook 并写入本地文件
+ * @file test-notebook.ts
+ *
+ * @description 快速测试：生成训练/预处理/预报预处理 Notebook 并写入本地文件
+ * @author kongzhiquan
+ * @date 2026-02-26
+ * @version 1.1.0
+ *
+ * @changelog
+ *   - 2026-02-26 kongzhiquan: v1.1.0 新增预报数据预处理 Notebook 测试
+ *   - 2026-02-25 kongzhiquan: v1.0.0 初始版本
+ *
  * 运行：npx tsx test-notebook.ts
- * 产物：test_outputs/test-train.ipynb, test_outputs/test-preprocess.ipynb
+ * 产物：test_outputs/test-train.ipynb, test_outputs/test-preprocess.ipynb, test_outputs/test-forecast-preprocess.ipynb
  */
 
 import { generateTrainCells } from './src/tools/ocean-sr-training/notebook'
 import { generatePreprocessCells } from './src/tools/ocean-SR-data-preprocess/notebook'
+import { generateForecastPreprocessCells } from './src/tools/ocean-forecast-data-preprocess/notebook'
 import { createEmptyNotebook } from './src/utils/notebook'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -93,6 +104,43 @@ fs.writeFileSync(preprocessOutPath, JSON.stringify(preprocessNotebook, null, 2),
 console.log(`\n预处理 Notebook 已写入: ${preprocessOutPath}`)
 console.log(`共 ${preprocessNotebook.cells.length} 个 cells`)
 preprocessNotebook.cells.forEach((c, i) => {
+  const preview = c.source.slice(0, 2).join('').replace(/\n/g, ' ').slice(0, 60)
+  console.log(`  [${i}] ${c.cell_type.padEnd(8)} ${preview}...`)
+})
+
+// ========== 预报数据预处理 Notebook ==========
+const forecastNotebook = createEmptyNotebook()
+forecastNotebook.cells = generateForecastPreprocessCells({
+  outputBase: '/data/ocean_forecast_processed',
+  ncFolder: '/data/raw_forecast_nc',
+  staticFile: '/data/raw_forecast_nc/grid.nc',
+  dynVars: ['temp', 'salt', 'zeta'],
+  statVars: ['lon_rho', 'lat_rho', 'h'],
+  maskVars: ['mask_rho'],
+  lonVar: 'lon_rho',
+  latVar: 'lat_rho',
+  trainRatio: 0.7,
+  validRatio: 0.15,
+  testRatio: 0.15,
+  hSlice: '0:512',
+  wSlice: '0:1024',
+  allowNan: true,
+  dynFilePattern: 'ocean_avg_*.nc',
+  chunkSize: 200,
+  useDateFilename: true,
+  dateFormat: 'auto',
+  timeVar: 'ocean_time',
+  maxFiles: undefined,
+  skipVisualize: false,
+  pythonPath: '/home/lz/miniconda3/envs/pytorch/bin/python',
+})
+
+const forecastOutPath = path.join(outDir, 'test-forecast-preprocess.ipynb')
+fs.writeFileSync(forecastOutPath, JSON.stringify(forecastNotebook, null, 2), 'utf-8')
+
+console.log(`\n预报预处理 Notebook 已写入: ${forecastOutPath}`)
+console.log(`共 ${forecastNotebook.cells.length} 个 cells`)
+forecastNotebook.cells.forEach((c, i) => {
   const preview = c.source.slice(0, 2).join('').replace(/\n/g, ' ').slice(0, 60)
   console.log(`  [${i}] ${c.cell_type.padEnd(8)} ${preview}...`)
 })

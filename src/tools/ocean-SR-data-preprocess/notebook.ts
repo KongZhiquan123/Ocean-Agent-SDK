@@ -95,7 +95,7 @@ function generateSetupCell(params: NotebookParams): NotebookCell {
     `OUTPUT_BASE = ${toPyRepr(params.outputBase)}`,
     `NC_FOLDER = ${toPyRepr(params.ncFolder)}`,
     `STATIC_FILE = ${toPyRepr(params.staticFile)}`,
-    `SCRIPT_DIR = os.path.join(OUTPUT_BASE, "_ocean_preprocess_code")`,
+    `SCRIPT_DIR = os.path.join(OUTPUT_BASE, "_ocean_SR_preprocess_code")`,
     `TEMP_DIR = os.path.join(OUTPUT_BASE, ".ocean_preprocess_temp")`,
     `PYTHON_PATH = ${toPyRepr(params.pythonPath)}`,
     'os.makedirs(TEMP_DIR, exist_ok=True)',
@@ -430,7 +430,7 @@ function generateCompletionCell(): NotebookCell {
     `├── test/hr/, lr/      # 测试集\n` +
     `├── static_variables/  # 静态变量\n` +
     `├── visualisation_data_process/  # 可视化对比图\n` +
-    `└── _ocean_preprocess_code/      # 预处理脚本\n` +
+    `└── _ocean_SR_preprocess_code/      # 预处理脚本\n` +
     `\`\`\``
   )
 }

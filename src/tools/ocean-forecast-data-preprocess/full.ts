@@ -5,10 +5,12 @@
  *              无下采样步骤，数据按时间严格排序
  *
  * @author Leizheng
+ * @contributors kongzhiquan
  * @date 2026-02-25
  * @version 1.1.0
  *
  * @changelog
+ *   - 2026-02-26 kongzhiquan: v1.2.0 添加notebook生成逻辑，执行完 Step B 后生成包含预处理代码和结果的 Jupyter Notebook，方便用户复现和调整预处理流程
  *   - 2026-02-26 Leizheng: v1.1.0 将 static_file 作为 grid_file 传给 forecast_preprocess.py
  *     - 支持 ROMS 等模式的独立网格文件（坐标/掩码变量不在数据文件中的情况）
  *   - 2026-02-26 Leizheng: v1.0.1 修复 Step A 调用缺少 output_base 参数导致 inspect 工具崩溃
@@ -27,6 +29,7 @@ import { findFirstPythonPath } from '@/utils/python-manager'
 import { oceanInspectDataTool } from '../ocean-SR-data-preprocess/inspect'
 import { oceanForecastVisualizeTool } from './visualize'
 import { ForecastWorkflow, WorkflowState } from './workflow-state'
+import { generateForecastPreprocessCells, saveOrAppendNotebook } from './notebook'
 
 const DEFAULT_WORKERS = Math.max(1, Math.min(8, os.cpus().length || 1))
 
@@ -313,6 +316,20 @@ export const oceanForecastPreprocessFullTool = defineTool({
       return result
     }
 
+    // ========== 复制预处理脚本到 output_base ==========
+    try {
+      const forecastScriptsDir = path.resolve(process.cwd(), 'scripts/ocean-forecast-data-preprocess')
+      const srScriptsDir = path.resolve(process.cwd(), 'scripts/ocean-SR-data-preprocess')
+      const scriptsTargetDir = path.resolve(output_base, '_ocean_forecast_preprocess_code')
+      await ctx.sandbox.exec(`mkdir -p "${scriptsTargetDir}"`)
+      // 复制预报预处理脚本
+      await ctx.sandbox.exec(`cp -r "${forecastScriptsDir}/." "${scriptsTargetDir}/"`)
+      // 复制 inspect_data.py（Step A 复用自 SR 模块）
+      await ctx.sandbox.exec(`cp "${srScriptsDir}/inspect_data.py" "${scriptsTargetDir}/"`)
+    } catch (e) {
+      console.warn('复制预处理脚本失败:', e)
+    }
+
     // ========== 状态机通过，验证研究变量 ==========
     const missingVars = (dyn_vars as string[]).filter((v: string) => !dynCandidates.includes(v))
     if (missingVars.length > 0) {
@@ -354,7 +371,7 @@ export const oceanForecastPreprocessFullTool = defineTool({
     }
 
     const pythonCmd = `"${shellEscapeDouble(pythonPath)}"`
-    const tempDir = path.resolve(ctx.sandbox.workDir, 'ocean_forecast_temp')
+    const tempDir = path.resolve(output_base, '.ocean_forecast_temp')
     const configPath = path.join(tempDir, 'forecast_config.json')
     const outputPath = path.join(tempDir, 'forecast_result.json')
     const scriptPath = path.resolve(process.cwd(), 'scripts/ocean-forecast-data-preprocess/forecast_preprocess.py')
@@ -419,6 +436,46 @@ export const oceanForecastPreprocessFullTool = defineTool({
       result.step_c = stepCResult
     } else {
       result.step_c = { status: 'skipped', reason: 'skip_visualize=true' }
+    }
+
+    // ========== 生成 Jupyter Notebook ==========
+    try {
+      const metadataNotebookPath = (ctx.agent as any)?.config?.metadata?.notebookPath as string | undefined
+      const notebookPath = metadataNotebookPath
+        ? path.resolve(metadataNotebookPath)
+        : path.resolve(ctx.sandbox.workDir, `${path.basename(ctx.sandbox.workDir)}.ipynb`)
+
+      const notebookPythonPath = findFirstPythonPath() || 'python3'
+
+      const cells = generateForecastPreprocessCells({
+        outputBase: output_base,
+        ncFolder: actualNcFolder,
+        staticFile: static_file,
+        dynVars: dyn_vars as string[],
+        statVars: finalStaticVars,
+        maskVars: finalMaskVars,
+        lonVar: finalLonVar,
+        latVar: finalLatVar,
+        trainRatio: train_ratio as number,
+        validRatio: valid_ratio as number,
+        testRatio: test_ratio as number,
+        hSlice: h_slice as string | undefined,
+        wSlice: w_slice as string | undefined,
+        allowNan: effectiveAllowNan,
+        dynFilePattern: actualFilePattern,
+        useDateFilename: use_date_filename,
+        dateFormat: date_format,
+        timeVar: time_var,
+        chunkSize: chunk_size,
+        maxFiles: max_files,
+        skipVisualize: skip_visualize,
+        pythonPath: notebookPythonPath,
+        ncFiles: actualNcFiles,
+      })
+
+      await saveOrAppendNotebook(ctx, notebookPath, cells)
+    } catch (e) {
+      console.warn('Notebook 生成失败:', e)
     }
 
     // ========== 最终状态 ==========

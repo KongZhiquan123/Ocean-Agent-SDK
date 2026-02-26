@@ -8,6 +8,7 @@
              无下采样，无 hr/lr 层级
 
 @author Leizheng
+@contributers kongzhiquan
 @date 2026-02-25
 @version 1.0.0
 
@@ -1200,7 +1201,7 @@ def forecast_preprocess(config: Dict[str, Any]) -> Dict[str, Any]:
     else:
         result["post_validation"] = {"skipped": True}
 
-    # ---- 16. 汇总时间信息 ----
+    # ---- 15. 汇总时间信息 ----
     result["time_info"] = {
         "total_steps": total_steps,
         "start": all_steps[0].ts_str if all_steps else None,
@@ -1208,6 +1209,33 @@ def forecast_preprocess(config: Dict[str, Any]) -> Dict[str, Any]:
         "estimated_step_seconds": _safe_float(estimated_step_seconds),
         "time_gaps_count": len(time_gaps)
     }
+
+    # ---- 16. 生成 preprocess_manifest.json ----
+    manifest = {
+        "created_at": datetime.utcnow().isoformat() + "Z",
+        "nc_folder": nc_folder,
+        "output_base": output_base,
+        "source_files": [os.path.basename(f) for f in nc_files],
+        "dyn_vars": dyn_vars,
+        "stat_vars": stat_vars,
+        "mask_vars": mask_vars,
+        "spatial_shape": spatial_shape,
+        "h_slice": h_slice_str,
+        "w_slice": w_slice_str,
+        "split_ratios": {
+            "train": train_ratio,
+            "valid": valid_ratio,
+            "test": test_ratio
+        },
+        "split_counts": {k: len(v) for k, v in split_steps.items()},
+        "total_npy_files": total_saved,
+        "warnings": result["warnings"],
+        "post_validation": result["post_validation"],
+        "time_info": result["time_info"]
+    }
+    manifest_path = os.path.join(output_base, 'preprocess_manifest.json')
+    with open(manifest_path, 'w', encoding='utf-8') as f:
+        json.dump(manifest, f, ensure_ascii=False, indent=2)
 
     # ---- 17. 最终状态 ----
     result["status"] = "pass"

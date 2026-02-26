@@ -8,7 +8,7 @@
 Ocean-Agent-SDK/
 ├── src/                   # 服务主代码（Agent、工具、服务端）
 ├── docs/                  # 多语言文档
-├── scripts/               # 数据预处理与校验脚本
+├── scripts/               # 数据预处理、校验与训练脚本
 ├── work_ocean/            # 示例数据、坏例与规则
 ├── test-client.ts         # 客户端 SSE 调用示例
 ├── test-ocean-badcases.ts # 海洋预处理坏例测试用例
@@ -24,6 +24,8 @@ Ocean-Agent-SDK/
 
 ```bash
 npm install
+cd ./scripts/ocean_SR_training_masked
+pip install -r requirements.txt
 ```
 
 ### 2. 配置环境变量
@@ -43,6 +45,7 @@ KODE_API_SECRET=your-secret-key
 ANTHROPIC_MODEL_ID=your-model-id
 KODE_API_PORT=8787
 SKILLS_DIR=your-skills-directory
+PYTHON3=your-python3-path
 ```
 `.env` 文件中的变量会被自动加载到 `process.env`。
 ### 3. 启动服务
@@ -99,11 +102,13 @@ X-API-Key: your-secret-key
 - `mode` (string, 可选)：模式，`"edit"` 或 `"ask"`，默认 `"edit"`
   - `edit`：可以读写文件、执行命令（编程助手）
   - `ask`：只读模式，用于问答（问答助手）
-- `outputsPath` (string, 可选)：输出文件路径
-- `context` (object, 可选)：上下文信息
-  - `userId` (string)：用户 ID
-  - `workingDir` (string)：工作目录
-  - `files` (string[])：相关文件列表
+- `outputsPath` (string, 必需)：输出文件根目录，所有生成的文件都必须在此目录下
+- `agentId` (string, 可选)：会话 ID，用于延续多轮对话
+- `context` (object, 必需)：上下文信息
+  - `userId` (string, 必需)：用户 ID
+  - `workingDir` (string, 必需)：工作目录
+  - `notebookPath` (string, 必需)：Jupyter Notebook 路径
+  - `files` (string[], 可选)：相关文件列表
 
 **响应（SSE 事件流）：**
 
@@ -118,19 +123,25 @@ data: {"type":"tool_use","tool":"fs_write","id":"toolu_xyz","input":{"path":"hel
 
 data: {"type":"tool_result","tool_use_id":"toolu_xyz","result":"{\"ok\":true,\"path\":\"hello.py\"}","is_error":false,"timestamp":1706889600000}
 
+data: {"type":"tool_error","tool":"fs_write","error":"Permission denied","timestamp":1706889600000}
+
+data: {"type":"agent_error","error":"Agent 处理异常","phase":"execution","severity":"error","timestamp":1706889600000}
+
 data: {"type":"text","content":"文件已创建成功！","timestamp":1706889600000}
 
 data: {"type":"done","metadata":{"agentId":"agt-abc123","timestamp":1706889600000}}
 ```
 
 **事件类型：**
-- `start`：开始处理
+- `start`：开始处理，返回 `agentId`
 - `heartbeat`：心跳（每 2 秒）
 - `text`：AI 生成的文本内容
-- `tool_use`：工具调用开始
+- `tool_use`：工具调用开始，包含输入参数
 - `tool_result`：工具调用结果
+- `tool_error`：工具调用失败（如权限不足、执行错误）
+- `agent_error`：Agent 内部错误（如监控报错）
 - `done`：处理完成
-- `error`：发生错误
+- `error`：发生严重错误
 
 ## 模式对比
 
@@ -142,12 +153,37 @@ data: {"type":"done","metadata":{"agentId":"agt-abc123","timestamp":170688960000
 - 适合代码生成、文件操作等任务
 
 **可用工具：**
-- `fs_read`, `fs_write`, `fs_edit`
-- `fs_glob`, `fs_grep`
-- `bash_run`
-- `todo_read`, `todo_write`
-- `skills`
-- `ocean_inspect_data`, `ocean_validate_tensor`, `ocean_convert_npy`, `ocean_preprocess_full`
+
+1. **通用工具**
+   - 文件操作：`fs_read`, `fs_write`, `fs_edit`, `fs_glob`, `fs_grep`
+   - 系统命令：`bash_run`
+   - 任务管理：`todo_read`, `todo_write`
+   - 技能管理：`skills`
+
+2. **海洋超分数据预处理 (Ocean SR Data Preprocess)**
+   - `ocean_inspect_data`: 数据检查
+   - `ocean_validate_tensor`: 张量校验
+   - `ocean_convert_npy`: 格式转换
+   - `ocean_preprocess_full`: 全流程处理
+   - `ocean_downsample`: 下采样
+   - `ocean_visualize`: 可视化
+   - `ocean_metrics`: 指标计算
+   - `ocean_report`: 报告生成
+
+3. **海洋超分训练 (Ocean SR Training)**
+   - `ocean_sr_check_gpu`: GPU 检查
+   - `ocean_sr_list_models`: 模型列表
+   - `ocean_sr_train`: 模型训练
+   - `ocean_sr_train_status`: 训练状态查询
+   - `ocean_sr_report`: 训练报告生成
+   - `ocean_sr_visualize`: 训练可视化
+
+4. **海洋时序预测数据预处理 (Ocean Forecast Data Preprocess)**
+   - `ocean_inspect_data`: 数据检查（共用）
+   - `ocean_forecast_preprocess_full`: 全流程处理
+   - `ocean_forecast_visualize`: 可视化
+   - `ocean_forecast_report`: 报告生成
+   - `ocean_forecast_stats`: 统计分析
 
 ### Ask 模式（问答助手）
 
@@ -160,6 +196,7 @@ data: {"type":"done","metadata":{"agentId":"agt-abc123","timestamp":170688960000
 - `fs_read`
 - `fs_glob`, `fs_grep`
 - `bash_run`（只读命令）
+- `ocean_inspect_data`（只读数据检查）
 
 ## 客户端示例
 
@@ -172,7 +209,12 @@ curl -X POST http://localhost:8787/api/chat/stream \
   -d '{
     "message": "请创建一个 Python 脚本来计算斐波那契数列",
     "mode": "edit",
-    "outputsPath": "./outputs"
+    "outputsPath": "./test_outputs",
+    "context": {
+      "userId": "test-user",
+      "workingDir": "./work_ocean",
+      "notebookPath": "./work_ocean/work_ocean.ipynb"
+    }
   }'
 ```
 
@@ -188,6 +230,12 @@ const response = await fetch('http://localhost:8787/api/chat/stream', {
   body: JSON.stringify({
     message: '请帮我分析 main.py 文件',
     mode: 'ask',
+    outputsPath: './test_outputs',
+    context: {
+       userId: 'test-user',
+       workingDir: './work_ocean',
+       notebookPath: './work_ocean/work_ocean.ipynb',
+    }
   }),
 })
 
@@ -198,49 +246,43 @@ while (true) {
   const { done, value } = await reader.read()
   if (done) break
 
-  const text = decoder.decode(value)
+  const text = decoder.decode(value, { stream: true })
   const lines = text.split('\n')
 
   for (const line of lines) {
     if (line.startsWith('data: ')) {
-      const event = JSON.parse(line.slice(6))
-      console.log('Event:', event)
-
-      if (event.type === 'text') {
-        console.log('AI:', event.content)
+      const jsonStr = line.slice(6)
+      if (!jsonStr.trim()) continue
+      
+      try {
+        const event = JSON.parse(jsonStr)
+        
+        switch (event.type) {
+          case 'start':
+            console.log('开始处理，Agent ID:', event.agentId)
+            break
+          case 'text':
+            process.stdout.write(event.content)
+            break
+          case 'tool_use':
+            console.log(`\n[调用工具] ${event.tool}`)
+            break
+          case 'tool_result':
+            console.log(`[工具结果] ${event.is_error ? '失败' : '成功'}`)
+            break
+          case 'tool_error':
+            console.error(`[工具错误] ${event.tool}: ${event.error}`)
+            break
+          case 'done':
+            console.log('\n处理完成')
+            break
+        }
+      } catch (e) {
+        console.error('解析错误:', e)
       }
     }
   }
 }
-```
-
-### Python
-
-```python
-import requests
-import json
-
-url = 'http://localhost:8787/api/chat/stream'
-headers = {
-    'Content-Type': 'application/json',
-    'X-API-Key': 'your-secret-key'
-}
-data = {
-    'message': '请创建一个 hello.txt 文件',
-    'mode': 'edit',
-    'outputsPath': './outputs'
-}
-
-with requests.post(url, headers=headers, json=data, stream=True) as response:
-    for line in response.iter_lines():
-        if line:
-            line = line.decode('utf-8')
-            if line.startswith('data: '):
-                event = json.loads(line[6:])
-                print('Event:', event)
-
-                if event['type'] == 'text':
-                    print('AI:', event['content'])
 ```
 
 ## 架构说明
