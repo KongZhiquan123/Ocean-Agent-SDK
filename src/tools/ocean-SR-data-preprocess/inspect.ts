@@ -185,7 +185,7 @@ export const oceanInspectDataTool = defineTool({
     const outputPath = path.join(tempDir, 'inspect_result.json')
 
     // Python 脚本路径（相对于项目根目录）
-    const scriptPath = path.resolve(process.cwd(), 'scripts/ocean_preprocess/inspect_data.py')
+    const scriptPath = path.resolve(process.cwd(), 'scripts/ocean-SR-data-preprocess/inspect_data.py')
 
     // 3. 准备配置
     const config: Record<string, any> = {

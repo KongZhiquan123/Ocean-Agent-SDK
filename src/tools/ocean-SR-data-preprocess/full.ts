@@ -6,9 +6,11 @@
  * @author leizheng
  * @contributors kongzhiquan
  * @date 2026-02-02
- * @version 3.5.0
+ * @version 3.5.1
  *
  * @changelog
+ *   - 2026-02-25 Leizheng: v3.5.1 修复 Step C2 (数值模型 LR 转换) 缺少 scale 参数
+ *     - Step C 正确传递了 scale，Step C2 遗漏，导致 LR 数据元数据缺失 scale 信息
  *   - 2026-02-07 kongzhiquan: v3.5.0 新增 max_files 参数，限制处理的最大 NC 文件数量
  *   - 2026-02-06 Leizheng: v3.4.1 有 mask 变量时自动允许 NaN
  *     - 陆地掩码区域的 NaN 是海洋数据的正常特征，不应阻断转换
@@ -607,6 +609,7 @@ export const oceanPreprocessFullTool = defineTool({
         test_ratio,
         h_slice,
         w_slice,
+        scale,
         workers: normalizedWorkers,
         output_subdir: 'lr',
         // 日期文件名参数

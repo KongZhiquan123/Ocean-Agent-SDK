@@ -34,6 +34,10 @@ Changelog:
         - 同时检查 ds.data_vars 和 ds.coords
         - 自动检测 latitude, longitude, depth 等维度坐标
         - 支持 Copernicus 等数据集的坐标变量
+    - 2026-02-25 leizheng v2.2.1: 修复 compute_statistics() JSON 序列化 nan/inf 问题
+        - np.nanmin/nanmax/nanmean 在全 NaN 或含填充值时可返回 nan/inf
+        - Python json.dumps 输出 NaN/Infinity，不合法 JSON，导致 Step A 崩溃
+        - 添加 _safe_float() 辅助函数将 nan/inf 映射为 None（JSON null）
     - 2026-02-03 leizheng v2.0.1: 修复 'h' 关键字误匹配 'chl' 问题
         - 将 'h' 改为精确匹配（COORD_EXACT_NAMES）
         - 避免 'chl'（叶绿素）被误判为坐标变量
@@ -43,6 +47,7 @@ Changelog:
 
 import argparse
 import json
+import math
 import os
 import sys
 from typing import Any, Dict, List, Optional
@@ -181,14 +186,21 @@ def guess_variable_type(var_name: str, dims: List[str], has_time: bool) -> str:
     return "static"
 
 
+def _safe_float(v: float):
+    """将 nan/inf 转为 None，避免 json.dumps 输出非法的 NaN/Infinity"""
+    if math.isnan(v) or math.isinf(v):
+        return None
+    return float(v)
+
+
 def compute_statistics(var_data: np.ndarray) -> Dict[str, Any]:
     """计算变量统计信息"""
     try:
         values = np.asarray(var_data)
         return {
-            "min": float(np.nanmin(values)),
-            "max": float(np.nanmax(values)),
-            "mean": float(np.nanmean(values)),
+            "min": _safe_float(np.nanmin(values)),
+            "max": _safe_float(np.nanmax(values)),
+            "mean": _safe_float(np.nanmean(values)),
             "nan_count": int(np.isnan(values).sum()),
             "zero_count": int((values == 0).sum())
         }

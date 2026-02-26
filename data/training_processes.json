@@ -1,0 +1,169 @@
+[
+  {
+    "id": "train-1770772877313-5q6b30",
+    "cmd": "/home/lz/miniconda3/envs/pytorch/bin/python",
+    "args": [
+      "-m",
+      "torch.distributed.run",
+      "--nproc_per_node=2",
+      "--master_port=29501",
+      "/home/lz/SR_model_test/resshiift/_ocean_sr_code/main_ddp.py",
+      "--mode",
+      "train",
+      "--config",
+      "/home/lz/SR_model_test/resshiift/_ocean_sr_code/Resshift_config.yaml"
+    ],
+    "cwd": "/home/lz/SR_model_test/resshiift/_ocean_sr_code",
+    "startTime": 1770772877318,
+    "status": "completed",
+    "logFile": "/home/lz/SR_model_test/resshiift/train-1770772877313-5q6b30.log",
+    "errorLogFile": "/home/lz/SR_model_test/resshiift/train-1770772877313-5q6b30.error.log",
+    "pid": 2128234,
+    "metadata": {
+      "modelName": "Resshift",
+      "datasetRoot": "/data/chla_data_imputation_data_260125/260207_leizheng_100piece_test",
+      "logDir": "/home/lz/SR_model_test/resshiift",
+      "configPath": "/home/lz/SR_model_test/resshiift/_ocean_sr_code/Resshift_config.yaml",
+      "workspaceDir": "/home/lz/SR_model_test/resshiift/_ocean_sr_code",
+      "deviceIds": [
+        2,
+        3
+      ]
+    },
+    "progress": {
+      "currentEpoch": 2,
+      "totalEpochs": 10,
+      "estimatedRemainingSeconds": 2608,
+      "epochsPerHour": 11,
+      "latestMetrics": {
+        "train_loss": 0.1265105418395251
+      }
+    },
+    "runtimeStats": {
+      "sampledAt": "2026-02-11T01:32:44.151Z",
+      "uptimeSeconds": 687,
+      "cpuPercent": 0.1,
+      "memoryRssMB": 355.6,
+      "ioReadMB": 0,
+      "ioWriteMB": 0,
+      "gpu": [
+        {
+          "id": 2,
+          "utilizationPct": 100,
+          "memoryUsedMB": 20808,
+          "memoryTotalMB": 24564,
+          "temperatureC": 64,
+          "powerW": 341.61
+        },
+        {
+          "id": 3,
+          "utilizationPct": 100,
+          "memoryUsedMB": 20808,
+          "memoryTotalMB": 24564,
+          "temperatureC": 59,
+          "powerW": 340.42
+        }
+      ]
+    },
+    "endTime": 1770775477782,
+    "exitCode": 0
+  },
+  {
+    "id": "train-1770778325183-k6xtnz",
+    "cmd": "/home/lz/miniconda3/envs/pytorch/bin/python",
+    "args": [
+      "-m",
+      "torch.distributed.run",
+      "--nproc_per_node=2",
+      "--master_port=29501",
+      "/home/lz/SR_model_test/ddpm1/_ocean_sr_code/main_ddp.py",
+      "--mode",
+      "train",
+      "--config",
+      "/home/lz/SR_model_test/ddpm1/_ocean_sr_code/DDPM_config.yaml"
+    ],
+    "cwd": "/home/lz/SR_model_test/ddpm1/_ocean_sr_code",
+    "startTime": 1770778325187,
+    "status": "failed",
+    "logFile": "/home/lz/SR_model_test/ddpm1/train-1770778325183-k6xtnz.log",
+    "errorLogFile": "/home/lz/SR_model_test/ddpm1/train-1770778325183-k6xtnz.error.log",
+    "pid": 2266906,
+    "metadata": {
+      "modelName": "DDPM",
+      "datasetRoot": "/data/chla_data_imputation_data_260125/260207_leizheng_100piece_test",
+      "logDir": "/home/lz/SR_model_test/ddpm1",
+      "configPath": "/home/lz/SR_model_test/ddpm1/_ocean_sr_code/DDPM_config.yaml",
+      "workspaceDir": "/home/lz/SR_model_test/ddpm1/_ocean_sr_code",
+      "deviceIds": [
+        0,
+        2
+      ]
+    },
+    "progress": {
+      "currentEpoch": 4,
+      "totalEpochs": 10,
+      "estimatedRemainingSeconds": 354,
+      "epochsPerHour": 61,
+      "latestMetrics": {
+        "train_loss": 0.0000010403973577766124
+      }
+    },
+    "runtimeStats": {
+      "sampledAt": "2026-02-11T04:22:42.735Z",
+      "uptimeSeconds": 5438,
+      "cpuPercent": 0,
+      "memoryRssMB": 355.7,
+      "ioReadMB": 0,
+      "ioWriteMB": 0,
+      "gpu": [
+        {
+          "id": 0,
+          "utilizationPct": 63,
+          "memoryUsedMB": 1688,
+          "memoryTotalMB": 24564,
+          "temperatureC": 59,
+          "powerW": 230.57
+        },
+        {
+          "id": 2,
+          "utilizationPct": 62,
+          "memoryUsedMB": 1686,
+          "memoryTotalMB": 24564,
+          "temperatureC": 58,
+          "powerW": 225.78
+        }
+      ]
+    },
+    "endTime": 1770783763573,
+    "exitCode": 1,
+    "errorSummary": {
+      "failureType": "DDP_CHILD_FAILED",
+      "errorMessage": "训练进程异常退出",
+      "lastStderrLines": [
+        "    main()",
+        "  File \"/home/lz/miniconda3/envs/pytorch/lib/python3.10/site-packages/torch/distributed/elastic/multiprocessing/errors/__init__.py\", line 355, in wrapper",
+        "    return f(*args, **kwargs)",
+        "  File \"/home/lz/miniconda3/envs/pytorch/lib/python3.10/site-packages/torch/distributed/run.py\", line 919, in main",
+        "    run(args)",
+        "  File \"/home/lz/miniconda3/envs/pytorch/lib/python3.10/site-packages/torch/distributed/run.py\", line 910, in run",
+        "    elastic_launch(",
+        "  File \"/home/lz/miniconda3/envs/pytorch/lib/python3.10/site-packages/torch/distributed/launcher/api.py\", line 138, in __call__",
+        "    return launch_agent(self._config, self._entrypoint, list(args))",
+        "  File \"/home/lz/miniconda3/envs/pytorch/lib/python3.10/site-packages/torch/distributed/launcher/api.py\", line 260, in launch_agent",
+        "    result = agent.run()",
+        "  File \"/home/lz/miniconda3/envs/pytorch/lib/python3.10/site-packages/torch/distributed/elastic/metrics/api.py\", line 137, in wrapper",
+        "    result = f(*args, **kwargs)",
+        "  File \"/home/lz/miniconda3/envs/pytorch/lib/python3.10/site-packages/torch/distributed/elastic/agent/server/api.py\", line 696, in run",
+        "    result = self._invoke_run(role)",
+        "  File \"/home/lz/miniconda3/envs/pytorch/lib/python3.10/site-packages/torch/distributed/elastic/agent/server/api.py\", line 855, in _invoke_run",
+        "    time.sleep(monitor_interval)",
+        "  File \"/home/lz/miniconda3/envs/pytorch/lib/python3.10/site-packages/torch/distributed/elastic/multiprocessing/api.py\", line 84, in _terminate_process_handler",
+        "    raise SignalException(f\"Process {os.getpid()} got signal: {sigval}\", sigval=sigval)",
+        "torch.distributed.elastic.multiprocessing.api.SignalException: Process 2266906 got signal: 15"
+      ],
+      "suggestions": [
+        "某个 GPU rank 崩溃导致 DDP 训练中止，查看 stderr 获取具体 rank 和错误信息"
+      ]
+    }
+  }
+]

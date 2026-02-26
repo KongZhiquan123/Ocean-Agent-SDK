@@ -626,7 +626,7 @@ patch_size 等），导致 Token 失效。
 
 **请提供以下信息：**
 
-1️⃣ **dataset_root**: 预处理数据根目录（ocean-preprocess 输出目录）
+1️⃣ **dataset_root**: 预处理数据根目录（ocean-SR-data-preprocess 输出目录）
    - 该目录应包含 train/valid/test 子目录
    - 每个子目录下应有 hr/ 和 lr/ 数据
 
@@ -661,7 +661,7 @@ ${datasetInfo.warnings.length > 0 ? `【警告】\n${datasetInfo.warnings.map(w 
 
 ================================================================================
 
-**请检查数据目录是否正确，可能需要先运行数据预处理（ocean-preprocess）**
+**请检查数据目录是否正确，可能需要先运行数据预处理（ocean-SR-data-preprocess）**
 
 ================================================================================
 

@@ -1,0 +1,17 @@
+{
+  "name": "ocean-forecast-data-preprocess",
+  "description": "海洋预测数据预处理技能 - NC 格式时序数据转换为 NPY 格式，用于深度学习预测模型训练",
+  "version": "1.1.0",
+  "author": "Leizheng",
+  "contributors": [],
+  "last_modified": "2026-02-25",
+  "baseDir": "./.skills/ocean-forecast-data-preprocess",
+  "tags": ["ocean", "preprocessing", "nc", "npy", "forecast", "time-series"],
+  "references": [
+    "references/workflow-detail.md",
+    "references/parameters.md",
+    "references/examples.md",
+    "references/errors.md",
+    "references/warnings.md"
+  ]
+}

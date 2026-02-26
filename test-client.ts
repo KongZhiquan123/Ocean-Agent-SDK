@@ -2,13 +2,17 @@
  * @file test-client.ts
  *
  * @description 测试 kode-agent-service 的交互式客户端
- *              支持多轮对话、海洋数据预处理完整流程测试、超分训练测试
+ *              支持多轮对话、海洋数据预处理完整流程测试、超分训练测试、预测数据预处理测试
  * @author leizheng
  * @contributors kongzhiquan, Leizheng
  * @date 2026-02-02
- * @version 3.4.0
+ * @version 3.5.0
  *
  * @changelog
+ *   - 2026-02-25 Leizheng: v3.5.0 新增预测数据预处理测试入口
+ *     - 新增 testOceanForecastPreprocess() 交互式预测数据预处理测试
+ *     - 菜单新增选项 7、命令行参数 --forecast / -f
+ *     - 测试说明对应 ocean-forecast-data-preprocess skill 的 4 阶段工作流
  *   - 2026-02-07 Leizheng: v3.4.0 训练测试更新 OOM 防护流程
  *     - testOceanSRTraining() 工作流更新为 9 步（含显存预估 + 报告生成）
  *     - 新增 OOM 防护参数提示（use_amp, gradient_checkpointing, patch_size）
@@ -385,13 +389,13 @@ async function testOceanToolsQuick() {
   const testDir = '/tmp/test_ocean_tools'
 
   // 测试 1: 加载 skill
-  console.log('\n--- 测试 1: 加载 ocean-preprocess skill ---')
-  await chat('加载 ocean-preprocess skill', 'edit')
+  console.log('\n--- 测试 1: 加载 ocean-SR-data-preprocess skill ---')
+  await chat('加载 ocean-SR-data-preprocess skill', 'edit')
   await new Promise((resolve) => setTimeout(resolve, 2000))
 
   // 测试 2: 查看可用工具
   console.log('\n--- 测试 2: 查看可用工具 ---')
-  await chat('ocean-preprocess skill 有哪些工具可用？', 'ask')
+  await chat('ocean-SR-data-preprocess skill 有哪些工具可用？', 'ask')
   await new Promise((resolve) => setTimeout(resolve, 2000))
 
   // 测试 3: 检查测试数据
@@ -417,7 +421,7 @@ async function testOceanSRTraining() {
 │  训练工作流程（v3.0.0，9 步）                                │
 ├─────────────────────────────────────────────────────────────┤
 │  步骤 1: 确认数据目录和输出目录                              │
-│    → 提供 ocean-preprocess 预处理后的数据目录                │
+│    → 提供 ocean-SR-data-preprocess 预处理后的数据目录               │
 │    → 提供训练日志输出目录                                    │
 │                                                             │
 │  步骤 2: 选择模型                                            │
@@ -453,7 +457,7 @@ async function testOceanSRTraining() {
 │    → 向用户展示报告路径和关键结果                            │
 └─────────────────────────────────────────────────────────────┘
 
-【数据目录要求】（ocean-preprocess 预处理输出）
+【数据目录要求】（ocean-SR-data-preprocess 预处理输出）
   dataset_root/
   ├── train/hr/{var}/*.npy
   ├── train/lr/{var}/*.npy
@@ -526,6 +530,133 @@ async function testOceanSRTraining() {
   rl.close()
 }
 
+// 测试海洋预测数据预处理流程（4 阶段）
+async function testOceanForecastPreprocess() {
+  console.log('\n' + '='.repeat(60))
+  console.log('海洋预测数据预处理测试 v1.0（4 阶段强制确认流程）')
+  console.log('='.repeat(60))
+
+  console.log(`
+┌─────────────────────────────────────────────────────────────┐
+│  预测数据预处理工作流程                                      │
+│  NC 格式 → NPY 格式，用于深度学习预测模型训练               │
+├─────────────────────────────────────────────────────────────┤
+│  阶段 0: 启动分析                                           │
+│    → 提供 NC 数据目录和输出目录                             │
+│    → Agent 自动检查 NC 文件中的变量信息                     │
+│                                                             │
+│  阶段 1: 研究变量选择 (awaiting_variable_selection)         │
+│    → Agent 展示检测到的动态变量候选（有时间维度的变量）     │
+│    → 你选择要预测的变量（如 uo, vo, temp, salt）            │
+│                                                             │
+│  阶段 2: 静态/掩码变量选择 (awaiting_static_selection)      │
+│    → Agent 展示疑似静态变量（坐标）和掩码变量              │
+│    → 你逐一确认：stat_vars（静态）、mask_vars（掩码）       │
+│                                                             │
+│  阶段 3: 处理参数确认 (awaiting_parameters)                 │
+│    → 确认数据集划分比例（按时间顺序，不打乱）               │
+│      train_ratio + valid_ratio + test_ratio = 1.0          │
+│    → 可选：空间裁剪（h_slice, w_slice）                     │
+│                                                             │
+│  阶段 4: 执行确认 (awaiting_execution)                      │
+│    → Agent 展示完整参数汇总                                 │
+│    → 你回复"确认执行"开始处理                               │
+│                                                             │
+│  完成后: 调用 ocean_forecast_generate_report 生成报告       │
+└─────────────────────────────────────────────────────────────┘
+
+【输出目录结构】
+  output_base/
+  ├── train/
+  │   ├── uo/            ← 每个时间步一个 NPY，按时间升序
+  │   │   ├── 20200101.npy
+  │   │   └── ...
+  │   └── vo/
+  ├── valid/
+  │   └── {var}/
+  ├── test/
+  │   └── {var}/
+  ├── static_variables/  ← 静态变量（坐标）和掩码
+  ├── time_index.json    ← 完整时间戳溯源
+  ├── var_names.json     ← 变量配置（供 DataLoader 使用）
+  ├── preprocess_manifest.json
+  └── visualisation_forecast/
+
+【可选参数说明】
+  - use_date_filename: 用日期命名文件（默认 true）
+  - date_format: auto/YYYYMMDD/YYYYMMDDHH（默认 auto）
+  - time_var: 时间变量名（默认自动检测）
+  - chunk_size: 批处理文件数，控制内存（默认 200）
+  - max_files: 限制处理文件数（调试时可用）
+`)
+
+  console.log('请用自然语言描述您的预测数据预处理需求，例如：')
+  console.log('  - "NC 数据在 /data/ocean/roms，输出到 /output/prediction"')
+  console.log('  - "/data/roms/ocean_his_*.nc，帮我提取 uo vo 变量"')
+  console.log('  - "数据目录 /data，训练集 70%，验证集 15%，测试集 15%"')
+  console.log('  - "我想裁剪到 512×512，帮我设置 h_slice 和 w_slice"')
+  console.log('  - "只处理前 100 个文件测试一下"')
+  console.log('\nAgent 会引导您完成 4 个阶段的参数确认。')
+  console.log('-'.repeat(60))
+
+  agentId = null
+  showFullToolResult = true
+
+  const userPrompt = await prompt('\n你: ')
+  if (!userPrompt.trim()) {
+    console.log('错误: 请输入预处理需求')
+    rl.close()
+    return
+  }
+
+  await chat(userPrompt, 'edit')
+
+  console.log('\n' + '-'.repeat(60))
+  console.log('继续与 Agent 对话，按阶段确认参数：')
+  console.log('  - 阶段 1: 选择预测变量（如"uo, vo"）')
+  console.log('  - 阶段 2: 确认静态变量和掩码变量')
+  console.log('  - 阶段 3: 确认划分比例（如"0.7 / 0.15 / 0.15"）')
+  console.log('  - 阶段 4: 回复"确认执行"')
+  console.log('')
+  console.log('命令: "done" 结束测试, "reset" 重置会话, "status" 查看阶段说明')
+  console.log('-'.repeat(60))
+
+  while (true) {
+    const userInput = await prompt('\n你: ')
+
+    if (userInput.toLowerCase() === 'done') {
+      console.log('\n测试结束')
+      break
+    }
+
+    if (userInput.toLowerCase() === 'reset') {
+      agentId = null
+      console.log('会话已重置，请重新描述您的需求')
+      const newPrompt = await prompt('\n你: ')
+      if (newPrompt.trim()) {
+        await chat(newPrompt, 'edit')
+      }
+      continue
+    }
+
+    if (userInput.toLowerCase() === 'status') {
+      console.log('\n阶段说明:')
+      console.log('  1 = awaiting_variable_selection（选择预测变量）')
+      console.log('  2 = awaiting_static_selection（选择静态/掩码变量）')
+      console.log('  3 = awaiting_parameters（确认划分比例和裁剪参数）')
+      console.log('  4 = awaiting_execution（确认执行）')
+      console.log('  ✅ = 执行完成，生成报告')
+      continue
+    }
+
+    if (userInput.trim()) {
+      await chat(userInput, 'edit')
+    }
+  }
+
+  rl.close()
+}
+
 // 原来的自动化测试（保留）
 async function runAutomatedTests() {
   console.log('\n' + '='.repeat(60))
@@ -564,7 +695,7 @@ async function runAutomatedTests() {
 
 // 主程序
 async function main() {
-  console.log('KODE Agent Service 交互式测试客户端 v3.4.0')
+  console.log('KODE Agent Service 交互式测试客户端 v3.5.0')
   console.log(`API URL: ${API_URL}`)
   console.log(`API Key: ${API_KEY.slice(0, 10)}...`)
 
@@ -579,13 +710,14 @@ async function main() {
   console.log('\n服务正常！')
   console.log('\n选择测试模式:')
   console.log('  1. 交互式对话')
-  console.log('  2. 海洋数据预处理测试（v3.1 五阶段流程，含区域裁剪）')
+  console.log('  2. 海洋数据预处理测试（超分辨率，5 阶段含区域裁剪）')
   console.log('  3. 海洋预处理工具快速测试（自动化）')
   console.log('  4. 单条消息测试')
   console.log('  5. 自动化测试套件（原测试）')
   console.log('  6. 海洋超分辨率训练测试')
+  console.log('  7. 海洋预测数据预处理测试（4 阶段，NC→NPY 时序转换）')
 
-  const choice = await prompt('\n请选择 (1/2/3/4/5/6): ')
+  const choice = await prompt('\n请选择 (1/2/3/4/5/6/7): ')
 
   switch (choice) {
     case '1':
@@ -607,6 +739,9 @@ async function main() {
       break
     case '6':
       await testOceanSRTraining()
+      break
+    case '7':
+      await testOceanForecastPreprocess()
       break
     default:
       console.log('无效选择，进入交互模式')
@@ -656,6 +791,15 @@ if (args.includes('--interactive') || args.includes('-i')) {
   testHealth().then((healthy) => {
     if (healthy) {
       testOceanSRTraining()
+    } else {
+      console.error('服务不可用')
+      process.exit(1)
+    }
+  })
+} else if (args.includes('--forecast') || args.includes('-f')) {
+  testHealth().then((healthy) => {
+    if (healthy) {
+      testOceanForecastPreprocess()
     } else {
       console.error('服务不可用')
       process.exit(1)

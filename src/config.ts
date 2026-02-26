@@ -76,7 +76,7 @@ function loadSkillsWhitelist(skillsDir: string, defaults: string[]): string[] {
   return Array.from(whitelist)
 }
 
-const skillsWhiteList = loadSkillsWhitelist(config.skillsDir, ['ocean-preprocess', 'ocean-SR-training'])
+const skillsWhiteList = loadSkillsWhitelist(config.skillsDir, ['ocean-SR-data-preprocess', 'ocean-SR-training', 'ocean-forecast-data-preprocess'])
 console.log('[config] Skills 白名单:', skillsWhiteList)
 
 // ========================================
@@ -174,8 +174,14 @@ skills {"action": "load", "skill_name": "技能名称"}
 \`\`\`
 
 **已有技能**：
-- ocean-preprocess: 海洋数据预处理（超分辨率、格式转换等）
+- ocean-SR-data-preprocess: 海洋超分辨率数据预处理（NC→NPY，生成高分辨率/低分辨率数据对，用于超分模型训练）
 - ocean-SR-training: 海洋超分辨率模型训练（模型选择、训练、推理）
+- ocean-forecast-data-preprocess: 海洋时序预测数据预处理（NC→NPY，按时间顺序划分 train/valid/test，用于预测模型训练，不涉及超分辨率）
+
+**技能选择指南**：
+- 用户提到"超分"/"高低分辨率"/"上采样" → ocean-SR-data-preprocess
+- 用户提到"预测"/"时间序列"/"划分训练集" → ocean-forecast-data-preprocess
+- 不确定时先 list 再让用户选择
 
 **工作流程**：
 1. 用户提出任务需求
