@@ -5,9 +5,10 @@
  * @author kongzhiquan
  * @contributors Leizheng
  * @date 2026-02-02
- * @version 1.7.1
+ * @version 1.8.0
  *
  * @changelog
+ *   - 2026-02-26 kongzhiquan: v1.8.0 AgentConfig 新增 notebookPath 字段，写入 agent metadata
  *   - 2026-02-25 Leizheng: v1.7.1 修复 finally 中 await sendTask 阻塞 done 事件问题
  *     - sendTask rejected 时会在 finally 中抛出，导致 yield done 永远不执行
  *     - 改为 try/catch 包裹 await sendTask，保证 done 事件必然被发送
@@ -39,6 +40,7 @@ export interface AgentConfig {
   mode: 'ask' | 'edit'
   workingDir?: string
   outputsPath?: string
+  notebookPath?: string
   userId?: string
   files?: string[]
 }
@@ -90,6 +92,7 @@ export async function createAgent(config: AgentConfig): Promise<Agent> {
         mode: config.mode,
         files: config.files,
         outputsPath: config.outputsPath,
+        notebookPath: config.notebookPath,
       },
     },
     deps,

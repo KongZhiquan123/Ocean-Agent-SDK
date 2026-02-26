@@ -44,7 +44,7 @@ const PREPROCESS_FULL_STEP_LABELS: Record<string, string> = {
  * 未注册的工具名原样透传
  */
 interface TransformedToolResult {
-  status: 'success' | 'failed'
+  status: 'success' | 'failed' | 'awaiting_confirmation'
   message: string
   [key: string]: any
 }
@@ -88,17 +88,20 @@ function transformSkillResult(result: any): { status: 'success' | 'failed'; mess
   return { status: ok ? 'success' : 'failed', message }
 }
 
-function transformPreprocessFull(result: any): { status: 'success' | 'failed'; message: string } {
+function transformPreprocessFull(result: any): { status: 'success' | 'failed' | 'awaiting_confirmation'; message: string } {
   if (!result) return { status: 'failed', message: '预处理流程执行失败' }
 
   // 按执行顺序倒序查找最新的非空 step
   const stepKeys = ['step_e', 'step_d', 'step_c2', 'step_c', 'step_b', 'step_a']
   for (const key of stepKeys) {
-    if (result[key] != null) {
+    if (result[key]) {
       const label = PREPROCESS_FULL_STEP_LABELS[key]
       const success_status = ['success', 'ok', 'completed', 'pass']
       const ok = success_status.includes(result[key].status) || success_status.includes(result[key].overall_status)
       const op = result[key].status === 'skipped' ? '跳过' : '正在执行'
+      if (result[key].status === 'awaiting_confirmation') {
+        return { status: 'awaiting_confirmation', message: `处于步骤${label}，正在等待用户确认相关信息...` }
+      }
       return { status: ok ? 'success' : 'failed', message: `${op}${label}步骤...` }
     }
   }

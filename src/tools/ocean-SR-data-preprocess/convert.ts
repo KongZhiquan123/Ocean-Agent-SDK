@@ -9,6 +9,7 @@
  * @version 3.6.0
  *
  * @changelog
+ *   - 2026-02-25 kongzhiquan: v3.7.0 tempDir 改为基于 output_base 的 .ocean_preprocess_temp
  *   - 2026-02-07 kongzhiquan: v3.6.0 新增 max_files 参数，限制处理的最大 NC 文件数量
  *   - 2026-02-07 Leizheng: v3.5.0 新增 nc_files 参数，支持显式指定文件列表
  *   - 2026-02-07 Leizheng: v3.4.0 智能路径处理，nc_folder 同时支持目录和单个文件路径
@@ -417,7 +418,7 @@ export const oceanConvertNpyTool = defineTool({
 
     // 2. 准备路径
     const pythonCmd = `"${shellEscapeDouble(pythonPath)}"`
-    const tempDir = path.resolve(ctx.sandbox.workDir, 'ocean_preprocess_temp')
+    const tempDir = path.resolve(output_base, '.ocean_preprocess_temp')
     const configPath = path.join(tempDir, 'convert_config.json')
     const outputPath = path.join(tempDir, 'convert_result.json')
 
