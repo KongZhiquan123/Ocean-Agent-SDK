@@ -7,7 +7,7 @@
  * @author Leizheng
  * @contributors kongzhiquan
  * @date 2026-02-25
- * @version 1.1.0
+ * @version 1.2.0
  *
  * @changelog
  *   - 2026-02-26 kongzhiquan: v1.2.0 添加notebook生成逻辑，执行完 Step B 后生成包含预处理代码和结果的 Jupyter Notebook，方便用户复现和调整预处理流程
