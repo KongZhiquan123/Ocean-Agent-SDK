@@ -10,9 +10,10 @@
 @author Leizheng
 @contributers kongzhiquan
 @date 2026-02-25
-@version 1.0.0
+@version 1.1.1
 
 @changelog
+  - 2026-02-26 kongzhiquan: v1.1.1 修复post_validation和time_info未被保存到manifest文件的问题
   - 2026-02-26 Leizheng: v1.1.0 新增网格文件支持
     - 静态变量提取新增三级搜索：数据文件 → 用户指定网格文件 → 自动检测网格文件
     - 新增 grid_file 配置参数
@@ -1149,32 +1150,7 @@ def forecast_preprocess(config: Dict[str, Any]) -> Dict[str, Any]:
     with open(time_index_path, 'w', encoding='utf-8') as f:
         json.dump(time_index_data, f, ensure_ascii=False, indent=2)
 
-    # ---- 14. 生成 preprocess_manifest.json ----
-    manifest = {
-        "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-        "nc_folder": nc_folder,
-        "output_base": output_base,
-        "source_files": [os.path.basename(f) for f in nc_files],
-        "dyn_vars": dyn_vars,
-        "stat_vars": stat_vars,
-        "mask_vars": mask_vars,
-        "spatial_shape": spatial_shape,
-        "h_slice": h_slice_str,
-        "w_slice": w_slice_str,
-        "split_ratios": {
-            "train": train_ratio,
-            "valid": valid_ratio,
-            "test": test_ratio
-        },
-        "split_counts": {k: len(v) for k, v in split_steps.items()},
-        "total_npy_files": total_saved,
-        "warnings": result["warnings"]
-    }
-    manifest_path = os.path.join(output_base, 'preprocess_manifest.json')
-    with open(manifest_path, 'w', encoding='utf-8') as f:
-        json.dump(manifest, f, ensure_ascii=False, indent=2)
-
-    # ---- 15. 后置验证 ----
+    # ---- 14. 后置验证 ----
     if run_validation:
         print("执行后置验证...", file=sys.stderr)
         validation_result = _validate_output(
