@@ -9,6 +9,8 @@
  * @version 2.6.0
  *
  * @changelog
+ *   - 2026-02-25 kongzhiquan: v2.7.0 tempDir 改为基于 output_base 的 .ocean_preprocess_temp
+ *     - 新增 output_base 参数，用于指定临时目录的基础路径
  *   - 2026-02-07 Leizheng: v2.6.0 智能路径处理，nc_folder 同时支持目录和单个文件路径
  *     - 传入 .nc 文件路径时自动拆分为目录+文件名，无需复制数据
  *   - 2026-02-05 kongzhiquan: v2.5.0 增强验证逻辑
@@ -137,6 +139,10 @@ export const oceanInspectDataTool = defineTool({
       items: { type: 'string' },
       description: '可选：明确指定静态变量列表（如 ["h", "angle", "pm", "pn"]），用于变量分类',
       required: false
+    },
+    output_base: {
+      type: 'string',
+      description: '输出基础目录，用于存放临时文件'
     }
   },
 
@@ -153,7 +159,8 @@ export const oceanInspectDataTool = defineTool({
       file_filter = '',
       dyn_file_pattern = '*.nc',
       mask_vars,
-      static_vars
+      static_vars,
+      output_base
     } = args
 
     // 智能路径处理：支持目录或单个 .nc 文件路径
@@ -180,7 +187,7 @@ export const oceanInspectDataTool = defineTool({
 
     // 2. 准备路径
     const pythonCmd = `"${shellEscapeDouble(pythonPath)}"`
-    const tempDir = path.resolve(ctx.sandbox.workDir, 'ocean_preprocess_temp')
+    const tempDir = path.resolve(output_base, '.ocean_preprocess_temp')
     const configPath = path.join(tempDir, 'inspect_config.json')
     const outputPath = path.join(tempDir, 'inspect_result.json')
 

@@ -5,10 +5,11 @@
  *              支持多轮对话、海洋数据预处理完整流程测试、超分训练测试、预测数据预处理测试
  * @author leizheng
  * @contributors kongzhiquan, Leizheng
- * @date 2026-02-02
+ * @date 2026-02-26
  * @version 3.5.0
  *
  * @changelog
+ *   - 2026-02-26 kongzhiquan: v3.5.0 请求体添加outputsPath字段和notebookPath字段，打印agent_error事件
  *   - 2026-02-25 Leizheng: v3.5.0 新增预测数据预处理测试入口
  *     - 新增 testOceanForecastPreprocess() 交互式预测数据预处理测试
  *     - 菜单新增选项 7、命令行参数 --forecast / -f
@@ -90,6 +91,7 @@ async function chat(message: string, mode: 'ask' | 'edit' = 'edit'): Promise<str
       context: {
         userId: 'test-user',
         workingDir: './work_ocean',
+        notebookPath: './work_ocean/work_ocean.ipynb'
       },
     }
 

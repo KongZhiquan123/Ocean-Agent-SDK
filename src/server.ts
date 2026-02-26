@@ -5,9 +5,10 @@
  *              支持 SSE 流式对话和多轮会话管理
  * Author: leizheng, kongzhiquan
  * Time: 2026-02-02
- * Version: 2.3.0
+ * Version: 2.4.0
  *
  * Changelog:
+ *   - 2026-02-26 kongzhiquan: v2.4.0 将 notebookPath 传入 AgentConfig
  *   - 2026-02-14 kongzhiquan: v2.3.0 传递 outputsPath 到 processMessage 以注入 Agent 指令
  *   - 2026-02-10 Leizheng: v2.2.0 速率限制 + 请求体大小限制 + 优雅关闭修复
  *   - 2026-02-07 kongzhiquan: v2.1.0 服务器关闭时清理训练进程
@@ -175,6 +176,7 @@ app.post('/api/chat/stream', rateLimitMiddleware, requireAuth, async (req: Reque
     if (!value || typeof value !== 'string') {
       console.warn(`[server] [req ${reqId}] 缺少或无效的 "${fieldName}" 字段`)
       sendError(res, 400, 'BAD_REQUEST', `Field "${fieldName}" must be a non-empty string`)
+      res.end()
       return false
     }
     return true
@@ -183,9 +185,11 @@ app.post('/api/chat/stream', rateLimitMiddleware, requireAuth, async (req: Reque
   if (!validateField(context?.userId, 'context.userId')) return
   if (!validateField(context?.workingDir, 'context.workingDir')) return
   if (!validateField(req.body.outputsPath, 'outputsPath')) return
+  if (!validateField(context?.notebookPath, 'context.notebookPath')) return
 
   const userId = context.userId
   const workingDir = path.resolve(context.workingDir)
+  const notebookPath = path.resolve(context.notebookPath)
   const outputsPath = path.resolve(req.body.outputsPath)
   const files = Array.isArray(context.files) ? context.files : []
 
@@ -225,7 +229,7 @@ app.post('/api/chat/stream', rateLimitMiddleware, requireAuth, async (req: Reque
     
     // 如果没有可用会话，创建新的
     if (!agent) {
-      const agentConfig: AgentConfig = { mode, workingDir, outputsPath, userId, files }
+      const agentConfig: AgentConfig = { mode, workingDir, outputsPath, notebookPath, userId, files }
       agent = await createAgent(agentConfig)
       setupAgentHandlers(agent, reqId, [outputsPath, workingDir, '/data']) // 传递允许访问的路径列表
 

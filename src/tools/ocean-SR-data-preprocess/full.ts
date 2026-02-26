@@ -4,11 +4,18 @@
  *              串联 Step A -> B -> C -> (C2) -> D -> E 步骤
  *
  * @author leizheng
- * @contributors kongzhiquan
+ * @contributors kongzhiquan, Leizheng
  * @date 2026-02-02
- * @version 3.5.1
+ * @version 3.7.1
  *
  * @changelog
+ *   - 2026-02-26 kongzhiquan: v3.7.1 Notebook 路径改用后端传入的 notebookPath（从 agent metadata 读取）
+ *   - 2026-02-25 kongzhiquan: v3.7.0 向 Step A/B 传入 output_base 参数
+ *     - inspect/validate 工具的 tempDir 统一使用 output_base/.ocean_preprocess_temp
+ *   - 2026-02-25 kongzhiquan: v3.6.0 新增 Notebook 生成与脚本复制功能
+ *     - 预处理脚本复制到 output_base/_ocean_preprocess_code/
+ *     - 流水线完成后生成可复现的 Jupyter Notebook
+ *     - 支持追加到已有 Notebook
  *   - 2026-02-25 Leizheng: v3.5.1 修复 Step C2 (数值模型 LR 转换) 缺少 scale 参数
  *     - Step C 正确传递了 scale，Step C2 遗漏，导致 LR 数据元数据缺失 scale 信息
  *   - 2026-02-07 kongzhiquan: v3.5.0 新增 max_files 参数，限制处理的最大 NC 文件数量
@@ -69,12 +76,15 @@
 
 import { defineTool } from '@shareai-lab/kode-sdk'
 import os from 'node:os'
+import path from 'node:path'
 import { oceanInspectDataTool } from './inspect'
 import { oceanValidateTensorTool } from './validate'
 import { oceanConvertNpyTool } from './convert'
 import { oceanDownsampleTool } from './downsample'
 import { oceanVisualizeTool } from './visualize'
 import { PreprocessWorkflow, WorkflowState } from './workflow-state'
+import { generatePreprocessCells, saveOrAppendNotebook } from './notebook'
+import { findFirstPythonPath } from '@/utils/python-manager'
 
 const DEFAULT_WORKERS = Math.max(1, Math.min(8, os.cpus().length || 1))
 
@@ -424,7 +434,8 @@ export const oceanPreprocessFullTool = defineTool({
       nc_folder: actualNcFolder,
       nc_files: actualNcFiles,
       static_file,
-      dyn_file_pattern: actualFilePattern
+      dyn_file_pattern: actualFilePattern,
+      output_base
     }, ctx)
 
     result.step_a = stepAResult
@@ -472,6 +483,16 @@ export const oceanPreprocessFullTool = defineTool({
       return result
     }
 
+    // ========== 复制预处理脚本到 output_base ==========
+    try {
+      const scriptsSourceDir = path.resolve(process.cwd(), 'scripts/ocean-SR-data-preprocess')
+      const scriptsTargetDir = path.resolve(output_base, '_ocean_preprocess_code')
+      await ctx.sandbox.exec(`mkdir -p "${scriptsTargetDir}/convert_lib"`)
+      await ctx.sandbox.exec(`cp -r "${scriptsSourceDir}/." "${scriptsTargetDir}/"`)
+    } catch (e) {
+      console.warn('复制预处理脚本失败:', e)
+    }
+
     // ========== 状态机通过，验证研究变量 ==========
     const missingVars = dyn_vars!.filter((v: string) => !dynCandidates.includes(v))
     if (missingVars.length > 0) {
@@ -513,7 +534,8 @@ export const oceanPreprocessFullTool = defineTool({
     // ========== Step B: 张量验证 ==========
     const stepBResult = await oceanValidateTensorTool.exec({
       research_vars: dyn_vars,
-      mask_vars: finalMaskVars
+      mask_vars: finalMaskVars,
+      output_base
     }, ctx)
 
     result.step_b = stepBResult
@@ -649,6 +671,57 @@ export const oceanPreprocessFullTool = defineTool({
       result.step_e = stepEResult
     } else {
       result.step_e = { status: 'skipped', reason: 'skip_visualize=true' }
+    }
+
+    // ========== 生成 Jupyter Notebook ==========
+    try {
+      const metadataNotebookPath = (ctx.agent as any)?.config?.metadata?.notebookPath as string | undefined
+      const notebookPath = metadataNotebookPath
+        ? path.resolve(metadataNotebookPath)
+        : path.resolve(ctx.sandbox.workDir, `${path.basename(ctx.sandbox.workDir)}.ipynb`)
+
+      const notebookPythonPath = findFirstPythonPath() || 'python3'
+
+      const cells = generatePreprocessCells({
+        outputBase: output_base,
+        ncFolder: actualNcFolder,
+        staticFile: static_file,
+        dynVars: dyn_vars!,
+        statVars: finalStaticVars,
+        maskVars: finalMaskVars,
+        lonVar: finalLonVar,
+        latVar: finalLatVar,
+        primaryMaskVar,
+        trainRatio: train_ratio!,
+        validRatio: valid_ratio!,
+        testRatio: test_ratio!,
+        scale,
+        downsampleMethod: downsample_method,
+        hSlice: h_slice,
+        wSlice: w_slice,
+        workers: normalizedWorkers,
+        allowNan: effectiveAllowNan,
+        dynFilePattern: actualFilePattern,
+        enableRegionCrop: enable_region_crop,
+        cropLonRange: crop_lon_range as [number, number] | undefined,
+        cropLatRange: crop_lat_range as [number, number] | undefined,
+        cropMode: crop_mode,
+        useDateFilename: use_date_filename,
+        dateFormat: date_format,
+        timeVar: time_var,
+        isNumericalModelMode,
+        lrNcFolder: lr_nc_folder,
+        lrStaticFile: lr_static_file,
+        lrDynFilePattern: lr_dyn_file_pattern || actualFilePattern,
+        maxFiles: max_files,
+        skipDownsample: skip_downsample,
+        skipVisualize: skip_visualize,
+        pythonPath: notebookPythonPath,
+      })
+
+      await saveOrAppendNotebook(ctx, notebookPath, cells)
+    } catch (e) {
+      console.warn('Notebook 生成失败:', e)
     }
 
     // ========== 最终状态 ==========

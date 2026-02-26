@@ -8,6 +8,7 @@
  * @version 3.3.0
  *
  * @changelog
+ *   - 2026-02-25 kongzhiquan: v3.4.0 tempDir 改为基于 dataset_root 的 .ocean_preprocess_temp
  *   - 2026-02-05 kongzhiquan: v3.3.0 移除 try-catch 与冗余参数
  *     - 删除无用参数（inspect_result_path, validate_result_path 等），改为自动从固定路径读取
  *     - 错误时直接 throw Error 而非返回 status: 'error'
@@ -226,7 +227,7 @@ export const oceanReportTool = defineTool({
     const reportPath = output_path || path.join(dataset_root, 'preprocessing_report.md')
 
     // 3. 准备配置
-    const tempDir = path.resolve(ctx.sandbox.workDir, 'ocean_preprocess_temp')
+    const tempDir = path.resolve(dataset_root, '.ocean_preprocess_temp')
     const configPath = path.join(tempDir, 'report_config.json')
 
     const config = {
