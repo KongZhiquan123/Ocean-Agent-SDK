@@ -8,6 +8,7 @@
  * @version 1.3.2
  *
  * @changelog
+ *   - 2026-02-26 Leizheng: v1.4.0 新增海洋时序预测训练工具集 (ocean-forecast-training)
  *   - 2026-02-24 Leizheng, kongzhiquan: v1.3.2 修复 AnthropicProvider extended thinking 兼容性问题
  *     - 修复budget_tokens参数缺失导致的错误
  *   - 2026-02-14 kongzhiquan: v1.3.1 约束agent输出路径
@@ -76,7 +77,7 @@ function loadSkillsWhitelist(skillsDir: string, defaults: string[]): string[] {
   return Array.from(whitelist)
 }
 
-const skillsWhiteList = loadSkillsWhitelist(config.skillsDir, ['ocean-SR-data-preprocess', 'ocean-SR-training', 'ocean-forecast-data-preprocess'])
+const skillsWhiteList = loadSkillsWhitelist(config.skillsDir, ['ocean-SR-data-preprocess', 'ocean-SR-training', 'ocean-forecast-data-preprocess', 'ocean-forecast-training'])
 console.log('[config] Skills 白名单:', skillsWhiteList)
 
 // ========================================
@@ -177,10 +178,12 @@ skills {"action": "load", "skill_name": "技能名称"}
 - ocean-SR-data-preprocess: 海洋超分辨率数据预处理（NC→NPY，生成高分辨率/低分辨率数据对，用于超分模型训练）
 - ocean-SR-training: 海洋超分辨率模型训练（模型选择、训练、推理）
 - ocean-forecast-data-preprocess: 海洋时序预测数据预处理（NC→NPY，按时间顺序划分 train/valid/test，用于预测模型训练，不涉及超分辨率）
+- ocean-forecast-training: 海洋时序预测模型训练（模型选择、训练、推理、自回归预测，支持 FNO2d/UNet2d/SwinTransformerV2 等模型）
 
 **技能选择指南**：
 - 用户提到"超分"/"高低分辨率"/"上采样" → ocean-SR-data-preprocess
 - 用户提到"预测"/"时间序列"/"划分训练集" → ocean-forecast-data-preprocess
+- 用户提到"训练预测模型"/"预报模型训练"/"forecast training" → ocean-forecast-training
 - 不确定时先 list 再让用户选择
 
 **工作流程**：

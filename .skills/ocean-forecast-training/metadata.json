@@ -1,0 +1,23 @@
+{
+  "name": "ocean-forecast-training",
+  "description": "海洋时序预测模型训练技能 - 支持多种模型架构的训练、推理与自回归预测（含 OOM 防护 + per-variable 指标）",
+  "version": "1.0.0",
+  "author": "Leizheng",
+  "contributors": [],
+  "last_modified": "2026-02-26",
+  "baseDir": "./.skills/ocean-forecast-training",
+  "tags": [
+    "ocean",
+    "forecast",
+    "training",
+    "deep-learning",
+    "time-series",
+    "oom-protection"
+  ],
+  "references": [
+    "references/models.md",
+    "references/parameters.md",
+    "references/examples.md",
+    "references/errors.md"
+  ]
+}

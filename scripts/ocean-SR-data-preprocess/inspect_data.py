@@ -455,7 +455,7 @@ def inspect_data(config: Dict[str, Any]) -> Dict[str, Any]:
                             "source": "coords"  # 标记来源
                         }
                         result["variables"][coord_name] = coord_info
-                        result["suspected_coordinates"].append(coord_name)
+                        # suspected_coordinates 由第 7 步统一收集，此处不重复添加
                         result["statistics"][coord_name] = compute_statistics(coord_data.values)
                         print(f"  检测到维度坐标: {coord_name}, shape={coord_info['shape']}", file=sys.stderr)
         elif nc_files:

@@ -6,9 +6,12 @@
  *
  * @author Leizheng
  * @date 2026-02-25
- * @version 1.0.0
+ * @version 1.1.0
  *
  * @changelog
+ *   - 2026-02-26 Leizheng: v1.1.0 将 static_file 作为 grid_file 传给 forecast_preprocess.py
+ *     - 支持 ROMS 等模式的独立网格文件（坐标/掩码变量不在数据文件中的情况）
+ *   - 2026-02-26 Leizheng: v1.0.1 修复 Step A 调用缺少 output_base 参数导致 inspect 工具崩溃
  *   - 2026-02-25 Leizheng: v1.0.0 初始版本
  *     - 复用 ocean_inspect_data 工具（Step A）
  *     - 调用 forecast_preprocess.py 执行转换（Step B）
@@ -270,7 +273,8 @@ export const oceanForecastPreprocessFullTool = defineTool({
       nc_folder: actualNcFolder,
       nc_files: actualNcFiles,
       static_file,
-      dyn_file_pattern: actualFilePattern
+      dyn_file_pattern: actualFilePattern,
+      output_base
     }, ctx)
 
     result.step_a = stepAResult
@@ -376,7 +380,8 @@ export const oceanForecastPreprocessFullTool = defineTool({
       time_var: time_var || null,
       max_files: max_files || null,
       run_validation,
-      allow_nan: effectiveAllowNan
+      allow_nan: effectiveAllowNan,
+      grid_file: static_file || null
     }
 
     if (actualNcFiles && actualNcFiles.length > 0) {

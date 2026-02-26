@@ -12,6 +12,11 @@
 @version 1.0.0
 
 @changelog
+  - 2026-02-26 Leizheng: v1.1.0 新增网格文件支持
+    - 静态变量提取新增三级搜索：数据文件 → 用户指定网格文件 → 自动检测网格文件
+    - 新增 grid_file 配置参数
+    - 自动检测 nc_folder 父目录中的独立 NC 文件作为网格文件
+    - 同时检查 ds.variables（含 data_vars + coords）确保不遗漏坐标变量
   - 2026-02-25 Leizheng: v1.0.0 初始版本
     - NC 文件按内部时间变量严格排序（支持 decode_times=True/False 两种模式）
     - 支持多时间步/文件 和 单时间步/文件 两种 NC 文件组织形式
@@ -325,9 +330,14 @@ def _apply_spatial_slice(
 ) -> np.ndarray:
     """
     对空间维度应用裁剪切片
-    支持 2D (H, W) 和 3D (D, H, W) 数组
+    支持 1D、2D (H, W) 和 3D (D, H, W) 数组
+
+    1D 数组不做裁剪（需要调用方根据维度语义自行处理）
     """
-    if data.ndim == 2:
+    if data.ndim <= 1:
+        # 1D 坐标变量或标量，无法确定 H/W 维度，原样返回
+        return data
+    elif data.ndim == 2:
         h = h_slice if h_slice else slice(None)
         w = w_slice if w_slice else slice(None)
         return data[h, w]
@@ -363,6 +373,88 @@ def _write_timestep(
 # 静态变量提取
 # ========================================
 
+def _auto_detect_grid_file(nc_folder: str, dyn_file_pattern: str) -> Optional[str]:
+    """
+    自动检测网格文件。
+
+    搜索策略：
+    1. nc_folder 的父目录中寻找独立的 .nc 文件（不在 dyn/ 子目录中）
+    2. nc_folder 本身中寻找不匹配 dyn_file_pattern 的 .nc 文件
+
+    ROMS 等模式通常将网格变量（lon_rho, mask_rho, h 等）存储在
+    独立的网格文件中，而非历史输出文件中。
+    """
+    import fnmatch
+
+    candidates = []
+
+    # 策略1：父目录中的 NC 文件
+    parent_dir = os.path.dirname(nc_folder.rstrip('/'))
+    if parent_dir and os.path.isdir(parent_dir):
+        for f in os.listdir(parent_dir):
+            if f.lower().endswith('.nc') and os.path.isfile(os.path.join(parent_dir, f)):
+                candidates.append(os.path.join(parent_dir, f))
+
+    # 策略2：nc_folder 内不匹配 dyn_file_pattern 的 NC 文件
+    if os.path.isdir(nc_folder):
+        for f in os.listdir(nc_folder):
+            if f.lower().endswith('.nc') and not fnmatch.fnmatch(f, dyn_file_pattern):
+                full_path = os.path.join(nc_folder, f)
+                if os.path.isfile(full_path) and full_path not in candidates:
+                    candidates.append(full_path)
+
+    if not candidates:
+        return None
+
+    # 优先选择名称中包含 grid/grd/mesh/coord 关键词的文件
+    for keyword in ['grid', 'grd', 'mesh', 'coord']:
+        for c in candidates:
+            if keyword in os.path.basename(c).lower():
+                return c
+
+    # 否则返回第一个候选
+    return candidates[0] if candidates else None
+
+
+def _extract_var_from_dataset(
+    ds: 'xr.Dataset',
+    var_name: str,
+    h_slice: Optional[slice],
+    w_slice: Optional[slice],
+    h_dim_name: Optional[str],
+    w_dim_name: Optional[str]
+) -> Optional[np.ndarray]:
+    """
+    从 xarray Dataset 中提取单个变量（同时检查 data_vars 和 coords）。
+
+    Returns: numpy array 或 None（未找到）
+    """
+    if var_name not in ds.variables:
+        return None
+
+    da = ds[var_name]
+    var_data = da.values
+    var_dims = da.dims
+
+    # 如果变量有时间维度，取第一个时间步
+    if var_data.ndim > 2:
+        var_data = var_data[0] if var_data.shape[0] < 10 else var_data.squeeze()
+        if var_data.ndim > 2:
+            var_data = var_data[0]
+
+    # 对 1D 变量，根据维度名判断裁剪轴
+    if var_data.ndim == 1 and len(var_dims) == 1:
+        dim_name = var_dims[0]
+        if dim_name == h_dim_name and h_slice is not None:
+            var_data = var_data[h_slice]
+        elif dim_name == w_dim_name and w_slice is not None:
+            var_data = var_data[w_slice]
+    else:
+        var_data = _apply_spatial_slice(var_data, h_slice, w_slice)
+
+    return var_data
+
+
 def _extract_and_save_static_vars(
     nc_files: List[str],
     stat_vars: List[str],
@@ -370,10 +462,22 @@ def _extract_and_save_static_vars(
     output_base: str,
     h_slice: Optional[slice],
     w_slice: Optional[slice],
-    warnings_list: List[str]
+    dyn_vars: List[str],
+    warnings_list: List[str],
+    grid_file: Optional[str] = None,
+    nc_folder: Optional[str] = None,
+    dyn_file_pattern: str = '*.nc'
 ) -> Dict[str, str]:
     """
-    从第一个可用的 NC 文件中提取静态变量并保存
+    从 NC 文件中提取静态变量并保存。
+
+    搜索优先级：
+    1. 数据 NC 文件（nc_files）—— 很多模式的静态变量就在动态文件里
+    2. 网格文件（grid_file）—— ROMS 等模式的网格变量在独立文件中
+    3. 自动检测网格文件 —— 如果前两步都没找全，尝试从父目录发现网格文件
+
+    对 2D 变量直接使用 _apply_spatial_slice(h_slice, w_slice)
+    对 1D 坐标变量，根据其维度名与动态变量的 H/W 维度匹配决定裁剪轴
 
     Returns: {var_name: output_path}
     """
@@ -386,47 +490,88 @@ def _extract_and_save_static_vars(
     if not all_static:
         return saved
 
-    # 逐文件尝试，找到包含静态变量的文件
+    # 从动态变量推断 H/W 维度名（从第一个数据文件）
+    h_dim_name, w_dim_name = None, None
+    for nc_file in nc_files[:3]:
+        try:
+            with xr.open_dataset(nc_file, decode_times=False) as ds:
+                for dv in dyn_vars:
+                    if dv in ds:
+                        dv_dims = ds[dv].dims
+                        if len(dv_dims) >= 2:
+                            h_dim_name = dv_dims[-2]
+                            w_dim_name = dv_dims[-1]
+                            break
+            if h_dim_name:
+                break
+        except Exception:
+            continue
+
+    def _save_var(idx: int, var_name: str, var_data: np.ndarray) -> str:
+        prefix = f"{idx:02d}"
+        filename = f"{prefix}_{var_name}.npy"
+        out_path = os.path.join(static_dir, filename)
+        np.save(out_path, var_data.astype(np.float32, copy=False))
+        return out_path
+
+    # ---- 第一阶段：从数据 NC 文件中搜索（静态变量可能就在动态文件里） ----
     for nc_file in nc_files:
         try:
             with xr.open_dataset(nc_file, decode_times=False) as ds:
-                all_vars_in_file = list(ds.variables.keys())
-                found_any = False
-
                 for idx, var_name in enumerate(all_static):
                     if var_name in saved:
                         continue
-                    if var_name not in all_vars_in_file:
-                        continue
-
-                    var_data = ds[var_name].values
-                    # 如果变量有时间维度，取第一个时间步
-                    if var_data.ndim > 2:
-                        var_data = var_data[0] if var_data.shape[0] < 10 else var_data.squeeze()
-                        if var_data.ndim > 2:
-                            var_data = var_data[0]
-
-                    var_data = _apply_spatial_slice(var_data, h_slice, w_slice)
-
-                    # 带编号前缀的文件名（保持有序）
-                    prefix = f"{idx:02d}"
-                    filename = f"{prefix}_{var_name}.npy"
-                    out_path = os.path.join(static_dir, filename)
-                    np.save(out_path, var_data.astype(np.float32, copy=False))
-                    saved[var_name] = out_path
-                    found_any = True
+                    var_data = _extract_var_from_dataset(
+                        ds, var_name, h_slice, w_slice, h_dim_name, w_dim_name
+                    )
+                    if var_data is not None:
+                        saved[var_name] = _save_var(idx, var_name, var_data)
 
                 if len(saved) == len(all_static):
-                    break  # 全部找到
-
+                    break
         except Exception as e:
             warnings_list.append(f"从 {os.path.basename(nc_file)} 提取静态变量失败: {e}")
             continue
 
+    if len(saved) == len(all_static):
+        return saved
+
+    # ---- 第二阶段：从网格文件中搜索（用户指定或自动检测） ----
+    missing_vars = [v for v in all_static if v not in saved]
+
+    # 如果用户没指定 grid_file，尝试自动检测
+    effective_grid_file = grid_file
+    if not effective_grid_file and nc_folder:
+        effective_grid_file = _auto_detect_grid_file(nc_folder, dyn_file_pattern)
+        if effective_grid_file:
+            print(f"  自动检测到网格文件: {os.path.basename(effective_grid_file)}", file=sys.stderr)
+
+    if missing_vars and effective_grid_file and os.path.isfile(effective_grid_file):
+        print(
+            f"  从网格文件搜索 {len(missing_vars)} 个未找到的静态变量: "
+            f"{os.path.basename(effective_grid_file)}",
+            file=sys.stderr
+        )
+        try:
+            with xr.open_dataset(effective_grid_file, decode_times=False) as ds:
+                for idx, var_name in enumerate(all_static):
+                    if var_name in saved:
+                        continue
+                    var_data = _extract_var_from_dataset(
+                        ds, var_name, h_slice, w_slice, h_dim_name, w_dim_name
+                    )
+                    if var_data is not None:
+                        saved[var_name] = _save_var(idx, var_name, var_data)
+                        print(f"    ✅ {var_name}: shape={var_data.shape}", file=sys.stderr)
+        except Exception as e:
+            warnings_list.append(
+                f"从网格文件 {os.path.basename(effective_grid_file)} 提取静态变量失败: {e}"
+            )
+
     # 记录未找到的变量
     for var_name in all_static:
         if var_name not in saved:
-            warnings_list.append(f"静态变量 '{var_name}' 在所有 NC 文件中均未找到")
+            warnings_list.append(f"静态变量 '{var_name}' 在所有 NC 文件和网格文件中均未找到")
 
     return saved
 
@@ -586,6 +731,7 @@ def forecast_preprocess(config: Dict[str, Any]) -> Dict[str, Any]:
     max_files        = config.get("max_files")
     run_validation   = config.get("run_validation", True)
     allow_nan        = config.get("allow_nan", False)
+    grid_file        = config.get("grid_file")
 
     result: Dict[str, Any] = {
         "status": "pending",
@@ -857,7 +1003,11 @@ def forecast_preprocess(config: Dict[str, Any]) -> Dict[str, Any]:
         output_base=output_base,
         h_slice=h_slice,
         w_slice=w_slice,
-        warnings_list=result["warnings"]
+        dyn_vars=dyn_vars,
+        warnings_list=result["warnings"],
+        grid_file=grid_file,
+        nc_folder=nc_folder,
+        dyn_file_pattern=dyn_file_pattern
     )
     result["static_vars_saved"] = list(static_saved.keys())
 
@@ -873,18 +1023,99 @@ def forecast_preprocess(config: Dict[str, Any]) -> Dict[str, Any]:
                 spatial_shape = list(arr.shape)
                 break
 
+    # ---- 11.5 自动补全 lon/lat 坐标数组 ----
+    # 如果用户指定的 lon_var/lat_var 不是 2D 坐标网格，自动寻找匹配数据空间维度的坐标
+    # 典型场景：ROMS 数据中 lon_rho/lat_rho 是 (H, W) 网格，匹配 rho 网格点
+    effective_lon_var = lon_var
+    effective_lat_var = lat_var
+
+    if spatial_shape is not None:
+        hw_shape = tuple(spatial_shape[-2:])  # (H, W)
+        static_dir = os.path.join(output_base, 'static_variables')
+
+        # 检查当前 lon_var 是否为有效的 2D 坐标网格
+        lon_is_2d = False
+        lat_is_2d = False
+        for f in os.listdir(static_dir):
+            if not f.endswith('.npy'):
+                continue
+            var_part = f.split('_', 1)[-1].replace('.npy', '')
+            if var_part == lon_var:
+                arr = np.load(os.path.join(static_dir, f))
+                if arr.ndim == 2 and arr.shape == hw_shape:
+                    lon_is_2d = True
+            if var_part == lat_var:
+                arr = np.load(os.path.join(static_dir, f))
+                if arr.ndim == 2 and arr.shape == hw_shape:
+                    lat_is_2d = True
+
+        # 如果 lon_var/lat_var 不是有效的 2D 网格，尝试从网格文件补充
+        if not lon_is_2d or not lat_is_2d:
+            # 常见的 rho 网格坐标名（优先级从高到低）
+            lon_candidates = ['lon_rho', 'longitude', 'nav_lon', 'TLONG']
+            lat_candidates = ['lat_rho', 'latitude', 'nav_lat', 'TLAT']
+
+            effective_grid = grid_file
+            if not effective_grid and nc_folder:
+                effective_grid = _auto_detect_grid_file(nc_folder, dyn_file_pattern)
+
+            # 搜索来源：数据文件 + 网格文件
+            search_files = nc_files[:1]
+            if effective_grid and os.path.isfile(effective_grid):
+                search_files.append(effective_grid)
+
+            for src_file in search_files:
+                if lon_is_2d and lat_is_2d:
+                    break
+                try:
+                    with xr.open_dataset(src_file, decode_times=False) as ds:
+                        if not lon_is_2d:
+                            for cand in lon_candidates:
+                                if cand in ds.variables and ds[cand].ndim == 2:
+                                    cand_shape = ds[cand].shape
+                                    if cand_shape == hw_shape:
+                                        data = ds[cand].values.astype(np.float32)
+                                        idx = len(stat_vars) + len(mask_vars)
+                                        fname = f"{idx:02d}_{cand}.npy"
+                                        out_path = os.path.join(static_dir, fname)
+                                        np.save(out_path, data)
+                                        static_saved[cand] = out_path
+                                        effective_lon_var = cand
+                                        lon_is_2d = True
+                                        print(f"  ✅ 自动补充坐标: {cand} shape={cand_shape}", file=sys.stderr)
+                                        break
+                        if not lat_is_2d:
+                            for cand in lat_candidates:
+                                if cand in ds.variables and ds[cand].ndim == 2:
+                                    cand_shape = ds[cand].shape
+                                    if cand_shape == hw_shape:
+                                        data = ds[cand].values.astype(np.float32)
+                                        idx = len(stat_vars) + len(mask_vars) + 1
+                                        fname = f"{idx:02d}_{cand}.npy"
+                                        out_path = os.path.join(static_dir, fname)
+                                        np.save(out_path, data)
+                                        static_saved[cand] = out_path
+                                        effective_lat_var = cand
+                                        lat_is_2d = True
+                                        print(f"  ✅ 自动补充坐标: {cand} shape={cand_shape}", file=sys.stderr)
+                                        break
+                except Exception:
+                    continue
+
+        result["static_vars_saved"] = list(static_saved.keys())
+
     # ---- 12. 生成 var_names.json ----
     var_names_data = {
         "dynamic": dyn_vars,
         "static": stat_vars,
         "mask": mask_vars,
-        "lon_var": lon_var,
-        "lat_var": lat_var,
+        "lon_var": effective_lon_var,
+        "lat_var": effective_lat_var,
         "spatial_shape": spatial_shape,
         "use_date_filename": use_date_filename,
         "date_format": date_format,
         "splits": {k: len(v) for k, v in split_steps.items()},
-        "created_at": datetime.utcnow().isoformat() + "Z"
+        "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     }
     var_names_path = os.path.join(output_base, 'var_names.json')
     with open(var_names_path, 'w', encoding='utf-8') as f:
@@ -919,7 +1150,7 @@ def forecast_preprocess(config: Dict[str, Any]) -> Dict[str, Any]:
 
     # ---- 14. 生成 preprocess_manifest.json ----
     manifest = {
-        "created_at": datetime.utcnow().isoformat() + "Z",
+        "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "nc_folder": nc_folder,
         "output_base": output_base,
         "source_files": [os.path.basename(f) for f in nc_files],

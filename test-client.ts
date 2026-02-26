@@ -2,13 +2,17 @@
  * @file test-client.ts
  *
  * @description 测试 kode-agent-service 的交互式客户端
- *              支持多轮对话、海洋数据预处理完整流程测试、超分训练测试、预测数据预处理测试
+ *              支持多轮对话、海洋数据预处理完整流程测试、超分训练测试、预测数据预处理测试、预测模型训练测试
  * @author leizheng
  * @contributors kongzhiquan, Leizheng
  * @date 2026-02-26
- * @version 3.5.0
+ * @version 3.6.0
  *
  * @changelog
+ *   - 2026-02-26 Leizheng: v3.6.0 新增海洋预测模型训练测试入口
+ *     - 新增 testOceanForecastTraining() 交互式预测训练测试
+ *     - 菜单新增选项 8、命令行参数 --forecast-train / -ft
+ *     - 测试说明对应 ocean-forecast-training skill 的 10 步工作流
  *   - 2026-02-26 kongzhiquan: v3.5.0 请求体添加outputsPath字段和notebookPath字段，打印agent_error事件
  *   - 2026-02-25 Leizheng: v3.5.0 新增预测数据预处理测试入口
  *     - 新增 testOceanForecastPreprocess() 交互式预测数据预处理测试
@@ -659,6 +663,138 @@ async function testOceanForecastPreprocess() {
   rl.close()
 }
 
+// 测试海洋预测模型训练流程（10 步）
+async function testOceanForecastTraining() {
+  console.log('\n' + '='.repeat(60))
+  console.log('海洋预测模型训练测试 v1.0（10 步确认流程 + OOM 防护）')
+  console.log('='.repeat(60))
+
+  console.log(`
+┌─────────────────────────────────────────────────────────────┐
+│  预测模型训练工作流程（10 步）                                │
+├─────────────────────────────────────────────────────────────┤
+│  步骤 1: 检查 GPU 环境                                       │
+│    → 调用 ocean_forecast_check_gpu 查看可用 GPU              │
+│                                                             │
+│  步骤 2: 确认数据目录和输出目录                              │
+│    → dataset_root: ocean-forecast-data-preprocess 预处理输出 │
+│    → log_dir: 训练日志/模型输出目录                          │
+│                                                             │
+│  步骤 3: 验证数据集                                          │
+│    → 自动检测: dyn_vars, spatial_shape, splits, time_range  │
+│    → 展示训练/验证/测试集时间步数                            │
+│                                                             │
+│  步骤 4: 选择模型                                            │
+│    → 推荐排序: FNO2d > UNet2d > SwinTransformerV2            │
+│    → FNO2d: 频谱方法，捕获全局模式，内存效率高              │
+│    → UNet2d: CNN，空间细节丰富（需 H/W 可被 16 整除）       │
+│                                                             │
+│  步骤 5: 确认训练参数                                        │
+│    → 时序参数: in_t（默认 7）, out_t（默认 1）, stride（1）  │
+│    → 训练参数: epochs, lr, batch_size                        │
+│    → GPU 选择、多卡模式（DP / DDP）                          │
+│    → OOM 防护: use_amp, gradient_checkpointing               │
+│    → 注意: FNO2d/M2NO2d 自动关闭 AMP（FFT 不兼容半精度）    │
+│                                                             │
+│  步骤 6: 参数汇总确认                                        │
+│    → Agent 展示完整参数列表                                  │
+│    → 回复"确认"开始训练                                      │
+│                                                             │
+│  步骤 7: 启动训练 + 显存预估                                 │
+│    → OOM 自动降级: AMP → 减半 batch_size（最多 5 次）        │
+│    → 等待 training_start 事件                                │
+│                                                             │
+│  步骤 8: 监控训练进度                                        │
+│    → wait / watch / logs / status                            │
+│    → 完成后展示 best_model.pth 路径和测试指标                │
+│                                                             │
+│  步骤 9: 生成可视化                                          │
+│    → loss 曲线、RMSE/MAE 曲线、per-variable 指标            │
+│                                                             │
+│  步骤 10: 生成训练报告                                       │
+│    → 完整的训练总结、参数记录、指标分析                      │
+└─────────────────────────────────────────────────────────────┘
+
+【数据目录要求】（ocean-forecast-data-preprocess 预处理输出）
+  dataset_root/
+  ├── var_names.json
+  ├── time_index.json
+  ├── train/{var}/*.npy    ← 每个时间步 (H, W) float32
+  ├── valid/{var}/*.npy
+  ├── test/{var}/*.npy
+  └── static/              ← 可选
+
+【Predict 模式（训练完成后）】
+  训练完成后可对测试集做推理：
+  → ocean_forecast_train({ mode: "predict", ... })
+  → 支持自回归 rollout 多步预测
+  → 预测结果保存到 log_dir/predictions/
+`)
+
+  console.log('请用自然语言描述您的预测训练需求，例如：')
+  console.log('  - "数据在 /data/forecast/preprocessed，帮我训练预报模型"')
+  console.log('  - "用 FNO2d 训练，14 天历史预测 1 天"')
+  console.log('  - "查看有哪些可用的预测模型"')
+  console.log('  - "看看当前 GPU 情况"')
+  console.log('  - "训练完了，帮我对测试集做预测"')
+  console.log('  - "batch_size 改成 2，重新训练"')
+  console.log('\nAgent 会引导您完成 GPU 检查 → 数据验证 → 模型选择 → 参数确认 → 训练 → 可视化 → 报告。')
+  console.log('-'.repeat(60))
+
+  // 重置会话
+  agentId = null
+  showFullToolResult = true
+
+  // 用户输入初始 prompt
+  const userPrompt = await prompt('\n你: ')
+  if (!userPrompt.trim()) {
+    console.log('错误: 请输入训练需求')
+    rl.close()
+    return
+  }
+
+  // 发送初始请求
+  await chat(userPrompt, 'edit')
+
+  // 进入交互式对话循环
+  console.log('\n' + '-'.repeat(60))
+  console.log('继续与 Agent 对话：')
+  console.log('  - 选择模型（如"FNO2d"、"UNet2d"、"SwinTransformerV2"）')
+  console.log('  - 设置时序参数（"in_t=14, out_t=1"、"用 7 天预测 3 天"）')
+  console.log('  - 确认训练参数（epochs, lr, batch_size, GPU 等）')
+  console.log('  - OOM 防护（"减小 batch_size"、"开启梯度检查点"）')
+  console.log('  - 回复"确认"开始训练')
+  console.log('  - 训练完成后："生成可视化"、"生成报告"、"对测试集做预测"')
+  console.log('')
+  console.log('命令: "done" 结束测试, "reset" 重置会话')
+  console.log('-'.repeat(60))
+
+  while (true) {
+    const userInput = await prompt('\n你: ')
+
+    if (userInput.toLowerCase() === 'done') {
+      console.log('\n测试结束')
+      break
+    }
+
+    if (userInput.toLowerCase() === 'reset') {
+      agentId = null
+      console.log('会话已重置，请重新描述您的需求')
+      const newPrompt = await prompt('\n你: ')
+      if (newPrompt.trim()) {
+        await chat(newPrompt, 'edit')
+      }
+      continue
+    }
+
+    if (userInput.trim()) {
+      await chat(userInput, 'edit')
+    }
+  }
+
+  rl.close()
+}
+
 // 原来的自动化测试（保留）
 async function runAutomatedTests() {
   console.log('\n' + '='.repeat(60))
@@ -697,7 +833,7 @@ async function runAutomatedTests() {
 
 // 主程序
 async function main() {
-  console.log('KODE Agent Service 交互式测试客户端 v3.5.0')
+  console.log('KODE Agent Service 交互式测试客户端 v3.6.0')
   console.log(`API URL: ${API_URL}`)
   console.log(`API Key: ${API_KEY.slice(0, 10)}...`)
 
@@ -718,8 +854,9 @@ async function main() {
   console.log('  5. 自动化测试套件（原测试）')
   console.log('  6. 海洋超分辨率训练测试')
   console.log('  7. 海洋预测数据预处理测试（4 阶段，NC→NPY 时序转换）')
+  console.log('  8. 海洋预测模型训练测试（10 步，FNO2d/UNet2d/Transformer）')
 
-  const choice = await prompt('\n请选择 (1/2/3/4/5/6/7): ')
+  const choice = await prompt('\n请选择 (1/2/3/4/5/6/7/8): ')
 
   switch (choice) {
     case '1':
@@ -744,6 +881,9 @@ async function main() {
       break
     case '7':
       await testOceanForecastPreprocess()
+      break
+    case '8':
+      await testOceanForecastTraining()
       break
     default:
       console.log('无效选择，进入交互模式')
@@ -802,6 +942,15 @@ if (args.includes('--interactive') || args.includes('-i')) {
   testHealth().then((healthy) => {
     if (healthy) {
       testOceanForecastPreprocess()
+    } else {
+      console.error('服务不可用')
+      process.exit(1)
+    }
+  })
+} else if (args.includes('--forecast-train') || args.includes('-ft')) {
+  testHealth().then((healthy) => {
+    if (healthy) {
+      testOceanForecastTraining()
     } else {
       console.error('服务不可用')
       process.exit(1)
