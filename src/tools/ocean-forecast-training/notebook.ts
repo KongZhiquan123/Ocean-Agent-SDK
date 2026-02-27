@@ -367,7 +367,7 @@ function generatePredictVisualizeCells(params: ForecastTrainNotebookParams): Not
     ),
     codeCell(
       `predict_plot_script = os.path.join(WORKSPACE_DIR, "..", "generate_predict_plots.py")\n` +
-      `n_samples = 5\n` +
+      `n_samples = 3\n` +
       `\n` +
       `cmd = [PYTHON_PATH, predict_plot_script, "--log_dir", LOG_DIR, "--n_samples", str(n_samples)]\n` +
       `if DATASET_ROOT:\n` +

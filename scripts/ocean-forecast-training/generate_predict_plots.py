@@ -4,9 +4,10 @@
 @description Generate prediction visualization plots for ocean forecast models.
 @author Leizheng
 @date 2026-02-26
-@version 1.1.0
+@version 1.2.0
 
 @changelog
+  - 2026-02-27 Leizheng: v1.2.0 white bg + tan land mask, equal aspect, default n_samples=3
   - 2026-02-26 Leizheng: v1.1.0 add coordinate axes, land mask, YlOrRd error cmap
   - 2026-02-26 Leizheng: v1.0.0 initial version for ocean forecast prediction visualization
 """
@@ -426,11 +427,13 @@ def _plot_panel(
                 pass  # scipy unavailable, skip mask resampling
 
     # ---- Prepare colormap with land color ----
+    # Land = NaN → shown as light tan (cartographic convention for land)
+    # Axes background = white (clearly distinct from land)
     if isinstance(cmap, str):
         cmap = plt.get_cmap(cmap).copy()
     else:
         cmap = cmap.copy()
-    cmap.set_bad(color="lightgray")
+    cmap.set_bad(color="#e8dcc8")  # light tan for land
 
     # ---- Validate coordinate dimensions against data ----
     use_coords = False
@@ -440,6 +443,9 @@ def _plot_panel(
             use_coords = (lon.size == W and lat.size == H)
         elif lon.ndim == 2 and lat.ndim == 2:
             use_coords = (lon.shape == display.shape and lat.shape == display.shape)
+
+    # ---- White background so it's distinct from the gray land mask ----
+    ax.set_facecolor("white")
 
     # ---- Draw ----
     if use_coords:
@@ -452,11 +458,15 @@ def _plot_panel(
                 cmap=cmap, vmin=vmin, vmax=vmax, shading="flat",
             )
         else:
-            # 2-D curvilinear
+            # 2-D curvilinear → crop axes to data extent
             im = ax.pcolormesh(
                 lon, lat, display,
                 cmap=cmap, vmin=vmin, vmax=vmax, shading="auto",
             )
+            # Tight limits: remove the empty white margin outside the grid
+            ax.set_xlim(float(np.nanmin(lon)), float(np.nanmax(lon)))
+            ax.set_ylim(float(np.nanmin(lat)), float(np.nanmax(lat)))
+            ax.set_aspect("equal")
         ax.tick_params(labelsize=7)
     else:
         # No valid coordinates → pixel indices
@@ -495,7 +505,8 @@ def plot_single_sample_var(
 
     if has_truth:
         n_cols = 3
-        fig, axes = plt.subplots(1, n_cols, figsize=(5.0 * n_cols + 0.5, 4.5), dpi=dpi)
+        cell = 5.0
+        fig, axes = plt.subplots(1, n_cols, figsize=(cell * n_cols + 0.5, cell), dpi=dpi)
 
         # Shared color scale for prediction and truth
         all_vals = np.concatenate([
@@ -529,7 +540,7 @@ def plot_single_sample_var(
     else:
         # No ground truth: single panel
         n_cols = 1
-        fig, ax = plt.subplots(1, 1, figsize=(6, 5), dpi=dpi)
+        fig, ax = plt.subplots(1, 1, figsize=(6, 6), dpi=dpi)
         axes = [ax]
 
         finite = pred[np.isfinite(pred)]
@@ -581,11 +592,10 @@ def plot_overview_grid(
     if n_rows == 0 or n_cols == 0:
         return output_path
 
-    cell_w = 4.0
-    cell_h = 3.5
+    cell_size = 4.5
     fig, axes = plt.subplots(
         n_rows, n_cols,
-        figsize=(cell_w * n_cols + 1.0, cell_h * n_rows + 1.0),
+        figsize=(cell_size * n_cols + 1.0, cell_size * n_rows + 1.0),
         dpi=dpi,
         squeeze=False,
     )
@@ -956,8 +966,8 @@ def main() -> None:
     parser.add_argument(
         "--n_samples",
         type=int,
-        default=5,
-        help="Number of samples to visualize (default: 5)",
+        default=3,
+        help="Number of samples to visualize (default: 3)",
     )
     parser.add_argument(
         "--output_dir",

@@ -5,9 +5,10 @@
 #               per-variable metrics.
 # @author       Leizheng
 # @date         2026-02-26
-# @version      2.0.0
+# @version      2.0.2
 #
 # @changelog
+#   - 2026-02-27 Leizheng: v2.0.2 add _promote_artifacts + saving_path in training_end event
 #   - 2026-02-26 Leizheng: v2.0.1 fix event key / double-stdout / predict batch_size
 #     - _log_json_event: "type" → "event" key (match SR + TS process manager)
 #     - _log_json_event: write to FileHandler only (avoid StreamHandler double-stdout)
@@ -776,19 +777,81 @@ class BaseTrainer:
             "final_metrics": test_metrics,
             "final_test_metrics": test_metrics,
             "timestamp": _time.strftime("%Y-%m-%d %H:%M:%S"),
+            "saving_path": self.saving_path,
+            "best_model_path": best_path if os.path.exists(best_path) else None,
         })
 
         if self.ddp and dist.is_initialized():
             dist.barrier()
 
-        # Auto-generate predictions on test set for visualization
+        # Auto-generate predictions on test set for visualization (limited samples)
         if self._is_main_process():
             try:
-                self.main_log("Auto-generating predictions on test set...")
-                self.predict()
+                _auto_predict_n = 10  # enough for visualization, avoid full test set
+                self.main_log(f"Auto-generating predictions (max {_auto_predict_n} samples)...")
+                self.predict(max_samples=_auto_predict_n)
             except Exception as e:
                 self.main_log(f"Warning: auto-predict failed: {e}")
                 self._log_json_event({"type": "predict_error", "error": str(e)})
+
+        # Promote key artifacts to the original log_dir for downstream tools
+        if self._is_main_process():
+            try:
+                self._promote_artifacts()
+            except Exception as e:
+                self.main_log(f"Warning: promote artifacts failed: {e}")
+
+    def _promote_artifacts(self) -> None:
+        """Copy/symlink key artifacts from nested saving_path to original log_dir.
+
+        The logger creates a nested directory structure under log_dir
+        (log_dir/dataset/date/model_time/), but downstream TS tools only
+        know about the original log_dir.  This method bridges the gap by
+        placing symlinks or copies of critical files in log_dir.
+        """
+        import shutil
+
+        original_log_dir = self.args.get("log", {}).get("log_dir")
+        if not original_log_dir or not self.saving_path:
+            return
+        if os.path.normpath(original_log_dir) == os.path.normpath(self.saving_path):
+            return  # same directory, nothing to do
+
+        os.makedirs(original_log_dir, exist_ok=True)
+
+        # Symlink best_model.pth (large file — prefer symlink)
+        src_model = os.path.join(self.saving_path, "best_model.pth")
+        dst_model = os.path.join(original_log_dir, "best_model.pth")
+        if os.path.exists(src_model) and not os.path.exists(dst_model):
+            try:
+                os.symlink(os.path.abspath(src_model), dst_model)
+            except OSError:
+                shutil.copy2(src_model, dst_model)
+
+        # Copy small files: train.log, config.yaml
+        for fname in ("train.log", "config.yaml"):
+            src = os.path.join(self.saving_path, fname)
+            dst = os.path.join(original_log_dir, fname)
+            if os.path.exists(src) and not os.path.exists(dst):
+                shutil.copy2(src, dst)
+
+        # Copy plots directory if it exists
+        src_plots = os.path.join(self.saving_path, "plots")
+        dst_plots = os.path.join(original_log_dir, "plots")
+        if os.path.isdir(src_plots) and not os.path.exists(dst_plots):
+            try:
+                os.symlink(os.path.abspath(src_plots), dst_plots)
+            except OSError:
+                shutil.copytree(src_plots, dst_plots)
+
+        # Copy predictions directory if it exists
+        src_preds = os.path.join(self.saving_path, "predictions")
+        dst_preds = os.path.join(original_log_dir, "predictions")
+        if os.path.isdir(src_preds) and not os.path.exists(dst_preds):
+            try:
+                os.symlink(os.path.abspath(src_preds), dst_preds)
+            except OSError:
+                shutil.copytree(src_preds, dst_preds)
 
     # ----------------------------------------------------------------------
     # Train / eval
@@ -1000,11 +1063,17 @@ class BaseTrainer:
     # ----------------------------------------------------------------------
     # Predict (inference on test set -> NPY output)
     # ----------------------------------------------------------------------
-    def predict(self, **kwargs: Any) -> None:
+    def predict(self, max_samples: Optional[int] = None, **kwargs: Any) -> None:
         """
         Load best_model.pth, run inference on the test set, and save
         predictions and ground truth as individual NPY files to
         ``{saving_path}/predictions/``.
+
+        Args:
+            max_samples: If set, stop after saving this many samples.
+                         Used by auto-predict to avoid processing the
+                         entire test set when only a few samples are
+                         needed for visualization.
 
         Naming convention:
             predictions:   ``sample_{i:06d}_t{t}_var{c}_{var_name}.npy``
@@ -1115,6 +1184,16 @@ class BaseTrainer:
                                 )
 
                         sample_idx += 1
+                        if max_samples is not None and sample_idx >= max_samples:
+                            break
+                    if max_samples is not None and sample_idx >= max_samples:
+                        self._log_json_event({
+                            "type": "predict_progress",
+                            "batch": batch_idx + 1,
+                            "total_batches": total_batches,
+                            "samples_done": sample_idx,
+                        })
+                        break
 
                     self._log_json_event({
                         "type": "predict_progress",

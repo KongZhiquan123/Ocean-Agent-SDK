@@ -4,9 +4,10 @@
  * @description Ocean forecast training and prediction visualization tool
  * @author Leizheng
  * @date 2026-02-26
- * @version 1.0.0
+ * @version 1.1.0
  *
  * @changelog
+ *   - 2026-02-27 Leizheng: v1.1.0 reduce default n_samples from 5 to 3
  *   - 2026-02-26 Leizheng: v1.0.0 initial version for ocean forecast training
  */
 
@@ -53,9 +54,9 @@ export const oceanForecastVisualizeTool = defineTool({
     },
     n_samples: {
       type: 'number',
-      description: '最多可视化样本数（predict 模式，默认 5）',
+      description: '最多可视化样本数（predict 模式，默认 3）',
       required: false,
-      default: 5
+      default: 3
     }
   },
 
@@ -75,13 +76,13 @@ export const oceanForecastVisualizeTool = defineTool({
         process.cwd(),
         'scripts/ocean-forecast-training/generate_predict_plots.py'
       )
-      const nSamples = args.n_samples ?? 5
+      const nSamples = args.n_samples ?? 3
       cmd = `"${shellEscapeDouble(pythonPath)}" "${shellEscapeDouble(scriptPath)}" --log_dir "${shellEscapeDouble(log_dir)}"`
       if (args.dataset_root) {
         const datasetRoot = path.resolve(ctx.sandbox.workDir, args.dataset_root)
         cmd += ` --dataset_root "${shellEscapeDouble(datasetRoot)}"`
       }
-      cmd += ` --n_samples ${Number(nSamples) || 5}`
+      cmd += ` --n_samples ${Number(nSamples) || 3}`
     } else {
       const scriptPath = path.resolve(
         process.cwd(),
