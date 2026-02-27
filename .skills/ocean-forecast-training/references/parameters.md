@@ -63,11 +63,38 @@
 | `distribute` | boolean | false | 是否分布式训练 |
 | `distribute_mode` | string | "single" | 分布式模式 |
 
+#### NeuralFramework 模型特有参数
+
+以下参数仅适用于 NF 系列模型（OceanCNN, OceanResNet, OceanViT, Fuxi, Fengwu, Pangu, Crossformer, NNG, OneForecast, GraphCast）。
+通过 `ForecastModelAdapter` 自动适配 SDK 张量格式，用户无需关心内部转换。
+
+| 参数 | 适用模型 | 类型 | 默认值 | 说明 |
+|------|----------|------|--------|------|
+| `img_size` | Fuxi/Fengwu/Pangu/Crossformer | [int,int] | 自动检测 | 空间尺寸 [H,W] |
+| `input_res` | NNG/OneForecast/GraphCast | [int,int] | 自动检测 | 空间分辨率 [H,W] |
+| `embed_dim` | Fuxi/Fengwu/Pangu | int | 192 | 嵌入维度 |
+| `num_heads` | Fuxi/Fengwu/Pangu | int | 6 | 注意力头数 |
+| `window_size` | Fuxi/Fengwu/Pangu | int/[int,int] | 7/[6,6] | 窗口大小 |
+| `depth` | Fuxi/Fengwu/Pangu | int | 8/6 | Transformer 层数 |
+| `use_3d_path` | Fuxi | bool | false | 是否启用 3D 路径 |
+| `patch_size` | OceanViT/Fuxi | int/[int,int] | 8/[4,4] | Patch 大小 |
+| `d_model` | OceanViT/Crossformer | int | 256 | 模型维度 |
+| `nhead`/`n_heads` | OceanViT/Crossformer | int | 8/4 | 注意力头数 |
+| `seg_len` | Crossformer | int | 6 | 时间段长度 |
+| `hidden_dim` | NNG/OneForecast/GraphCast | int | 256 | 隐藏维度 |
+| `num_processor_layers` | NNG/OneForecast/GraphCast | int | 8 | 处理层数 |
+| `mesh_level` | NNG/OneForecast/GraphCast | int | 3 | 网格细分级别 |
+
+**注意事项**:
+- NNG/GraphCast 的 AMP 默认关闭（图操作对半精度敏感）
+- Fuxi/Fengwu/Pangu 及 3 个图模型属于 HEAVY_MODELS，建议开启 gradient_checkpointing
+- 图模型需安装 `dgl` 和 `scikit-learn`：`pip install dgl scikit-learn`
+
 #### OOM 防护参数
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `use_amp` | boolean | true | 混合精度（FFT 模型自动关闭） |
+| `use_amp` | boolean | true | 混合精度（FFT/图模型自动关闭） |
 | `gradient_checkpointing` | boolean | true | 梯度检查点 |
 
 ### 阶段 4: 执行确认

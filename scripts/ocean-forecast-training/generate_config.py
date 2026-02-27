@@ -7,6 +7,7 @@
 @version 1.0.0
 
 @changelog
+  - 2026-02-27 Leizheng: v1.1.0 add 10 NeuralFramework models support
   - 2026-02-26 Leizheng: v1.0.0 initial version for ocean forecast training
 
 Usage:
@@ -38,6 +39,17 @@ MODEL_DEFAULTS = {
     "SwinMLP": {},
     "Transformer": {},
     "M2NO2d": {},
+    # NeuralFramework models
+    "OceanCNN": {},
+    "OceanResNet": {},
+    "OceanViT": {"patch_size": 8, "d_model": 256, "nhead": 8, "num_layers": 6},
+    "Fuxi": {"embed_dim": 192, "num_groups": 32, "num_heads": 6, "window_size": 7, "depth": 8, "use_3d_path": False},
+    "Fengwu": {"embed_dim": 192, "num_heads": [6, 12, 12, 6], "window_size": [6, 6], "depth": 6},
+    "Pangu": {"embed_dim": 192, "num_heads": [6, 12, 12, 6], "window_size": [6, 6], "depth": 6},
+    "Crossformer": {"d_model": 256, "n_heads": 4, "d_ff": 512, "seg_len": 6, "e_layers": 3, "d_layers": 1},
+    "NNG": {"hidden_dim": 256, "num_processor_layers": 8, "mesh_level": 3},
+    "OneForecast": {"hidden_dim": 256, "num_processor_layers": 8, "mesh_level": 3},
+    "GraphCast": {"hidden_dim": 256, "num_processor_layers": 8, "mesh_level": 3},
 }
 
 # Models that don't need scale/upsample (forecast = same resolution in/out)
@@ -45,12 +57,24 @@ FORECAST_MODELS = {
     "FNO2d", "UNet2d", "UNet3d", "FNO3d", "Transformer",
     "SwinTransformerV2", "SwinMLP", "M2NO2d", "GalerkinTransformer",
     "Transolver", "GNOT", "ONO", "LSM", "LNO", "MLP", "UNet1d", "FNO1d",
+    "OceanCNN", "OceanResNet", "OceanViT",
+    "Fuxi", "Fengwu", "Pangu", "Crossformer",
+    "NNG", "OneForecast", "GraphCast",
 }
 
-AMP_AUTO_DISABLE_MODELS = {"FNO2d", "HiNOTE", "MWT2d", "M2NO2d", "MG-DDPM", "SRNO"}
+AMP_AUTO_DISABLE_MODELS = {"FNO2d", "HiNOTE", "MWT2d", "M2NO2d", "MG-DDPM", "SRNO", "NNG", "GraphCast"}
 HEAVY_MODELS = {
     "GalerkinTransformer", "MWT2d", "SRNO",
     "SwinTransformerV2", "SwinMLP",
+    "Fuxi", "Fengwu", "Pangu",
+    "NNG", "OneForecast", "GraphCast",
+}
+
+# NeuralFramework models that need in_t/out_t injected into model config
+NF_MODELS = {
+    "OceanCNN", "OceanResNet", "OceanViT",
+    "Fuxi", "Fengwu", "Pangu", "Crossformer",
+    "NNG", "OneForecast", "GraphCast",
 }
 
 
@@ -175,6 +199,15 @@ def generate_config(params):
     # Merge model defaults
     if model_name in MODEL_DEFAULTS:
         model_config.update(MODEL_DEFAULTS[model_name])
+
+    # NeuralFramework models: inject in_t/out_t and spatial dimensions
+    if model_name in NF_MODELS:
+        model_config["in_t"] = in_t
+        model_config["out_t"] = out_t
+        if model_name in {"Fuxi", "Fengwu", "Pangu", "Crossformer"}:
+            model_config.setdefault("img_size", spatial_shape)
+        if model_name in {"NNG", "OneForecast", "GraphCast"}:
+            model_config.setdefault("input_res", spatial_shape)
 
     # FNO2d specific: no upsample for forecast (same resolution in/out)
     if model_name == "FNO2d":

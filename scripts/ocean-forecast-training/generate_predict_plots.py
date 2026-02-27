@@ -4,9 +4,11 @@
 @description Generate prediction visualization plots for ocean forecast models.
 @author Leizheng
 @date 2026-02-26
-@version 1.2.0
+@version 1.3.0
 
 @changelog
+  - 2026-02-27 Leizheng: v1.3.0 add date to titles from time_index.json, reduce title-plot
+        spacing, add error column to overview grid
   - 2026-02-27 Leizheng: v1.2.0 white bg + tan land mask, equal aspect, default n_samples=3
   - 2026-02-26 Leizheng: v1.1.0 add coordinate axes, land mask, YlOrRd error cmap
   - 2026-02-26 Leizheng: v1.0.0 initial version for ocean forecast prediction visualization
@@ -381,6 +383,48 @@ def load_ground_truth_config(dataset_root: str) -> Dict[str, Any]:
     return result
 
 
+def load_time_index(
+    dataset_root: Optional[str],
+    in_t: int = 7,
+    stride: int = 1,
+) -> Dict[int, str]:
+    """Build a mapping from sample_idx → date string using time_index.json.
+
+    The sliding window offset is: target_time = test_timestamps[in_t + sample_idx * stride].
+    Returns {sample_idx: "YYYY-MM-DD"} for all computable indices.
+    """
+    if dataset_root is None:
+        return {}
+
+    ti_path = os.path.join(dataset_root, "time_index.json")
+    if not os.path.isfile(ti_path):
+        return {}
+
+    try:
+        with open(ti_path, "r", encoding="utf-8") as f:
+            ti = json.load(f)
+        test_info = ti.get("splits", {}).get("test", {})
+        timestamps: List[str] = test_info.get("timestamps", [])
+        if not timestamps:
+            return {}
+
+        result: Dict[int, str] = {}
+        total_test = len(timestamps)
+        window_size = in_t + 1  # out_t is always at least 1
+        n_samples = (total_test - window_size) // stride + 1
+
+        for si in range(n_samples):
+            target_idx = in_t + si * stride
+            if target_idx < total_test:
+                ts = timestamps[target_idx]  # e.g. "19940707120000"
+                # Parse to "YYYY-MM-DD"
+                if len(ts) >= 8:
+                    result[si] = f"{ts[:4]}-{ts[4:6]}-{ts[6:8]}"
+        return result
+    except Exception:
+        return {}
+
+
 # ============================================================================
 # Plotting functions
 # ============================================================================
@@ -491,6 +535,7 @@ def plot_single_sample_var(
     lon: Optional[np.ndarray] = None,
     lat: Optional[np.ndarray] = None,
     mask: Optional[np.ndarray] = None,
+    date_str: Optional[str] = None,
 ) -> str:
     """Plot a 3-panel (or 1-panel) comparison for one sample/variable/timestep.
 
@@ -554,15 +599,21 @@ def plot_single_sample_var(
         ax.set_title("Prediction", fontsize=11, fontweight="bold")
         _add_colorbar(fig, ax, im0)
 
+    title_parts = [f"Sample {sample_idx}"]
+    if date_str:
+        title_parts.append(date_str)
+    if timestep > 0:
+        title_parts.append(f"t={timestep}")
+    title_parts.append(var_name)
     fig.suptitle(
-        f"Sample {sample_idx}  |  t={timestep}  |  {var_name}",
+        "  |  ".join(title_parts),
         fontsize=13,
         fontweight="bold",
-        y=1.02,
     )
-    plt.tight_layout()
+    fig.tight_layout()
+    fig.subplots_adjust(top=0.90)
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    plt.savefig(output_path, dpi=dpi, bbox_inches="tight")
+    plt.savefig(output_path, dpi=dpi, bbox_inches="tight", pad_inches=0.05)
     plt.close(fig)
     return output_path
 
@@ -577,47 +628,63 @@ def plot_overview_grid(
     lon: Optional[np.ndarray] = None,
     lat: Optional[np.ndarray] = None,
     mask: Optional[np.ndarray] = None,
+    date_map: Optional[Dict[int, str]] = None,
 ) -> str:
     """Generate an overview grid showing all visualized samples.
 
-    Rows = samples, Columns = variables. Each cell shows the prediction heatmap
-    with optional coordinate axes and land mask overlay.
+    Layout per row (one sample):
+      - For each variable: Prediction | |Pred - Truth| (if GT available)
+      - Without GT: just Prediction per variable.
 
     Returns:
         The output_path on success.
     """
     n_rows = len(sample_indices)
-    n_cols = len(var_names)
+    n_vars = len(var_names)
+    has_gt = gt_data is not None
 
-    if n_rows == 0 or n_cols == 0:
+    if n_rows == 0 or n_vars == 0:
         return output_path
 
-    cell_size = 4.5
+    # Columns: per variable show pred + error (if GT), else just pred
+    if has_gt:
+        n_cols = n_vars * 2  # pred, error for each variable
+    else:
+        n_cols = n_vars
+
+    cell_w = 4.5
+    cell_h = 4.5
     fig, axes = plt.subplots(
         n_rows, n_cols,
-        figsize=(cell_size * n_cols + 1.0, cell_size * n_rows + 1.0),
+        figsize=(cell_w * n_cols + 1.5, cell_h * n_rows + 1.0),
         dpi=dpi,
         squeeze=False,
     )
 
     for row, si in enumerate(sample_indices):
         sample_data = pred_index.get(si, {})
-        # Use timestep 0 for the overview
         ts_data = sample_data.get(0, {})
 
-        for col, var_name in enumerate(var_names):
-            ax = axes[row, col]
-            var_info = ts_data.get(col)
+        for vi, var_name in enumerate(var_names):
+            var_info = ts_data.get(vi)
+
+            if has_gt:
+                ax_pred = axes[row, vi * 2]
+                ax_err = axes[row, vi * 2 + 1]
+            else:
+                ax_pred = axes[row, vi]
+                ax_err = None
 
             if var_info is None:
-                ax.text(
-                    0.5, 0.5, "N/A",
-                    ha="center", va="center",
-                    transform=ax.transAxes,
-                    fontsize=12, color="gray",
-                )
-                ax.set_xticks([])
-                ax.set_yticks([])
+                ax_pred.text(0.5, 0.5, "N/A", ha="center", va="center",
+                             transform=ax_pred.transAxes, fontsize=12, color="gray")
+                ax_pred.set_xticks([])
+                ax_pred.set_yticks([])
+                if ax_err is not None:
+                    ax_err.text(0.5, 0.5, "N/A", ha="center", va="center",
+                                transform=ax_err.transAxes, fontsize=12, color="gray")
+                    ax_err.set_xticks([])
+                    ax_err.set_yticks([])
             else:
                 pred = np.load(var_info["path"]).astype(np.float32)
                 finite = pred[np.isfinite(pred)]
@@ -627,45 +694,60 @@ def plot_overview_grid(
                 else:
                     vmin, vmax = 0.0, 1.0
 
-                im = _plot_panel(ax, pred, lon, lat, mask, DEFAULT_CMAP, vmin, vmax)
-                _add_colorbar(fig, ax, im)
+                im = _plot_panel(ax_pred, pred, lon, lat, mask, DEFAULT_CMAP, vmin, vmax)
+                _add_colorbar(fig, ax_pred, im)
 
-                # Only show tick labels on outer edges to reduce clutter
+                # Hide x ticks for non-bottom rows
                 if row < n_rows - 1:
-                    ax.set_xticklabels([])
-                if col > 0:
-                    ax.set_yticklabels([])
+                    ax_pred.tick_params(axis='x', labelbottom=False, length=0)
+                # Hide y ticks for non-first pred columns
+                if vi > 0:
+                    ax_pred.tick_params(axis='y', labelleft=False, length=0)
 
-                # Annotate with RMSE if ground truth is available
-                if gt_data is not None and si < gt_data.shape[0]:
-                    truth = gt_data[si, 0, col]  # timestep=0, var=col
+                # Error panel
+                if ax_err is not None and has_gt and si < gt_data.shape[0]:
+                    truth = gt_data[si, 0, vi]
+                    error = np.abs(pred - truth)
+                    emax = float(np.nanpercentile(
+                        error[np.isfinite(error)], 99)) if np.any(np.isfinite(error)) else 1.0
+                    im_e = _plot_panel(ax_err, error, lon, lat, mask, ERROR_CMAP, 0, emax)
+                    _add_colorbar(fig, ax_err, im_e)
+
                     rmse = float(np.sqrt(np.nanmean((pred - truth) ** 2)))
                     mae = float(np.nanmean(np.abs(pred - truth)))
-                    ax.text(
+                    ax_err.text(
                         0.02, 0.96,
                         f"RMSE={rmse:.4g}\nMAE={mae:.4g}",
-                        transform=ax.transAxes,
-                        fontsize=7,
-                        color="white",
-                        verticalalignment="top",
+                        transform=ax_err.transAxes, fontsize=7,
+                        color="white", verticalalignment="top",
                         bbox=dict(boxstyle="round,pad=0.2", facecolor="black", alpha=0.6),
                     )
+                    if row < n_rows - 1:
+                        ax_err.tick_params(axis='x', labelbottom=False, length=0)
+                    ax_err.tick_params(axis='y', labelleft=False, length=0)
+                elif ax_err is not None:
+                    ax_err.set_visible(False)
 
-            # Row / column labels
+            # Column headers (first row)
             if row == 0:
-                ax.set_title(var_name, fontsize=10, fontweight="bold")
-            if col == 0:
-                ax.set_ylabel(f"Sample {si}", fontsize=9, fontweight="medium")
+                ax_pred.set_title(f"{var_name}", fontsize=10, fontweight="bold")
+                if ax_err is not None:
+                    ax_err.set_title(f"|Error|", fontsize=10, fontweight="bold")
+
+            # Row labels (first column)
+            if (has_gt and vi == 0) or (not has_gt and vi == 0):
+                date_label = f" ({date_map[si]})" if date_map and si in date_map else ""
+                ax_pred.set_ylabel(f"Sample {si}{date_label}", fontsize=9, fontweight="medium")
 
     fig.suptitle(
-        "Prediction Overview (t=0)",
+        "Prediction Overview",
         fontsize=14,
         fontweight="bold",
-        y=1.01,
     )
-    plt.tight_layout()
+    fig.tight_layout(h_pad=0.3, w_pad=1.0)
+    fig.subplots_adjust(top=0.95)
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    plt.savefig(output_path, dpi=dpi, bbox_inches="tight")
+    plt.savefig(output_path, dpi=dpi, bbox_inches="tight", pad_inches=0.05)
     plt.close(fig)
     return output_path
 
@@ -842,8 +924,18 @@ def generate_predict_plots(
             print("[Info] No ground truth available, showing predictions only.", file=sys.stderr)
 
     # ---- Load static data (coordinates + land mask) ----
-    # Resolve dataset_root for static data loading (may have been auto-detected above)
-    static_data = load_static_data(dataset_root)
+    # Resolve dataset_root for static data loading (auto-detect from predict_meta if needed)
+    effective_dataset_root = dataset_root
+    if effective_dataset_root is None:
+        _meta_path = os.path.join(pred_dir, "predict_meta.json")
+        if os.path.isfile(_meta_path):
+            try:
+                with open(_meta_path, "r", encoding="utf-8") as f:
+                    _pmeta = json.load(f)
+                effective_dataset_root = _pmeta.get("dataset_root")
+            except Exception:
+                pass
+    static_data = load_static_data(effective_dataset_root)
     s_lon = static_data["lon"]
     s_lat = static_data["lat"]
     s_mask = static_data["mask"]
@@ -854,6 +946,27 @@ def generate_predict_plots(
             f"mask={'(' + 'x'.join(str(x) for x in s_mask.shape) + ')' if s_mask is not None else 'None'}",
             file=sys.stderr,
         )
+
+    # ---- Load time index for date labels ----
+    # Determine in_t/stride for time_index mapping
+    ti_in_t = 7
+    ti_stride = 1
+    # Auto-detect dataset_root if not yet set (for time_index loading)
+    ti_dataset_root = dataset_root
+    meta_path = os.path.join(pred_dir, "predict_meta.json")
+    if os.path.isfile(meta_path):
+        try:
+            with open(meta_path, "r", encoding="utf-8") as f:
+                pmeta = json.load(f)
+            ti_in_t = int(pmeta.get("in_t", ti_in_t))
+            ti_stride = int(pmeta.get("stride", ti_stride))
+            if ti_dataset_root is None:
+                ti_dataset_root = pmeta.get("dataset_root")
+        except Exception:
+            pass
+    date_map = load_time_index(ti_dataset_root, in_t=ti_in_t, stride=ti_stride)
+    if date_map:
+        print(f"[Info] Time index loaded: {len(date_map)} sample-to-date mappings", file=sys.stderr)
 
     # ---- Generate per-sample comparison plots ----
     print(f"[Info] Generating per-sample plots for {len(vis_sample_ids)} samples...", file=sys.stderr)
@@ -901,6 +1014,7 @@ def generate_predict_plots(
                         lon=s_lon,
                         lat=s_lat,
                         mask=s_mask,
+                        date_str=date_map.get(si),
                     )
                     result["plots"].append(out_path)
                     print(f"  [{si}] {out_name}", file=sys.stderr)
@@ -920,6 +1034,7 @@ def generate_predict_plots(
             lon=s_lon,
             lat=s_lat,
             mask=s_mask,
+            date_map=date_map,
         )
         result["plots"].append(overview_path)
         print(f"  predict_overview.png", file=sys.stderr)

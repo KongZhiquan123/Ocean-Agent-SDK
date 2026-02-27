@@ -8,6 +8,7 @@
 @version 1.0.0
 
 @changelog
+  - 2026-02-27 Leizheng: v1.1.0 always copy models/base/ for shared utilities
   - 2026-02-26 Leizheng: v1.0.0 initial version for ocean forecast training
 
 Usage:
@@ -157,6 +158,12 @@ def main():
     copy_dir(os.path.join(src, 'models', pkg_name),
              os.path.join(models_dst, pkg_name))
     copied.append(f'models/{pkg_name}/')
+
+    # Always copy models/base/ (shared utilities: attention, embeddings, adapter)
+    base_model_src = os.path.join(src, 'models', 'base')
+    if os.path.isdir(base_model_src):
+        copy_dir(base_model_src, os.path.join(models_dst, 'base'))
+        copied.append('models/base/')
 
     init_code = (
         f'from .{pkg_name} import {cls_name}\n\n'
