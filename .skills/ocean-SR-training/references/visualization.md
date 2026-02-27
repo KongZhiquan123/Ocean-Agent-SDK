@@ -16,7 +16,7 @@
 
 ---
 
-## 可视化工具 ocean_sr_visualize
+## 可视化工具 ocean_sr_train_visualize
 
 生成 5 个训练可视化图表：
 
@@ -31,7 +31,7 @@
 ### 调用方式
 
 ```
-ocean_sr_visualize({
+ocean_sr_train_visualize({
   log_dir: "/path/to/training_output"
 })
 ```
@@ -49,19 +49,19 @@ log_dir/plots/
 
 ---
 
-## 报告生成工具 ocean_sr_generate_report
+## 报告生成工具 ocean_sr_train_report
 
 生成包含可视化图表的 Markdown 报告。
 
 ### 调用方式
 
 ```
-ocean_sr_generate_report({
+ocean_sr_train_report({
   log_dir: "/path/to/training_output"
 })
 ```
 
-**重要**：先运行 `ocean_sr_visualize` 生成图表，再运行 `ocean_sr_generate_report`，报告会自动嵌入图表。
+**重要**：先运行 `ocean_sr_train_visualize` 生成图表，再运行 `ocean_sr_train_report`，报告会自动嵌入图表。
 
 ---
 
@@ -108,11 +108,11 @@ ocean_sr_generate_report({
    → "训练已完成，是否需要生成可视化图表和训练报告？"
 
 3. 用户确认后，生成可视化
-   → ocean_sr_visualize({ log_dir: "..." })
+   → ocean_sr_train_visualize({ log_dir: "..." })
    → 生成 5 个图表到 plots/
 
 4. 生成报告
-   → ocean_sr_generate_report({ log_dir: "..." })
+   → ocean_sr_train_report({ log_dir: "..." })
    → 生成 training_report.md（含嵌入图表）
 
 5. Agent 读取报告，补充分析

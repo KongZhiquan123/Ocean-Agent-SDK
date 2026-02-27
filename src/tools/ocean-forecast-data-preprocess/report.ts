@@ -110,7 +110,7 @@ function generateMarkdownReport(
   datasetRoot: string,
   visualizations: { split: string; variable: string; frames: boolean; timeseries: boolean; distribution: boolean }[] = []
 ): string {
-  const now = new Date().toISOString()
+  const now = new Date().toLocaleString()
   const dynVars: string[] = varNames?.dynamic || manifest?.dyn_vars || []
   const staticVars: string[] = varNames?.static || manifest?.stat_vars || []
   const maskVars: string[] = varNames?.mask || manifest?.mask_vars || []
@@ -383,8 +383,8 @@ function generateMarkdownReport(
 // 工具定义
 // ========================================
 
-export const oceanForecastReportTool = defineTool({
-  name: 'ocean_forecast_generate_report',
+export const oceanForecastPreprocessReportTool = defineTool({
+  name: 'ocean_forecast_preprocess_report',
   description: `生成海洋预报数据预处理 Markdown 报告
 
 读取预处理输出目录中的 JSON 文件，生成结构化报告。

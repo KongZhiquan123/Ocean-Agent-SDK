@@ -229,9 +229,6 @@ function generateStepBCells(): NotebookCell[] {
       `        forecast_result = json.load(f)\n` +
       `    print(f"转换状态: {forecast_result.get('status')}")\n` +
       `    print(f"消息: {forecast_result.get('message')}")\n` +
-      `    if forecast_result.get("splits"):\n` +
-      `        for split_name, split_info in forecast_result["splits"].items():\n` +
-      `            print(f"  {split_name}: {split_info.get('total_files', '?')} 个文件")\n` +
       `    if forecast_result.get("warnings"):\n` +
       `        for w in forecast_result["warnings"]:\n` +
       `            print(f"  警告: {w}")\n` +

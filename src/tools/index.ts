@@ -9,13 +9,13 @@
  *   - 2026-02-25 Leizheng: 新增 oceanForecastPreprocessTools
  */
 
-import {oceanPreprocessTools} from './ocean-SR-data-preprocess'
+import {oceanSrPreprocessTools} from './ocean-SR-data-preprocess'
 import {oceanSrTrainingTools} from './ocean-sr-training'
 import {oceanForecastPreprocessTools} from './ocean-forecast-data-preprocess'
 import {oceanForecastTrainingTools} from './ocean-forecast-training'
 
 export default [
-  ...oceanPreprocessTools,
+  ...oceanSrPreprocessTools,
   ...oceanSrTrainingTools,
   ...oceanForecastPreprocessTools,
   ...oceanForecastTrainingTools

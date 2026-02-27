@@ -47,13 +47,13 @@ NaN 通常表示：
 
 ### high_nan_rate
 
-**警告信息**：`{var}/{split} NaN 率 XX% 偏高`（来自 ocean_forecast_stats）
+**警告信息**：`{var}/{split} NaN 率 XX% 偏高`（来自 ocean_forecast_preprocess_stats）
 
 **触发条件**：某变量在某 split 中的 NaN 占比超过 30%。
 
 **详情**：
 ```
-ocean_forecast_stats 统计发现：
+ocean_forecast_preprocess_stats 统计发现：
 - sst/valid: NaN 率 35.0%（超过 30% 阈值）
 
 可能原因：
@@ -84,7 +84,7 @@ ocean_forecast_stats 统计发现：
 
 ### time_leakage
 
-**警告信息**：`[时间边界] 时间泄露风险: train 结束 XXXXXX ≥ valid 开始 XXXXXX`（来自 ocean_forecast_stats）
+**警告信息**：`[时间边界] 时间泄露风险: train 结束 XXXXXX ≥ valid 开始 XXXXXX`（来自 ocean_forecast_preprocess_stats）
 
 **触发条件**：`time_boundary_check.passed = false`，即某相邻 split 对的时间段存在重叠。
 
@@ -121,7 +121,7 @@ valid 开始: 2021-12-01
 
 ### cross_split_mean
 
-**警告信息**：`{var}/{split} 均值偏移 X.XXσ (train=..., {split}=...)`（来自 ocean_forecast_stats）
+**警告信息**：`{var}/{split} 均值偏移 X.XXσ (train=..., {split}=...)`（来自 ocean_forecast_preprocess_stats）
 
 **触发条件**：`|split_mean - train_mean| / train_std > 1.0`（均值偏移超过 1 个训练标准差）。
 
@@ -152,7 +152,7 @@ cross_split_check 发现 sst/test 均值偏移：
 
 ### cross_split_std
 
-**警告信息**：`{var}/{split} 方差比 X.XXx (train_std=..., {split}_std=...)`（来自 ocean_forecast_stats）
+**警告信息**：`{var}/{split} 方差比 X.XXx (train_std=..., {split}_std=...)`（来自 ocean_forecast_preprocess_stats）
 
 **触发条件**：`split_std / train_std > 2.0` 或 `< 0.5`
 

@@ -358,7 +358,7 @@ def generate_report(log_dir: str, yaml_config: Optional[Dict], log_data: Dict) -
         for filename, description in plot_files.items():
             lines.append(f"| {filename} | {description} |")
     else:
-        lines.append("*未生成可视化文件，请先运行 `ocean_sr_visualize` 工具*")
+        lines.append("*未生成可视化文件，请先运行 `ocean_sr_train_visualize` 工具*")
     lines.append("")
 
     lines.append("### 4.2 可视化内容说明")

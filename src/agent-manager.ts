@@ -15,7 +15,7 @@
  *   - 2026-02-25 kongzhiquan: v1.7.0 processMessage 订阅 monitor 通道，agent 错误事件转换为 SSE error 事件
  *   - 2026-02-14 kongzhiquan: v1.6.0 outputsPath 注入：metadata 存储 + processMessage 消息级指令前缀
  *   - 2026-02-10 kongzhiquan: v1.5.0 新增 transformToolResult 集中格式转换器
- *     - 对 ocean_preprocess_full 工具结果做裁剪，只保留当前步骤进度信息
+ *     - 对 ocean_sr_preprocess_full 工具结果做裁剪，只保留当前步骤进度信息
  *     - 未注册的工具名原样透传
  *   - 2026-02-10 Leizheng: v1.5.0 SSE 输出截断 + 生产环境错误信息脱敏
  *   - 2026-02-08 Leizheng: v1.4.0 增加受控 bash 白名单与安全路径检查

@@ -81,8 +81,8 @@ export interface ForecastStatsResult {
 // 工具定义
 // ========================================
 
-export const oceanForecastStatsTool = defineTool({
-  name: 'ocean_forecast_stats',
+export const oceanForecastPreprocessStatsTool = defineTool({
+  name: 'ocean_forecast_preprocess_stats',
   description: `计算预报数据集的 per-variable 统计量
 
 读取已预处理的 NPY 文件，计算每个变量在 train/valid/test 各 split 中的：

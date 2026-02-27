@@ -97,7 +97,7 @@ The service uses KODE SDK's three-channel event system:
 - Command execution (bash_run)
 - Todo management (todo_read, todo_write)
 - Skills system (skills tool)
-- Ocean preprocessing tools (ocean_inspect_data, ocean_validate_tensor, ocean_convert_npy, ocean_preprocess_full)
+- Ocean preprocessing tools (ocean_inspect_data, ocean_validate_tensor, ocean_sr_preprocess_convert_npy, ocean_sr_preprocess_full)
 
 **Ask Mode** (`qa-assistant` template):
 - Read-only file access (fs_read)
@@ -119,10 +119,10 @@ The service includes a specialized skill for ocean data preprocessing (`.skills/
 **Tools**:
 1. `ocean_inspect_data`: Analyzes NC files, classifies variables (dynamic/static/mask)
 2. `ocean_validate_tensor`: Validates tensor shapes and generates var_names config
-3. `ocean_convert_npy`: Converts to NPY format with directory structure (hr/, static/)
-4. `ocean_preprocess_full`: One-click execution of full A→B→C pipeline with interactive confirmation
+3. `ocean_sr_preprocess_convert_npy`: Converts to NPY format with directory structure (hr/, static/)
+4. `ocean_sr_preprocess_full`: One-click execution of full A→B→C pipeline with interactive confirmation
 
-**Important**: The `ocean_preprocess_full` tool implements a two-phase workflow:
+**Important**: The `ocean_sr_preprocess_full` tool implements a two-phase workflow:
 - Phase 1: Returns `awaiting_confirmation` status with suspected masks/coordinates
 - Agent must present these to user and ask for confirmation
 - Phase 2: Re-invoke with user-confirmed `mask_vars` and `static_vars` to execute full pipeline

@@ -58,7 +58,7 @@
 3. 启用梯度检查点 `gradient_checkpointing=true`（减少约 60% 激活显存；当前默认已开启，可显式确认）
 4. 设置 `patch_size`（如 64 或 128）裁剪小区域训练
 5. 使用多卡训练分摊显存
-6. 用 `ocean_sr_check_gpu` 查看显存占用情况
+6. 用 `ocean_sr_gpu_check` 查看显存占用情况
 7. 选择更轻量的模型
 
 **显存预估失败（OOM）**：
@@ -117,7 +117,7 @@
 - 模型目录存在但未接入训练流程（缺少注册、Trainer 或模板）
 
 **修改建议**：
-1. 调用 `ocean_sr_list_models` 查看正确的模型名
+1. 调用 `ocean_sr_model_list` 查看正确的模型名
 2. 仅选择 `supported=true` 的模型
 3. 若要接入新模型，补齐 model 注册、trainer 映射与模板配置
 

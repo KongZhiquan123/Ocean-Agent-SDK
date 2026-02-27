@@ -14,8 +14,8 @@ import { defineTool } from '@shareai-lab/kode-sdk'
 import { findPythonWithModule, findFirstPythonPath } from '@/utils/python-manager'
 import path from 'node:path'
 
-export const oceanSrCheckGpuTool = defineTool({
-  name: 'ocean_sr_check_gpu',
+export const oceanSrGpuCheckTool = defineTool({
+  name: 'ocean_sr_gpu_check',
   description: `查看当前可用的 GPU 信息。
 
 返回每张 GPU 的名称、总显存、空闲显存、已用显存。

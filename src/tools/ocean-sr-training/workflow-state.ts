@@ -733,7 +733,7 @@ Agent 可以进入下一阶段（阶段2：模型选择）。`,
     modelList?: ModelInfo[]
   ): TrainingStagePromptResult {
     // 格式化模型列表
-    let modelListStr = '（模型列表加载失败，请调用 ocean_sr_list_models 查看）'
+    let modelListStr = '（模型列表加载失败，请调用 ocean_sr_model_list 查看）'
     if (modelList && modelList.length > 0) {
       const supportedModels = modelList.filter(m => m.supported !== false)
       const unsupportedModels = modelList.filter(m => m.supported === false)

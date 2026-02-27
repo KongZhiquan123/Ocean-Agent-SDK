@@ -577,7 +577,7 @@ async function testOceanForecastPreprocess() {
 │    → Agent 展示完整参数汇总                                 │
 │    → 你回复"确认执行"开始处理                               │
 │                                                             │
-│  完成后: 调用 ocean_forecast_generate_report 生成报告       │
+│  完成后: 调用 ocean_forecast_preprocess_report 生成报告       │
 └─────────────────────────────────────────────────────────────┘
 
 【输出目录结构】

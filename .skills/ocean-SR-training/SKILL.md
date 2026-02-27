@@ -63,12 +63,12 @@ Changelog:
 
 | 工具 | 用途 |
 |------|------|
-| `ocean_sr_check_gpu` | 查看可用 GPU |
-| `ocean_sr_list_models` | 列出可用模型 |
-| `ocean_sr_train` | 启动训练或推理（含事件驱动启动监控，predict 模式跳过训练工作流） |
+| `ocean_sr_gpu_check` | 查看可用 GPU |
+| `ocean_sr_model_list` | 列出可用模型 |
+| `ocean_sr_train_start` | 启动训练或推理（含事件驱动启动监控，predict 模式跳过训练工作流） |
 | `ocean_sr_train_status` | 查询训练/推理状态/日志/终止训练/等待状态变化 |
-| `ocean_sr_visualize` | 生成训练可视化图表（mode=train）或推理对比图（mode=predict） |
-| `ocean_sr_generate_report` | 生成训练报告 |
+| `ocean_sr_train_visualize` | 生成训练可视化图表（mode=train）或推理对比图（mode=predict） |
+| `ocean_sr_train_report` | 生成训练报告 |
 
 ---
 
@@ -77,7 +77,7 @@ Changelog:
 ```
 1. 确认数据 → 用户提供预处理数据目录和输出目录
    ↓
-2. 选择模型 → ocean_sr_list_models，用户选择
+2. 选择模型 → ocean_sr_model_list，用户选择
    ↓
 3. 确认参数 → epochs, lr, batch_size(默认4), GPU 选择
    │  → OOM 防护参数: use_amp（非 FFT 默认开启 / FFT 默认关闭）, gradient_checkpointing（默认开启）, patch_size
@@ -100,12 +100,12 @@ Changelog:
    │  调用 ocean_sr_train_status({ action: "wait", process_id, timeout: 120 })
    │  同样等 2 分钟，按上述逻辑处理
    ↓
-8. 生成可视化 → ocean_sr_visualize（用户确认后）
+8. 生成可视化 → ocean_sr_train_visualize（用户确认后）
    │  检查返回 status="success" 且 plots/ 目录下文件已生成
    │  若失败：展示错误，询问用户是否重试
-   │  **禁止在此步骤未成功前调用 ocean_sr_generate_report**
+   │  **禁止在此步骤未成功前调用 ocean_sr_train_report**
    ↓
-9. 生成报告 → ocean_sr_generate_report（仅在步骤 8 成功后执行）
+9. 生成报告 → ocean_sr_train_report（仅在步骤 8 成功后执行）
    │  → Agent 读取报告，补充 <!-- AI_FILL: ... --> 占位符
    ↓
 10. 完成 → 展示报告路径和关键结果
@@ -127,7 +127,7 @@ predict 模式对测试集执行全图 SR 推理，输出物理值空间的 NPY 
 ```
 1. 确认参数 → dataset_root, log_dir, model_name, ckpt_path（可选，默认 best_model.pth）
    ↓
-2. 启动推理 → ocean_sr_train({ mode: "predict", dataset_root, log_dir, model_name, ... })
+2. 启动推理 → ocean_sr_train_start({ mode: "predict", dataset_root, log_dir, model_name, ... })
    │  工具内部等待 predict_start 事件（最长 5 分钟）
    │  若返回 status="error"：展示错误 + 建议
    ↓
@@ -135,7 +135,7 @@ predict 模式对测试集执行全图 SR 推理，输出物理值空间的 NPY 
    │  若 process_status="completed"：主动询问是否生成可视化
    │  若 process_status="failed"：展示错误 + 建议
    ↓
-4. 可视化 → ocean_sr_visualize({ log_dir, mode: "predict", dataset_root, dyn_vars })
+4. 可视化 → ocean_sr_train_visualize({ log_dir, mode: "predict", dataset_root, dyn_vars })
    ↓
 5. 完成 → 展示 predictions/ 路径和可视化图表
 ```

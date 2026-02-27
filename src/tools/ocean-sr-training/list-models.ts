@@ -14,8 +14,8 @@ import { defineTool } from '@shareai-lab/kode-sdk'
 import { findPythonWithModule, findFirstPythonPath } from '@/utils/python-manager'
 import path from 'node:path'
 
-export const oceanSrListModelsTool = defineTool({
-  name: 'ocean_sr_list_models',
+export const oceanSrModelListTool = defineTool({
+  name: 'ocean_sr_model_list',
   description: `列出所有可用的超分辨率模型。
 
 返回模型名称、类别（standard/diffusion）、对应的 Trainer 类型和说明。

@@ -40,8 +40,8 @@ export interface DownsampleResult {
   message?: string
 }
 
-export const oceanDownsampleTool = defineTool({
-  name: 'ocean_downsample',
+export const oceanSrPreprocessDownsampleTool = defineTool({
+  name: 'ocean_sr_preprocess_downsample',
   description: `将 HR 数据下采样生成 LR 数据
 
 从 train/hr/, valid/hr/, test/hr/ 目录读取高分辨率数据，

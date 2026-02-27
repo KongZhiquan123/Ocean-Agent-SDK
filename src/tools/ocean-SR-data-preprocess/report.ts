@@ -129,8 +129,8 @@ function getUserConfirmationExample(): string {
 }`
 }
 
-export const oceanReportTool = defineTool({
-  name: 'ocean_generate_report',
+export const oceanSrPreprocessReportTool = defineTool({
+  name: 'ocean_sr_preprocess_report',
   description: `生成海洋数据预处理 Markdown 报告
 
 从预处理流程的各个步骤中提取关键信息，生成一份包含以下内容的综合报告：

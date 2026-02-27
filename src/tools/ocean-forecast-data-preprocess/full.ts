@@ -27,7 +27,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { findFirstPythonPath } from '@/utils/python-manager'
 import { oceanInspectDataTool } from '../ocean-SR-data-preprocess/inspect'
-import { oceanForecastVisualizeTool } from './visualize'
+import { oceanForecastPreprocessVisualizeTool } from './visualize'
 import { ForecastWorkflow, WorkflowState } from './workflow-state'
 import { generateForecastPreprocessCells, saveOrAppendNotebook } from './notebook'
 
@@ -71,7 +71,7 @@ export const oceanForecastPreprocessFullTool = defineTool({
 - output_base/visualisation_forecast/ - 可视化图片（可选）
 - output_base/preprocessing_report.md - 报告（需 Agent 生成）
 
-**完成后**：调用 ocean_forecast_generate_report 生成报告`,
+**完成后**：调用 ocean_forecast_preprocess_report 生成报告`,
 
   params: {
     nc_folder: {
@@ -429,7 +429,7 @@ export const oceanForecastPreprocessFullTool = defineTool({
 
     // ========== Step C: 可视化（可选） ==========
     if (!skip_visualize) {
-      const stepCResult = await oceanForecastVisualizeTool.exec({
+      const stepCResult = await oceanForecastPreprocessVisualizeTool.exec({
         dataset_root: output_base,
         splits: ['train', 'valid', 'test']
       }, ctx)
@@ -480,7 +480,7 @@ export const oceanForecastPreprocessFullTool = defineTool({
 
     // ========== 最终状态 ==========
     result.overall_status = 'pass'
-    result.message = `预处理完成！${stepBResult.message || ''} 请调用 ocean_forecast_generate_report 工具生成预处理报告。`
+    result.message = `预处理完成！${stepBResult.message || ''} 请调用 ocean_forecast_preprocess_report 工具生成预处理报告。`
 
     return result
   }

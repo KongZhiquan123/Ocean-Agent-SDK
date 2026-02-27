@@ -57,7 +57,7 @@ AI 生成的文本增量，客户端需拼接所有 `content` 得到完整回复
 ```jsonc
 {
   "type": "tool_use",
-  "tool": "ocean_preprocess_full",
+  "tool": "ocean_sr_preprocess_full",
   "id": "call_xxxxxxxx",
   "message": "启动预处理流程...",
   "input": { ... },

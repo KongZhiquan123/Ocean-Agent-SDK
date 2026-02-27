@@ -38,9 +38,9 @@ Changelog:
 
 | 工具 | 用途 | 使用时机 |
 |------|------|----------|
-| `ocean_preprocess_full` | 完整预处理流程 | **推荐**：信息完整时使用 |
-| `ocean_metrics` | 质量指标计算 | **必须**：预处理后调用 |
-| `ocean_generate_report` | 生成报告 | 指标计算后生成 |
+| `ocean_sr_preprocess_full` | 完整预处理流程 | **推荐**：信息完整时使用 |
+| `ocean_sr_preprocess_metrics` | 质量指标计算 | **必须**：预处理后调用 |
+| `ocean_sr_preprocess_report` | 生成报告 | 指标计算后生成 |
 | `ocean_inspect_data` | 查看数据变量 | 用户只想了解数据时 |
 
 ---
@@ -66,9 +66,9 @@ Changelog:
     ↓
 ✅ 执行处理 (A→B→C→D→E)
     ↓
-📊 调用 ocean_metrics 计算指标
+📊 调用 ocean_sr_preprocess_metrics 计算指标
     ↓
-📝 调用 ocean_generate_report 生成报告
+📝 调用 ocean_sr_preprocess_report 生成报告
 ```
 
 **Token 机制**：每个阶段返回 `confirmation_token`，下次调用必须携带，防止跳过阶段。
@@ -77,7 +77,7 @@ Changelog:
 
 ## 快速参数参考
 
-### ocean_preprocess_full 核心参数
+### ocean_sr_preprocess_full 核心参数
 
 | 参数 | 类型 | 必需 | 说明 |
 |------|------|------|------|
@@ -128,13 +128,13 @@ Changelog:
 
 ```
 1. 收集信息 → 数据目录、输出目录
-2. 分析数据 → ocean_inspect_data 或 ocean_preprocess_full
+2. 分析数据 → ocean_inspect_data 或 ocean_sr_preprocess_full
 3. 用户选择 → 研究变量、静态变量、掩码变量
 4. 确认参数 → scale、method、划分比例
 5. 执行前确认 → 展示所有参数，等待"确认执行"
-6. 执行处理 → ocean_preprocess_full (user_confirmed=true)
-7. 计算指标 → ocean_metrics（必须）
-8. 生成报告 → ocean_generate_report + Agent 填写分析
+6. 执行处理 → ocean_sr_preprocess_full (user_confirmed=true)
+7. 计算指标 → ocean_sr_preprocess_metrics（必须）
+8. 生成报告 → ocean_sr_preprocess_report + Agent 填写分析
 ```
 
 **详细流程**：见 `references/workflow-detail.md`

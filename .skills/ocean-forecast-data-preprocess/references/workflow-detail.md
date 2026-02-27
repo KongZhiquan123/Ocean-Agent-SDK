@@ -52,12 +52,12 @@ Step A: 分析 NC 文件，检测所有变量
     → 输出 train / valid / test 目录
     → 保存 static_variables、time_index.json、var_names.json
     ↓
-✅ Step C: 执行可视化（调用 ocean_forecast_visualize）
+✅ Step C: 执行可视化（调用 ocean_forecast_preprocess_visualize）
     → 每变量生成：_frames.png + _timeseries.png + _distribution.png
     ↓
-📊 可选: ocean_forecast_stats（量化 NaN 率、值域、P5/P95）
+📊 可选: ocean_forecast_preprocess_stats（量化 NaN 率、值域、P5/P95）
     ↓
-📝 调用 ocean_forecast_generate_report 生成报告
+📝 调用 ocean_forecast_preprocess_report 生成报告
 ```
 
 ---
@@ -195,7 +195,7 @@ Step A: 分析 NC 文件，检测所有变量
 
 ## 执行阶段：Step C（可视化）
 
-**自动调用** `ocean_forecast_visualize`，每个变量生成三种图：
+**自动调用** `ocean_forecast_preprocess_visualize`，每个变量生成三种图：
 
 - `{var}_frames.png`：4 个均匀采样时间步的空间分布图
 - `{var}_timeseries.png`：全时间序列的均值/标准差折线图
@@ -204,9 +204,9 @@ Step A: 分析 NC 文件，检测所有变量
 
 ---
 
-## 可选阶段：统计分析（ocean_forecast_stats）
+## 可选阶段：统计分析（ocean_forecast_preprocess_stats）
 
-**在可视化完成后、报告生成前**，可选调用 `ocean_forecast_stats` 对已预处理数据做量化评估。
+**在可视化完成后、报告生成前**，可选调用 `ocean_forecast_preprocess_stats` 对已预处理数据做量化评估。
 
 **输出** `{dataset_root}/data_stats.json`，包含 per-variable：
 - `nan_rate`：NaN 占比（> 30% 自动生成警告）
@@ -230,7 +230,7 @@ Step A: 分析 NC 文件，检测所有变量
 
 ## 报告生成
 
-**最后调用** `ocean_forecast_generate_report`，生成 `preprocessing_report.md`，包含：
+**最后调用** `ocean_forecast_preprocess_report`，生成 `preprocessing_report.md`，包含：
 
 - 数据集统计（文件数、时间范围、变量列表）
 - 划分结果（各集合时间步数）

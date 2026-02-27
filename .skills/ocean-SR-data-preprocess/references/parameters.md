@@ -23,7 +23,7 @@
 
 ---
 
-## ocean_preprocess_full - 完整预处理工具
+## ocean_sr_preprocess_full - 完整预处理工具
 
 执行完整的预处理流程，包含多阶段确认机制。
 
@@ -113,7 +113,7 @@
 
 ---
 
-## ocean_metrics - 质量指标计算
+## ocean_sr_preprocess_metrics - 质量指标计算
 
 计算下采样数据的质量指标。
 
@@ -132,7 +132,7 @@
 
 ---
 
-## ocean_generate_report - 报告生成
+## ocean_sr_preprocess_report - 报告生成
 
 生成预处理报告。
 
@@ -142,7 +142,7 @@
 | `scale` | number | ✅ | 下采样倍数 |
 | `downsample_method` | string | ✅ | 使用的插值方法 |
 | `dyn_vars` | string[] | ✅ | 研究变量列表 |
-| `metrics_result` | object | ✅ | ocean_metrics 返回的结果 |
+| `metrics_result` | object | ✅ | ocean_sr_preprocess_metrics 返回的结果 |
 | `output_path` | string | ❌ | 报告输出路径 |
 
 ---

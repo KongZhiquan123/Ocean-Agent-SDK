@@ -9,29 +9,11 @@
  * @changelog
  *   - 2026-02-10 kongzhiquan: v1.0.0 初始版本
  *     - 新增 transformToolResult 集中格式转换器
- *     - 对 ocean_preprocess_full 工具结果做裁剪，只保留当前步骤进度信息
+ *     - 对 ocean_sr_preprocess_full 工具结果做裁剪，只保留当前步骤进度信息
  *     - 未注册的工具名原样透传
  */
 import type { ToolCallSnapshot } from "@shareai-lab/kode-sdk"
-
-/**
- * 简单状态工具的标签映射
- */
-const SIMPLE_TOOL_LABELS: Record<string, string> = {
-  ocean_metrics: '计算下采样数据质量指标',
-  ocean_generate_report: '生成预处理报告',
-  ocean_visualize: '生成可视化对比图',
-  ocean_sr_check_gpu: 'GPU 检测',
-  ocean_sr_list_models: '列出可用超分模型',
-  ocean_sr_generate_report: '生成超分训练报告',
-  ocean_sr_visualize: '生成超分训练可视化图表',
-  ocean_sr_train_status: '查询超分训练状态',
-  ocean_sr_train: '启动超分训练',
-  ocean_forecast_visualize: '生成预报数据可视化',
-  ocean_forecast_generate_report: '生成预报数据预处理报告',
-  ocean_forecast_stats: '预报数据统计分析',
-  ocean_inspect_data: '数据检查',
-}
+import { SIMPLE_TOOL_LABELS } from "./constants"
 
 const PREPROCESS_FULL_STEP_LABELS: Record<string, string> = {
   step_a: '数据检查',
@@ -65,7 +47,7 @@ export function transformToolResult(toolCall: ToolCallSnapshot): TransformedTool
     // 开发环境下输出原始结果以便调试
     return result
   }
-  if (toolName === 'ocean_preprocess_full') {
+  if (toolName === 'ocean_sr_preprocess_full') {
     return transformPreprocessFull(result)
   }
   if (toolName === 'ocean_forecast_preprocess_full') {

@@ -2,11 +2,11 @@
 
 ## 工作原理
 
-训练任务在后台执行，`ocean_sr_train` 启动后会等待 `training_start` 事件（最长 5 分钟），
+训练任务在后台执行，`ocean_sr_train_start` 启动后会等待 `training_start` 事件（最长 5 分钟），
 如果启动阶段崩溃会立即返回错误详情，否则返回启动成功信息：
 
 ```
-ocean_sr_train(...)
+ocean_sr_train_start(...)
   → 内部等待 training_start 事件（数据加载 + 模型构建）
   → 返回 { status: "started", process_id: "train-xxx-xxx", ... }
   → 若启动阶段崩溃: 返回 { status: "error", error_summary: {...}, ... }
@@ -52,7 +52,7 @@ ocean_sr_train(...)
 ## 训练启动后的标准流程
 
 ```
-1. ocean_sr_train 返回 status="started"
+1. ocean_sr_train_start 返回 status="started"
    → 告知用户训练已启动
 
 2. 立即调用 ocean_sr_train_status({ action: "wait", process_id, timeout: 120 })
