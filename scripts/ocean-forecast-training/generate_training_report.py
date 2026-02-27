@@ -36,7 +36,7 @@ def parse_structured_log(log_path: str) -> Dict[str, Any]:
     """
     解析结构化日志文件，提取 __event__{...}__event__ 格式的 JSON 事件。
 
-    Forecast trainer 使用 {"type": "training_start", ...} 格式（而非 SR 的 {"event": ...}）。
+    事件使用 {"event": "training_start", ...} 格式（与 SR 及 TS 进程管理器一致）。
     事件类型: training_start, epoch_train, epoch_valid, final_test, training_end, training_error
     """
     result = {
@@ -63,7 +63,8 @@ def parse_structured_log(log_path: str) -> Dict[str, Any]:
     for match in matches:
         try:
             event = json.loads(match)
-            event_type = event.get('type')
+            # Support both "event" (canonical) and "type" (legacy) keys
+            event_type = event.get('event') or event.get('type')
 
             if event_type == 'training_start':
                 result['training_start'] = event
@@ -246,7 +247,7 @@ def generate_report(log_dir: str, yaml_config: Optional[Dict], log_data: Dict) -
     lines.append("| 配置项 | 值 |")
     lines.append("|--------|-----|")
     data_cfg = (yaml_config or {}).get('data', {})
-    lines.append(f"| **数据集路径** | {data_cfg.get('dataset_root', 'N/A')} |")
+    lines.append(f"| **数据集路径** | {data_cfg.get('dataset_root') or data_cfg.get('data_path', 'N/A')} |")
     shape = data_cfg.get('shape', [])
     if shape and len(shape) >= 2:
         lines.append(f"| **空间分辨率 (H x W)** | {shape[-2]} x {shape[-1]} |")

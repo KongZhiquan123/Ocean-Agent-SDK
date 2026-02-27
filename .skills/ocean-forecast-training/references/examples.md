@@ -63,7 +63,7 @@ Agent: [调用 ocean_forecast_train({ mode: "predict", dataset_root: "/data/ocea
       是否生成预测可视化？
 
 用户: 好的
-Agent: [调用 ocean_forecast_visualize({ log_dir: "/data/ocean/forecast_output", mode: "predict", dataset_root: "/data/ocean/preprocessed" })]
+Agent: [调用 ocean_forecast_train_visualize({ log_dir: "/data/ocean/forecast_output", mode: "predict", dataset_root: "/data/ocean/preprocessed" })]
 
       已生成 10 个可视化图表：
       - predict_sample_0_var_uo.png (经向流速)

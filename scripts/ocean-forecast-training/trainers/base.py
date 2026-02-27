@@ -8,6 +8,12 @@
 # @version      2.0.0
 #
 # @changelog
+#   - 2026-02-26 Leizheng: v2.0.1 fix event key / double-stdout / predict batch_size
+#     - _log_json_event: "type" → "event" key (match SR + TS process manager)
+#     - _log_json_event: write to FileHandler only (avoid StreamHandler double-stdout)
+#     - predict(): fix batch_size lookup from data_args (eval_batchsize key)
+#     - predict(): wrap model swap in try/finally
+#     - Remove duplicate `import time as _time`
 #   - 2026-02-26 Leizheng: v2.0.0 forecast training enhancements
 #     - Added __event__ JSON event emission for process monitoring
 #     - Added AMP mixed precision support (use_amp flag)
@@ -18,6 +24,7 @@
 import json
 import os
 import logging
+import time as _time
 from functools import partial
 from typing import Any, Dict, List, Optional
 
@@ -434,6 +441,7 @@ class BaseTrainer:
             )
         dataset_cls = DATASET_REGISTRY[self.data_args["name"]]
         dataset = dataset_cls(self.data_args)
+        self._full_dataset = dataset  # Stored for non-DDP predict()
 
         # Geometry / coordinates (if dataset provides them)
         self.geom = getattr(dataset, "geom", None)
@@ -549,10 +557,31 @@ class BaseTrainer:
 
         Format: __event__{json_str}__event__
         Only emitted from the main process (rank 0 in DDP).
+
+        Events are written to:
+        - stdout via print() (for TypeScript process manager via pipe)
+        - train.log via FileHandler directly (for report generation)
+
+        NOTE: We do NOT use logging.info() because set_up_logger() adds
+        a StreamHandler (stdout) alongside the FileHandler.  Using
+        logging.info() would send every event to stdout twice.
         """
         if self._is_main_process():
+            # Normalise key: callers use "type" but TS expects "event"
+            if "type" in event_data and "event" not in event_data:
+                event_data["event"] = event_data.pop("type")
             json_str = json.dumps(event_data, ensure_ascii=False, default=str)
-            print(f"__event__{json_str}__event__", flush=True)
+            event_line = f"__event__{json_str}__event__"
+            # 1) stdout → TypeScript process manager
+            print(event_line, flush=True)
+            # 2) FileHandler only → train.log (skip StreamHandler to avoid double stdout)
+            root_logger = logging.getLogger()
+            record = root_logger.makeRecord(
+                root_logger.name, logging.INFO, "", 0, event_line, (), None,
+            )
+            for h in root_logger.handlers:
+                if isinstance(h, logging.FileHandler):
+                    h.emit(record)
 
     # ----------------------------------------------------------------------
     # Core training loop
@@ -578,12 +607,28 @@ class BaseTrainer:
         if dist.is_available() and dist.is_initialized():
             dist.barrier()
 
-        # Emit training_start event
+        # Emit training_start event (rich metadata for report generation)
+        self._training_start_time = _time.time()
         self._log_json_event({
             "type": "training_start",
             "model_name": self.model_name,
-            "epochs": self.epochs,
+            "dataset_name": self.data,
+            "model_params": round(sum(p.numel() for p in self._unwrap().parameters()) / 1e6, 2),
+            "total_epochs": self.epochs,
+            "batch_size": self.data_args.get("train_batchsize", self.train_args.get("batch_size")),
+            "optimizer": self.optim_args.get("optimizer", "N/A"),
+            "learning_rate": self.optim_args.get("lr"),
+            "patience": self.patience,
+            "eval_freq": self.eval_freq,
+            "loss_function": self.args.get("loss", {}).get("name", "LpLoss"),
             "device": str(self.device),
+            "distribute": self.dist,
+            "distribute_mode": self.dist_mode if self.dist else None,
+            "train_samples": self.train_length,
+            "valid_samples": self.valid_length,
+            "test_samples": self.test_length,
+            "use_amp": self.use_amp,
+            "timestamp": _time.strftime("%Y-%m-%d %H:%M:%S"),
         })
 
         bar = (
@@ -719,16 +764,31 @@ class BaseTrainer:
                 run.summary.update(test_metrics)
             wandb.finish()
 
-        # Emit training_end event
+        # Emit training_end event (rich metadata for report generation)
+        _end_time = _time.time()
+        _duration = _end_time - getattr(self, '_training_start_time', _end_time)
         self._log_json_event({
             "type": "training_end",
             "best_epoch": best_epoch,
             "total_epochs": epochs_run,
+            "actual_epochs": epochs_run,
+            "training_duration_seconds": round(_duration, 1),
             "final_metrics": test_metrics,
+            "final_test_metrics": test_metrics,
+            "timestamp": _time.strftime("%Y-%m-%d %H:%M:%S"),
         })
 
         if self.ddp and dist.is_initialized():
             dist.barrier()
+
+        # Auto-generate predictions on test set for visualization
+        if self._is_main_process():
+            try:
+                self.main_log("Auto-generating predictions on test set...")
+                self.predict()
+            except Exception as e:
+                self.main_log(f"Warning: auto-predict failed: {e}")
+                self._log_json_event({"type": "predict_error", "error": str(e)})
 
     # ----------------------------------------------------------------------
     # Train / eval
@@ -943,12 +1003,17 @@ class BaseTrainer:
     def predict(self, **kwargs: Any) -> None:
         """
         Load best_model.pth, run inference on the test set, and save
-        predictions as individual NPY files to ``{saving_path}/predictions/``.
+        predictions and ground truth as individual NPY files to
+        ``{saving_path}/predictions/``.
 
-        Each output sample of shape ``(H, W, out_t * C)`` is reshaped to
-        ``(out_t, C, H, W)`` and saved as one NPY file per timestep per
-        variable, following the naming convention:
-            ``sample_{i:06d}_t{t}_var{c}_{var_name}.npy``
+        Naming convention:
+            predictions:   ``sample_{i:06d}_t{t}_var{c}_{var_name}.npy``
+            ground truth:  ``truth_{i:06d}_t{t}_var{c}_{var_name}.npy``
+
+        Also saves ``predict_meta.json`` with metadata for downstream tools.
+
+        Uses a non-distributed DataLoader so prediction works correctly
+        after DDP training (all samples, single process).
 
         Emits ``predict_start``, ``predict_progress``, and ``predict_end``
         events for the TypeScript process manager.
@@ -970,68 +1035,114 @@ class BaseTrainer:
         dyn_vars: List[str] = self.data_args.get("dyn_vars", [])
         num_vars = len(dyn_vars) if dyn_vars else 1
 
-        total_batches = len(self.test_loader)
+        # Create a non-distributed test loader for prediction
+        # (important: avoids DDP sampler partitioning, ensures all samples)
+        from torch.utils.data import DataLoader as _DataLoader
+        eval_bs = self.data_args.get(
+            "eval_batchsize", self.data_args.get("train_batchsize", 1)
+        )
+        if hasattr(self, '_full_dataset') and self._full_dataset is not None:
+            pred_test_loader = _DataLoader(
+                self._full_dataset.test_dataset,
+                batch_size=max(1, eval_bs),
+                shuffle=False,
+                drop_last=False,
+                num_workers=0,
+            )
+        else:
+            pred_test_loader = self.test_loader
+
+        total_batches = len(pred_test_loader)
         self._log_json_event({
             "type": "predict_start",
             "total_batches": total_batches,
             "output_dir": pred_dir,
         })
 
-        self.model.eval()
-        sample_idx = 0
-        with torch.no_grad():
-            for batch_idx, (x, y) in enumerate(self.test_loader):
-                x = x.to(self.device, non_blocking=True)
-                y = y.to(self.device, non_blocking=True)
+        # Use unwrapped model for non-distributed prediction
+        original_model = self.model
+        if self.ddp or self.dp:
+            self.model = self._unwrap()
 
-                y_pred = self.inference(x, y, **kwargs)
+        try:
+            self.model.eval()
+            sample_idx = 0
+            with torch.no_grad():
+                for batch_idx, (x, y) in enumerate(pred_test_loader):
+                    x = x.to(self.device, non_blocking=True)
+                    y = y.to(self.device, non_blocking=True)
 
-                # Denormalize if normalizer is available
-                if self.y_normalizer is not None and hasattr(self.y_normalizer, "decode"):
-                    y_pred = self.y_normalizer.decode(y_pred)
+                    y_pred = self.inference(x, y, **kwargs)
 
-                # Move to CPU and convert to numpy
-                y_pred_np = y_pred.cpu().numpy()  # (B, H, W, out_t*C) or (B, N, out_t*C) etc.
+                    # Denormalize both predictions and ground truth
+                    y_truth = y.clone()
+                    if self.y_normalizer is not None and hasattr(self.y_normalizer, "decode"):
+                        y_pred = self.y_normalizer.decode(y_pred)
+                        y_truth = self.y_normalizer.decode(y_truth)
 
-                B = y_pred_np.shape[0]
-                for b in range(B):
-                    sample = y_pred_np[b]  # (H, W, out_t*C) or similar
+                    y_pred_np = y_pred.cpu().numpy()
+                    y_truth_np = y_truth.cpu().numpy()
 
-                    # Determine spatial dims and last dim
-                    last_dim = sample.shape[-1]
-                    if last_dim % num_vars == 0:
-                        out_t = last_dim // num_vars
-                    else:
-                        # Fallback: treat entire last dim as one variable
-                        out_t = last_dim
-                        num_vars = 1
+                    B = y_pred_np.shape[0]
+                    for b in range(B):
+                        sample_pred = y_pred_np[b]
+                        sample_truth = y_truth_np[b]
 
-                    spatial_shape = sample.shape[:-1]  # e.g. (H, W)
-                    # Reshape: (*spatial, out_t * C) -> (*spatial, out_t, C)
-                    sample_r = sample.reshape(*spatial_shape, out_t, num_vars)
+                        last_dim = sample_pred.shape[-1]
+                        cur_num_vars = num_vars
+                        if last_dim % cur_num_vars == 0:
+                            out_t = last_dim // cur_num_vars
+                        else:
+                            out_t = last_dim
+                            cur_num_vars = 1
 
-                    for t in range(out_t):
-                        for c in range(num_vars):
-                            var_name = dyn_vars[c] if c < len(dyn_vars) else f"ch{c}"
-                            data = sample_r[..., t, c]  # (*spatial,)
-                            fname = f"sample_{sample_idx:06d}_t{t}_var{c}_{var_name}.npy"
-                            np.save(os.path.join(pred_dir, fname), data)
+                        spatial_shape = sample_pred.shape[:-1]
+                        sample_pred_r = sample_pred.reshape(*spatial_shape, out_t, cur_num_vars)
+                        sample_truth_r = sample_truth.reshape(*spatial_shape, out_t, cur_num_vars)
 
-                    sample_idx += 1
+                        for t in range(out_t):
+                            for c in range(cur_num_vars):
+                                var_name = dyn_vars[c] if c < len(dyn_vars) else f"ch{c}"
+                                # Save prediction
+                                np.save(
+                                    os.path.join(pred_dir, f"sample_{sample_idx:06d}_t{t}_var{c}_{var_name}.npy"),
+                                    sample_pred_r[..., t, c],
+                                )
+                                # Save ground truth
+                                np.save(
+                                    os.path.join(pred_dir, f"truth_{sample_idx:06d}_t{t}_var{c}_{var_name}.npy"),
+                                    sample_truth_r[..., t, c],
+                                )
 
-                # Emit progress event
-                self._log_json_event({
-                    "type": "predict_progress",
-                    "batch": batch_idx + 1,
-                    "total_batches": total_batches,
-                    "samples_done": sample_idx,
-                })
+                        sample_idx += 1
+
+                    self._log_json_event({
+                        "type": "predict_progress",
+                        "batch": batch_idx + 1,
+                        "total_batches": total_batches,
+                        "samples_done": sample_idx,
+                    })
+        finally:
+            # Restore original model (if DDP/DP was active)
+            self.model = original_model
+
+        # Save prediction metadata for downstream visualization tools
+        dataset_root = self.data_args.get("dataset_root") or self.data_args.get("data_path")
+        meta = {
+            "total_samples": sample_idx,
+            "dyn_vars": dyn_vars,
+            "num_vars": num_vars,
+            "dataset_root": dataset_root,
+            "in_t": self.data_args.get("in_t"),
+            "out_t": self.data_args.get("out_t"),
+            "stride": self.data_args.get("stride"),
+        }
+        with open(os.path.join(pred_dir, "predict_meta.json"), "w", encoding="utf-8") as f:
+            json.dump(meta, f, ensure_ascii=False, indent=2)
 
         self._log_json_event({
             "type": "predict_end",
             "total_samples": sample_idx,
             "output_dir": pred_dir,
         })
-        self.main_log(
-            f"Prediction complete: {sample_idx} samples saved to {pred_dir}"
-        )
+        self.main_log(f"Prediction complete: {sample_idx} samples saved to {pred_dir}")

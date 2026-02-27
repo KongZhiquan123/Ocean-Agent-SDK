@@ -1,13 +1,14 @@
 ---
 name: ocean-forecast-training
 description: 海洋时序预测模型训练技能 - 支持多种模型架构的训练、推理与自回归预测（含 OOM 防护 + per-variable 指标）
-version: 1.0.0
+version: 1.1.0
 author: Leizheng
 last_modified: 2026-02-26
 ---
 
 <!--
 Changelog:
+  - 2026-02-26 Leizheng: v1.1.0 add visualization.md reference, token v2
   - 2026-02-26 Leizheng: v1.0.0 initial version for ocean forecast training
 -->
 
@@ -44,8 +45,8 @@ Changelog:
 | `ocean_forecast_list_models` | 列出可用预测模型 |
 | `ocean_forecast_train` | 启动训练或推理（含事件驱动启动监控） |
 | `ocean_forecast_train_status` | 查询训练状态/日志/终止/等待状态变化 |
-| `ocean_forecast_visualize` | 生成训练可视化图表（mode=train）或预测对比图（mode=predict） |
-| `ocean_forecast_generate_report` | 生成训练报告 |
+| `ocean_forecast_train_visualize` | 生成训练可视化图表（mode=train）或预测对比图（mode=predict） |
+| `ocean_forecast_train_report` | 生成训练报告 |
 
 ---
 
@@ -79,10 +80,10 @@ Changelog:
    │  若 failed：展示 error_summary + suggestions
    │  若 running（超时）：告知用户训练仍在运行
    ↓
-9. 生成可视化 → ocean_forecast_visualize（用户确认后）
-   │  **禁止在此步骤未成功前调用 ocean_forecast_generate_report**
+9. 生成可视化 → ocean_forecast_train_visualize（用户确认后）
+   │  **禁止在此步骤未成功前调用 ocean_forecast_train_report**
    ↓
-10. 生成报告 → ocean_forecast_generate_report
+10. 生成报告 → ocean_forecast_train_report
     │  Agent 读取报告，补充 <!-- AI_FILL: ... --> 占位符
     ↓
 11. 完成 → 展示报告路径和关键结果
@@ -110,7 +111,7 @@ predict 模式对测试集执行全量推理，支持自回归 rollout 多步预
    │  若 completed：主动询问是否生成可视化
    │  若 failed：展示错误 + 建议
    ↓
-4. 可视化 → ocean_forecast_visualize({ log_dir, mode: "predict", dataset_root })
+4. 可视化 → ocean_forecast_train_visualize({ log_dir, mode: "predict", dataset_root })
    ↓
 5. 完成 → 展示 predictions/ 路径和可视化图表
 ```
@@ -234,3 +235,4 @@ log_dir/
 | `references/parameters.md` | 所有工具参数 | 需要参数细节时 |
 | `references/examples.md` | 对话示例 | 需要参考示例时 |
 | `references/errors.md` | 错误处理指南 | 遇到错误时 |
+| `references/visualization.md` | 可视化与报告生成流程 | 训练完成后 |
