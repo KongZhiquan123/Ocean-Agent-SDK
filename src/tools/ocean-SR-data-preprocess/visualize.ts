@@ -46,8 +46,8 @@ export interface VisualizeResult {
   message?: string
 }
 
-export const oceanVisualizeTool = defineTool({
-  name: 'ocean_visualize',
+export const oceanSrPreprocessVisualizeTool = defineTool({
+  name: 'ocean_sr_preprocess_visualize',
   description: `生成 HR vs LR 对比可视化图片和统计分布图
 
 从 train/hr/ 和 train/lr/ 目录读取数据，生成对比图和统计图保存到 visualisation_data_process/ 目录。

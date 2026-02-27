@@ -11,14 +11,14 @@
  *     - 新增 oceanInspectDataTool 具名导出（SR/Forecast 共用，通过 SR 模块注册，此处仅导出供引用）
  *     - 新增 oceanForecastStatsTool 工具注册与导出
  *   - 2026-02-25 Leizheng: v1.0.0 初始版本
- *     - 包含 ocean_forecast_preprocess_full、ocean_forecast_visualize、ocean_forecast_generate_report
+ *     - 包含 ocean_forecast_preprocess_full、ocean_forecast_preprocess_visualize、ocean_forecast_preprocess_report
  *     - 导出 ForecastWorkflow 状态机相关类型
  */
 
 import { oceanForecastPreprocessFullTool } from './full'
-import { oceanForecastVisualizeTool } from './visualize'
-import { oceanForecastReportTool } from './report'
-import { oceanForecastStatsTool } from './stats'
+import { oceanForecastPreprocessVisualizeTool } from './visualize'
+import { oceanForecastPreprocessReportTool } from './report'
+import { oceanForecastPreprocessStatsTool } from './stats'
 
 export {
   ForecastWorkflow,
@@ -35,16 +35,16 @@ export { oceanInspectDataTool } from './inspect'
 
 export const oceanForecastPreprocessTools = [
   oceanForecastPreprocessFullTool,
-  oceanForecastVisualizeTool,
-  oceanForecastReportTool,
-  oceanForecastStatsTool
+  oceanForecastPreprocessVisualizeTool,
+  oceanForecastPreprocessReportTool,
+  oceanForecastPreprocessStatsTool
 ]
 
 export {
   oceanForecastPreprocessFullTool,
-  oceanForecastVisualizeTool,
-  oceanForecastReportTool,
-  oceanForecastStatsTool
+  oceanForecastPreprocessVisualizeTool,
+  oceanForecastPreprocessReportTool,
+  oceanForecastPreprocessStatsTool
 }
 
 export default oceanForecastPreprocessTools

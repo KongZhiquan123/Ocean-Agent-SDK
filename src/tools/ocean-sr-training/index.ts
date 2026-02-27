@@ -14,29 +14,29 @@
  *   - 2026-02-06 Leizheng: v1.0.0 初始版本
  */
 
-import { oceanSrCheckGpuTool } from './check-gpu'
-import { oceanSrListModelsTool } from './list-models'
-import { oceanSrTrainTool } from './train'
+import { oceanSrGpuCheckTool } from './check-gpu'
+import { oceanSrModelListTool } from './list-models'
+import { oceanSrTrainStartTool } from './train'
 import { oceanSrTrainStatusTool } from './train-status'
-import { oceanSrReportTool } from './report'
-import { oceanSrVisualizeTool } from './visualize'
+import { oceanSrTrainReportTool } from './report'
+import { oceanSrTrainVisualizeTool } from './visualize'
 
 export const oceanSrTrainingTools = [
-  oceanSrCheckGpuTool,
-  oceanSrListModelsTool,
-  oceanSrTrainTool,
+  oceanSrGpuCheckTool,
+  oceanSrModelListTool,
+  oceanSrTrainStartTool,
   oceanSrTrainStatusTool,
-  oceanSrReportTool,
-  oceanSrVisualizeTool
+  oceanSrTrainReportTool,
+  oceanSrTrainVisualizeTool
 ]
 
 export {
-  oceanSrCheckGpuTool,
-  oceanSrListModelsTool,
-  oceanSrTrainTool,
+  oceanSrGpuCheckTool,
+  oceanSrModelListTool,
+  oceanSrTrainStartTool,
   oceanSrTrainStatusTool,
-  oceanSrReportTool,
-  oceanSrVisualizeTool
+  oceanSrTrainReportTool,
+  oceanSrTrainVisualizeTool
 }
 
 export default oceanSrTrainingTools

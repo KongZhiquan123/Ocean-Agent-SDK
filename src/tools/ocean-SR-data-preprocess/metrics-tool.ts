@@ -44,8 +44,8 @@ export interface MetricsResult {
   message?: string
 }
 
-export const oceanMetricsTool = defineTool({
-  name: 'ocean_metrics',
+export const oceanSrPreprocessMetricsTool = defineTool({
+  name: 'ocean_sr_preprocess_metrics',
   description: `计算下采样数据质量指标
 
 将 LR 数据临时上采样到 HR 尺寸，然后计算以下指标：
@@ -127,7 +127,7 @@ export const oceanMetricsTool = defineTool({
     return {
       status: 'success',
       ...metricsResult,
-      message: `指标检测完成，共检测 ${totalVars} 个变量，请调用ocean_generate_report工具生成预处理报告。`
+      message: `指标检测完成，共检测 ${totalVars} 个变量，请调用ocean_sr_preprocess_report工具生成预处理报告。`
     }
   }
 })

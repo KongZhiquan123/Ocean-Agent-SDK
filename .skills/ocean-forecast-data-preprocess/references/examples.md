@@ -132,7 +132,7 @@ Agent：✅ 预处理完成！
   /output/forecast/visualisation_forecast/sst_frames.png
   /output/forecast/visualisation_forecast/sst_timeseries.png
 
-[调用 ocean_forecast_generate_report]
+[调用 ocean_forecast_preprocess_report]
 
 📝 预处理报告已生成：/output/forecast/preprocessing_report.md
 ```

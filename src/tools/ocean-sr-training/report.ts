@@ -21,8 +21,8 @@ import { defineTool } from '@shareai-lab/kode-sdk'
 import { findPythonWithModule, findFirstPythonPath } from '@/utils/python-manager'
 import path from 'node:path'
 
-export const oceanSrReportTool = defineTool({
-  name: 'ocean_sr_generate_report',
+export const oceanSrTrainReportTool = defineTool({
+  name: 'ocean_sr_train_report',
   description: `生成海洋超分辨率训练 Markdown 报告
 
 从训练日志目录读取 config.yaml 和 train.log（结构化日志），自动生成综合报告。

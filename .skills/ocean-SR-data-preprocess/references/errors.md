@@ -66,7 +66,7 @@
 确认令牌已失效，需要重新开始流程。
 我将重新分析您的数据...
 
-[重新调用 ocean_preprocess_full，不带 confirmation_token]
+[重新调用 ocean_sr_preprocess_full，不带 confirmation_token]
 ```
 
 ### token_missing

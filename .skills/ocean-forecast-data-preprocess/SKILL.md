@@ -9,12 +9,12 @@ last_modified: 2026-02-26
 <!--
 Changelog:
   - 2026-02-26 Leizheng: v1.3.0
-    - 新增 ocean_forecast_stats 工具（per-variable 统计量）
+    - 新增 ocean_forecast_preprocess_stats 工具（per-variable 统计量）
     - 更新可视化描述：新增分布直方图 _distribution.png
     - 完整工作流程新增统计步骤（步骤 7）
     - 输出目录结构补充 data_stats.json
   - 2026-02-26 Leizheng: v1.2.0
-    - 说明 ocean_forecast_generate_report 的 ai_analysis 参数必填
+    - 说明 ocean_forecast_preprocess_report 的 ai_analysis 参数必填
     - 报告生成说明补充撰写指引
   - 2026-02-25 Leizheng: v1.1.0
     - 重构文档结构，参照 ocean-preprocess SKILL.md 风格精简
@@ -39,9 +39,9 @@ Changelog:
 | 工具 | 用途 | 使用时机 |
 |------|------|----------|
 | `ocean_forecast_preprocess_full` | 完整预处理流程 | **推荐**：信息完整时使用 |
-| `ocean_forecast_visualize` | 生成可视化图片 | 预处理完成后检查数据质量 |
-| `ocean_forecast_stats` | 计算 per-variable 统计量 | 可视化后，生成报告前（可选） |
-| `ocean_forecast_generate_report` | 生成预处理报告 | 可视化完成后 |
+| `ocean_forecast_preprocess_visualize` | 生成可视化图片 | 预处理完成后检查数据质量 |
+| `ocean_forecast_preprocess_stats` | 计算 per-variable 统计量 | 可视化后，生成报告前（可选） |
+| `ocean_forecast_preprocess_report` | 生成预处理报告 | 可视化完成后 |
 | `ocean_inspect_data` | 查看 NC 数据变量 | 用户只想了解数据结构时 |
 
 ---
@@ -67,14 +67,14 @@ Changelog:
     ↓
 ✅ 执行处理 (Step A 检查 → Step B 转换 → Step C 可视化)
     ↓
-📊 可选：ocean_forecast_stats（per-variable NaN 率、值域、分位数）
+📊 可选：ocean_forecast_preprocess_stats（per-variable NaN 率、值域、分位数）
     ↓
-📝 调用 ocean_forecast_generate_report（ai_analysis 必填）生成报告
+📝 调用 ocean_forecast_preprocess_report（ai_analysis 必填）生成报告
 ```
 
 **Token 机制**：阶段 4 返回 `confirmation_token`，下次调用必须携带，防止跳过阶段。
 
-**报告生成说明**：调用 `ocean_forecast_generate_report` 时，`ai_analysis` 参数必须由 Agent 根据可视化结果和处理统计撰写，不能留空。应包含：数据质量评估、时间分布合理性、是否有异常值等观察。
+**报告生成说明**：调用 `ocean_forecast_preprocess_report` 时，`ai_analysis` 参数必须由 Agent 根据可视化结果和处理统计撰写，不能留空。应包含：数据质量评估、时间分布合理性、是否有异常值等观察。
 
 ---
 
@@ -130,8 +130,8 @@ Changelog:
 4. 确认参数 → 划分比例、可选空间裁剪
 5. 执行前确认 → 展示所有参数，等待"确认执行"
 6. 执行处理 → ocean_forecast_preprocess_full (user_confirmed=true)
-7. 数据质量量化（可选）→ ocean_forecast_stats（NaN 率、值域统计）
-8. 生成报告 → ocean_forecast_generate_report + Agent 填写分析
+7. 数据质量量化（可选）→ ocean_forecast_preprocess_stats（NaN 率、值域统计）
+8. 生成报告 → ocean_forecast_preprocess_report + Agent 填写分析
 ```
 
 ---
@@ -164,7 +164,7 @@ output_base/
 ├── static_variables/       ← 静态变量（坐标）和掩码
 ├── time_index.json         ← 完整时间戳溯源
 ├── var_names.json          ← 变量配置（供 DataLoader 使用）
-├── data_stats.json         ← per-variable 统计量（ocean_forecast_stats 生成）
+├── data_stats.json         ← per-variable 统计量（ocean_forecast_preprocess_stats 生成）
 ├── preprocess_manifest.json
 ├── visualisation_forecast/ ← 可视化图片
 │   ├── train/

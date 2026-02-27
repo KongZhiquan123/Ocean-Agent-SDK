@@ -27,8 +27,8 @@ function shellEscapeDouble(str: string): string {
   return str.replace(/[\\"$`!]/g, '\\$&')
 }
 
-export const oceanSrVisualizeTool = defineTool({
-  name: 'ocean_sr_visualize',
+export const oceanSrTrainVisualizeTool = defineTool({
+  name: 'ocean_sr_train_visualize',
   description: `生成海洋超分辨率训练可视化图表
 
 **训练模式 (mode=train, 默认)**：

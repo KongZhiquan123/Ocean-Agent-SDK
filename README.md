@@ -163,27 +163,27 @@ data: {"type":"done","metadata":{"agentId":"agt-abc123","timestamp":170688960000
 2. **海洋超分数据预处理 (Ocean SR Data Preprocess)**
    - `ocean_inspect_data`: 数据检查
    - `ocean_validate_tensor`: 张量校验
-   - `ocean_convert_npy`: 格式转换
-   - `ocean_preprocess_full`: 全流程处理
-   - `ocean_downsample`: 下采样
-   - `ocean_visualize`: 可视化
-   - `ocean_metrics`: 指标计算
-   - `ocean_report`: 报告生成
+   - `ocean_sr_preprocess_convert_npy`: 格式转换
+   - `ocean_sr_preprocess_full`: 全流程处理
+   - `ocean_sr_preprocess_downsample`: 下采样
+   - `ocean_sr_preprocess_visualize`: 可视化
+   - `ocean_sr_preprocess_metrics`: 指标计算
+   - `ocean_sr_preprocess_report`: 报告生成
 
 3. **海洋超分训练 (Ocean SR Training)**
-   - `ocean_sr_check_gpu`: GPU 检查
-   - `ocean_sr_list_models`: 模型列表
-   - `ocean_sr_train`: 模型训练
+   - `ocean_sr_gpu_check`: GPU 检查
+   - `ocean_sr_model_list`: 模型列表
+   - `ocean_sr_train_start`: 模型训练
    - `ocean_sr_train_status`: 训练状态查询
-   - `ocean_sr_report`: 训练报告生成
-   - `ocean_sr_visualize`: 训练可视化
+   - `ocean_sr_train_report`: 训练报告生成
+   - `ocean_sr_train_visualize`: 训练可视化
 
 4. **海洋时序预测数据预处理 (Ocean Forecast Data Preprocess)**
    - `ocean_inspect_data`: 数据检查（共用）
    - `ocean_forecast_preprocess_full`: 全流程处理
-   - `ocean_forecast_visualize`: 可视化
-   - `ocean_forecast_report`: 报告生成
-   - `ocean_forecast_stats`: 统计分析
+   - `ocean_forecast_preprocess_visualize`: 可视化
+   - `ocean_forecast_preprocess_report`: 报告生成
+   - `ocean_forecast_preprocess_stats`: 统计分析
 
 ### Ask 模式（问答助手）
 

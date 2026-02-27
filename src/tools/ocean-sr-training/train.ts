@@ -655,8 +655,8 @@ function formatRecommendationMessage(rec: Record<string, unknown>): string {
   return lines.join('\n')
 }
 
-export const oceanSrTrainTool = defineTool({
-  name: 'ocean_sr_train',
+export const oceanSrTrainStartTool = defineTool({
+  name: 'ocean_sr_train_start',
   description: `执行海洋超分辨率模型训练或测试。
 
 **分阶段确认流程**（每阶段必须等待用户确认）：
@@ -1156,7 +1156,7 @@ export const oceanSrTrainTool = defineTool({
             `调用 ocean_sr_train_status({ action: "wait", process_id: "${processInfo.id}", timeout: 300 }) 等待推理完成`,
             `调用 ocean_sr_train_status({ process_id: "${processInfo.id}" }) 查看推理状态`,
             `调用 ocean_sr_train_status({ action: "logs", process_id: "${processInfo.id}", tail: 50 }) 查看最新日志`,
-            `推理完成后调用 ocean_sr_visualize({ log_dir: "${log_dir}", mode: "predict" }) 生成可视化`,
+            `推理完成后调用 ocean_sr_train_visualize({ log_dir: "${log_dir}", mode: "predict" }) 生成可视化`,
           ],
         }
       }

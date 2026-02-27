@@ -31,8 +31,8 @@ export interface ForecastVisualizeResult {
   message?: string
 }
 
-export const oceanForecastVisualizeTool = defineTool({
-  name: 'ocean_forecast_visualize',
+export const oceanForecastPreprocessVisualizeTool = defineTool({
+  name: 'ocean_forecast_preprocess_visualize',
   description: `生成海洋预报数据可视化图片
 
 从预报数据集目录读取 NPY 文件，为每个变量生成：

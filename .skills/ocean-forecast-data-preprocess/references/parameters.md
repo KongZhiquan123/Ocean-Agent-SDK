@@ -124,7 +124,7 @@
 
 ---
 
-## ocean_forecast_visualize
+## ocean_forecast_preprocess_visualize
 
 生成数据质量可视化图片。
 
@@ -150,7 +150,7 @@
 
 ---
 
-## ocean_forecast_stats
+## ocean_forecast_preprocess_stats
 
 计算已预处理 NPY 数据的 per-variable 统计量，独立于主流程，预处理完成后可选调用。
 
@@ -213,7 +213,7 @@
 
 ---
 
-## ocean_forecast_generate_report
+## ocean_forecast_preprocess_report
 
 生成预处理报告 Markdown 文件。
 

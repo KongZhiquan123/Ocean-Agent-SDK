@@ -79,17 +79,17 @@ import os from 'node:os'
 import path from 'node:path'
 import { oceanInspectDataTool } from './inspect'
 import { oceanValidateTensorTool } from './validate'
-import { oceanConvertNpyTool } from './convert'
-import { oceanDownsampleTool } from './downsample'
-import { oceanVisualizeTool } from './visualize'
+import { oceanSrPreprocessConvertNpyTool } from './convert'
+import { oceanSrPreprocessDownsampleTool } from './downsample'
+import { oceanSrPreprocessVisualizeTool } from './visualize'
 import { PreprocessWorkflow, WorkflowState } from './workflow-state'
 import { generatePreprocessCells, saveOrAppendNotebook } from './notebook'
 import { findFirstPythonPath } from '@/utils/python-manager'
 
 const DEFAULT_WORKERS = Math.max(1, Math.min(8, os.cpus().length || 1))
 
-export const oceanPreprocessFullTool = defineTool({
-  name: 'ocean_preprocess_full',
+export const oceanSrPreprocessFullTool = defineTool({
+  name: 'ocean_sr_preprocess_full',
   description: `运行完整的超分辨率数据预处理流程 (A -> B -> C -> (C2) -> D -> E)
 
 **支持两种模式**：
@@ -119,7 +119,7 @@ export const oceanPreprocessFullTool = defineTool({
 **注意**：研究变量、数据集划分比例必须由用户明确指定
 
 **⚠️ 完成后必须生成报告**：
-- 预处理完成后，Agent 必须调用 ocean_generate_report 工具生成报告
+- 预处理完成后，Agent 必须调用 ocean_sr_preprocess_report 工具生成报告
 - 报告会包含一个分析占位符，Agent 必须读取报告并填写专业分析
 - 分析应基于质量指标、验证结果等数据，提供具体的、有针对性的建议
 
@@ -546,7 +546,7 @@ export const oceanPreprocessFullTool = defineTool({
 
     const normalizedWorkers = Math.max(1, Math.min(workers, os.cpus().length || 1))
 
-    const stepCResult = await oceanConvertNpyTool.exec({
+    const stepCResult = await oceanSrPreprocessConvertNpyTool.exec({
       nc_folder: actualNcFolder,
       nc_files: actualNcFiles,
       output_base,
@@ -606,7 +606,7 @@ export const oceanPreprocessFullTool = defineTool({
         }
       }
 
-      const stepC2Result = await oceanConvertNpyTool.exec({
+      const stepC2Result = await oceanSrPreprocessConvertNpyTool.exec({
         nc_folder: actualLrNcFolder,
         output_base,
         dyn_vars,
@@ -649,7 +649,7 @@ export const oceanPreprocessFullTool = defineTool({
     if (isNumericalModelMode) {
       result.step_d = { status: 'skipped', reason: '粗网格模式（数值模型）下自动跳过下采样' }
     } else if (!skip_downsample) {
-      const stepDResult = await oceanDownsampleTool.exec({
+      const stepDResult = await oceanSrPreprocessDownsampleTool.exec({
         dataset_root: output_base,
         scale: scale,
         method: downsample_method,
@@ -664,7 +664,7 @@ export const oceanPreprocessFullTool = defineTool({
 
     // ========== Step E: 可视化 ==========
     if (!skip_visualize) {
-      const stepEResult = await oceanVisualizeTool.exec({
+      const stepEResult = await oceanSrPreprocessVisualizeTool.exec({
         dataset_root: output_base,
         splits: ['train', 'valid', 'test']
       }, ctx)
@@ -726,7 +726,7 @@ export const oceanPreprocessFullTool = defineTool({
 
     // ========== 最终状态 ==========
     result.overall_status = 'pass'
-    result.message = '预处理完成，所有检查通过，请调用ocean_metrics工具生成质量指标，随后调用ocean_generate_report生成预处理报告。'
+    result.message = '预处理完成，所有检查通过，请调用ocean_sr_preprocess_metrics工具生成质量指标，随后调用ocean_sr_preprocess_report生成预处理报告。'
     result.validation_summary = stepCResult.post_validation
 
     return result

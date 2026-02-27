@@ -13,25 +13,7 @@
  *     - 未注册的工具名原样透传输入
  */
 import type { ToolCallSnapshot } from '@shareai-lab/kode-sdk'
-
-/**
- * 简单状态工具的标签映射
- */
-const SIMPLE_TOOL_LABELS: Record<string, string> = {
-  ocean_metrics: '计算下采样数据质量指标',
-  ocean_generate_report: '生成预处理报告',
-  ocean_visualize: '生成可视化对比图',
-  ocean_sr_check_gpu: 'GPU 检测',
-  ocean_sr_list_models: '列出可用超分模型',
-  ocean_sr_generate_report: '生成超分训练报告',
-  ocean_sr_visualize: '生成超分训练可视化图表',
-  ocean_sr_train_status: '查询超分训练状态',
-  ocean_sr_train: '启动超分训练',
-  ocean_forecast_visualize: '生成预报数据可视化',
-  ocean_forecast_generate_report: '生成预报数据预处理报告',
-  ocean_forecast_stats: '预报数据统计分析',
-  ocean_inspect_data: '数据检查',
-}
+import { SIMPLE_TOOL_LABELS } from './constants'
 
 /**
  * 集中的工具调用转换器
@@ -41,9 +23,9 @@ const SIMPLE_TOOL_LABELS: Record<string, string> = {
 export function transformToolUse(toolCall: ToolCallSnapshot): { message: string; input?: any } {
   const { name: toolName, inputPreview } = toolCall
 
-  if (toolName === 'ocean_preprocess_full' || toolName === 'ocean_forecast_preprocess_full') {
+  if (toolName === 'ocean_sr_preprocess_full' || toolName === 'ocean_forecast_preprocess_full') {
     return {
-      message: toolName === 'ocean_preprocess_full'
+      message: toolName === 'ocean_sr_preprocess_full'
         ? '启动超分预处理流程...'
         : '启动预报预处理流程...',
       input: inputPreview,

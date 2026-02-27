@@ -50,7 +50,7 @@ export const oceanSrTrainStatusTool = defineTool({
     },
     process_id: {
       type: 'string',
-      description: '训练进程 ID（从 ocean_sr_train 返回值获取）',
+      description: '训练进程 ID（从 ocean_sr_train_start 返回值获取）',
       required: false,
     },
     tail: {

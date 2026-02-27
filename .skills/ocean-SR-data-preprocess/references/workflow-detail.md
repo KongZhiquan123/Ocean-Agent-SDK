@@ -30,7 +30,7 @@
 | 用户是否指定了研究变量 | 调用工具 |
 |----------------------|---------|
 | ❌ 未指定 | `ocean_inspect_data`（仅分析，不处理） |
-| ✅ 已指定 | `ocean_preprocess_full`（分析+等待确认） |
+| ✅ 已指定 | `ocean_sr_preprocess_full`（分析+等待确认） |
 
 **用户未指定研究变量时**，调用 `ocean_inspect_data`：
 ```json
@@ -39,7 +39,7 @@
 }
 ```
 
-**用户已明确指定研究变量时**，调用 `ocean_preprocess_full`：
+**用户已明确指定研究变量时**，调用 `ocean_sr_preprocess_full`：
 ```json
 {
   "nc_folder": "/用户提供的数据目录",
@@ -177,7 +177,7 @@
 
 ## Step 7: 执行
 
-**只有**在用户明确确认后，才能调用 `ocean_preprocess_full` 执行完整流程：
+**只有**在用户明确确认后，才能调用 `ocean_sr_preprocess_full` 执行完整流程：
 
 ```json
 {
@@ -203,7 +203,7 @@
 
 预处理完成后，**必须**继续执行：
 
-1. **调用 `ocean_metrics`** 计算质量指标
-2. **调用 `ocean_generate_report`** 生成报告
+1. **调用 `ocean_sr_preprocess_metrics`** 计算质量指标
+2. **调用 `ocean_sr_preprocess_report`** 生成报告
 3. **读取报告并填写分析**（替换占位符）
 4. **向用户展示报告路径和关键发现**

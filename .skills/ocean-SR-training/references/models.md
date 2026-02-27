@@ -82,6 +82,6 @@
 
 ## 模型接入说明
 
-- 训练可用模型以 `ocean_sr_list_models` 返回结果为准。
+- 训练可用模型以 `ocean_sr_model_list` 返回结果为准。
 - `idm`、`wdno`、`remg` 目录已移除，不在可训练模型列表中。
 - ReMiG 使用 `models/remig` 路径与 `remig.yaml` 模板。

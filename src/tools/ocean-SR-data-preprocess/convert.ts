@@ -88,8 +88,8 @@ export interface ConvertResult {
 // 工具定义
 // ========================================
 
-export const oceanConvertNpyTool = defineTool({
-  name: 'ocean_convert_npy',
+export const oceanSrPreprocessConvertNpyTool = defineTool({
+  name: 'ocean_sr_preprocess_convert_npy',
   description: `Step C: 转换为NPY格式并按目录结构存储
 
 将NC文件中的变量转换为NPY格式，按 OceanSRDataset 要求的目录结构保存。

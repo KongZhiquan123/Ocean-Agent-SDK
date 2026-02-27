@@ -7,9 +7,18 @@
 
 @author Leizheng
 @date 2026-02-25
-@version 1.3.0
+@version 1.5.0
+
+@contributors kongzhiquan
 
 @changelog
+  - 2026-02-27 kongzhiquan: v1.5.0 性能优化
+    - _safe_load 改用 astype(float32, copy=False) 避免已是 float32 时的内存拷贝
+    - plot_time_series_stats 改用 mmap_mode='r' + 按需采样，降低大数据集 IO 开销
+      - 文件数 <= max_files 时全量读取（mmap），否则均匀采样 max_files 个文件
+      - mmap 模式下 nanmean/nanstd 直接在映射内存上计算，避免完整加载进 RAM
+    - visualize_forecast 改用 multiprocessing.Pool 并行生成各变量图表
+    - 降低 frames 图 dpi 从 120 → 100，与其他图统一
   - 2026-02-26 Leizheng: v1.4.0 增强坐标变量加载逻辑
     - _load_coord_var 三级搜索：首选 var_names.json 配置 → 形状匹配 → 关键词兜底
     - 读取 var_names.json 中的 lon_var/lat_var/spatial_shape 指导坐标选择
@@ -39,6 +48,7 @@ import argparse
 import glob
 import json
 import math
+import multiprocessing
 import os
 import sys
 from typing import List, Optional, Tuple
@@ -129,7 +139,7 @@ def _safe_load(path: str) -> Optional[np.ndarray]:
     """安全加载 NPY 文件，失败返回 None"""
     try:
         arr = np.load(path)
-        return arr.astype(np.float32)
+        return arr.astype(np.float32, copy=False)
     except Exception:
         return None
 
@@ -248,7 +258,7 @@ def plot_sample_frames(
         cbar.ax.tick_params(labelsize=7)
 
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    plt.savefig(out_path, dpi=120, bbox_inches='tight')
+    plt.savefig(out_path, dpi=100, bbox_inches='tight')
     plt.close(fig)
 
 
@@ -261,29 +271,46 @@ def plot_time_series_stats(
 ):
     """
     生成时序统计图：均值和标准差随时间变化
+
+    当文件数超过 max_files 时，均匀采样 max_files 个文件（而非截断前 N 个），
+    并在标题注明采样信息。所有文件均通过 mmap_mode='r' 加载，避免大数组
+    完整拷贝进 RAM，显著减少 IO 和内存开销。
     """
     if not npy_files:
         return
 
-    files = npy_files[:max_files]
+    total = len(npy_files)
+    if total <= max_files:
+        files = npy_files
+        sampled = False
+    else:
+        # 均匀采样，覆盖整个时间跨度
+        indices = [int(i * (total - 1) / (max_files - 1)) for i in range(max_files)]
+        files = [npy_files[i] for i in indices]
+        sampled = True
+
     filenames = [os.path.splitext(os.path.basename(f))[0] for f in files]
     means = []
     stds = []
 
     for fpath in files:
-        data = _safe_load(fpath)
-        if data is None:
-            means.append(float('nan'))
-            stds.append(float('nan'))
-            continue
-        m, s = _nan_stats(data)
+        try:
+            # mmap_mode='r'：仅映射文件，不将整个数组加载进内存
+            arr = np.load(fpath, mmap_mode='r').astype(np.float32, copy=False)
+            m, s = _nan_stats(arr)
+        except Exception:
+            m, s = float('nan'), float('nan')
         means.append(m)
         stds.append(s)
 
     x = list(range(len(files)))
 
+    subtitle = f'{var_name} | {split} — time-series statistics'
+    if sampled:
+        subtitle += f'  (sampled {max_files}/{total})'
+
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 5), sharex=True)
-    fig.suptitle(f'{var_name} | {split} — time-series statistics', fontsize=13)
+    fig.suptitle(subtitle, fontsize=13)
 
     ax1.plot(x, means, color='steelblue', linewidth=0.8)
     ax1.set_ylabel('Spatial Mean', fontsize=9)
@@ -391,6 +418,56 @@ def plot_distribution_histogram(
 # 主函数
 # ========================================
 
+def _render_var_charts(task: dict) -> dict:
+    """
+    子进程工作函数：为单个 (split, var_name) 生成全部三张图。
+
+    Args:
+        task: 包含渲染所需参数的字典，可跨进程序列化（picklable）。
+
+    Returns:
+        包含 generated_files / warnings 的结果字典。
+    """
+    var_name = task['var_name']
+    split = task['split']
+    npy_files = task['npy_files']
+    lon_arr = task['lon_arr']
+    lat_arr = task['lat_arr']
+    split_out_dir = task['split_out_dir']
+    max_ts = task['max_ts']
+
+    out = {'generated_files': [], 'warnings': []}
+
+    # 1. 样本帧图
+    frames_path = os.path.join(split_out_dir, f'{var_name}_frames.png')
+    try:
+        plot_sample_frames(npy_files, var_name, split, lon_arr, lat_arr, frames_path)
+        out['generated_files'].append(frames_path)
+        print(f"  ✅ {split}/{var_name}_frames.png", file=sys.stderr)
+    except Exception as e:
+        out['warnings'].append(f"生成 {split}/{var_name}_frames.png 失败: {e}")
+
+    # 2. 时序统计图
+    stats_path = os.path.join(split_out_dir, f'{var_name}_timeseries.png')
+    try:
+        plot_time_series_stats(npy_files, var_name, split, stats_path, max_files=max_ts)
+        out['generated_files'].append(stats_path)
+        print(f"  ✅ {split}/{var_name}_timeseries.png", file=sys.stderr)
+    except Exception as e:
+        out['warnings'].append(f"生成 {split}/{var_name}_timeseries.png 失败: {e}")
+
+    # 3. 分布直方图
+    hist_path = os.path.join(split_out_dir, f'{var_name}_distribution.png')
+    try:
+        plot_distribution_histogram(npy_files, var_name, split, hist_path)
+        out['generated_files'].append(hist_path)
+        print(f"  ✅ {split}/{var_name}_distribution.png", file=sys.stderr)
+    except Exception as e:
+        out['warnings'].append(f"生成 {split}/{var_name}_distribution.png 失败: {e}")
+
+    return out
+
+
 def visualize_forecast(dataset_root: str, splits: List[str], out_dir: str) -> dict:
     """
     生成预报数据可视化图表
@@ -439,15 +516,14 @@ def visualize_forecast(dataset_root: str, splits: List[str], out_dir: str) -> di
     lon_arr = _load_coord_var(static_dir, 'lon', preferred_var=lon_var_name, target_shape=target_hw)
     lat_arr = _load_coord_var(static_dir, 'lat', preferred_var=lat_var_name, target_shape=target_hw)
 
-    generated_count = 0
-
+    # 收集所有渲染任务
+    tasks = []
     for split in splits:
         split_dir = os.path.join(dataset_root, split)
         if not os.path.isdir(split_dir):
             result["warnings"].append(f"split 目录不存在: {split_dir}")
             continue
 
-        # 自动检测变量目录
         if dyn_vars:
             var_dirs = [(v, os.path.join(split_dir, v)) for v in dyn_vars
                         if os.path.isdir(os.path.join(split_dir, v))]
@@ -461,40 +537,29 @@ def visualize_forecast(dataset_root: str, splits: List[str], out_dir: str) -> di
             if not npy_files:
                 result["warnings"].append(f"变量目录为空: {split}/{var_name}")
                 continue
+            tasks.append({
+                'var_name': var_name,
+                'split': split,
+                'npy_files': npy_files,
+                'lon_arr': lon_arr,
+                'lat_arr': lat_arr,
+                'split_out_dir': os.path.join(out_dir, split),
+                'max_ts': 2000 if split == 'train' else 500,
+            })
 
-            split_out_dir = os.path.join(out_dir, split)
+    # 并行渲染：worker 数取 CPU 核数与任务数的较小值，最多 8 个
+    n_workers = min(len(tasks), multiprocessing.cpu_count(), 8) if tasks else 1
+    if n_workers > 1:
+        with multiprocessing.Pool(processes=n_workers) as pool:
+            results = pool.map(_render_var_charts, tasks)
+    else:
+        results = [_render_var_charts(t) for t in tasks]
 
-            # 1. 样本帧图
-            frames_path = os.path.join(split_out_dir, f'{var_name}_frames.png')
-            try:
-                plot_sample_frames(npy_files, var_name, split, lon_arr, lat_arr, frames_path)
-                result["generated_files"].append(frames_path)
-                generated_count += 1
-                print(f"  ✅ {split}/{var_name}_frames.png", file=sys.stderr)
-            except Exception as e:
-                result["warnings"].append(f"生成 {split}/{var_name}_frames.png 失败: {e}")
+    for r in results:
+        result["generated_files"].extend(r['generated_files'])
+        result["warnings"].extend(r['warnings'])
 
-            # 2. 时序统计图（训练集全量，其他 split 限制前 500）
-            max_ts = 2000 if split == 'train' else 500
-            stats_path = os.path.join(split_out_dir, f'{var_name}_timeseries.png')
-            try:
-                plot_time_series_stats(npy_files, var_name, split, stats_path, max_files=max_ts)
-                result["generated_files"].append(stats_path)
-                generated_count += 1
-                print(f"  ✅ {split}/{var_name}_timeseries.png", file=sys.stderr)
-            except Exception as e:
-                result["warnings"].append(f"生成 {split}/{var_name}_timeseries.png 失败: {e}")
-
-            # 3. 分布直方图
-            hist_path = os.path.join(split_out_dir, f'{var_name}_distribution.png')
-            try:
-                plot_distribution_histogram(npy_files, var_name, split, hist_path)
-                result["generated_files"].append(hist_path)
-                generated_count += 1
-                print(f"  ✅ {split}/{var_name}_distribution.png", file=sys.stderr)
-            except Exception as e:
-                result["warnings"].append(f"生成 {split}/{var_name}_distribution.png 失败: {e}")
-
+    generated_count = len(result["generated_files"])
     result["message"] = f"可视化完成，共生成 {generated_count} 张图片"
     print(f"✅ {result['message']}", file=sys.stderr)
     return result
