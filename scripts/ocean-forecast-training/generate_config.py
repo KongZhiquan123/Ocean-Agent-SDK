@@ -45,7 +45,7 @@ MODEL_DEFAULTS = {
     "OceanViT": {"patch_size": 8, "d_model": 256, "nhead": 8, "num_layers": 6},
     "Fuxi": {"embed_dim": 192, "num_groups": 32, "num_heads": 6, "window_size": 7, "depth": 8, "use_3d_path": False},
     "Fengwu": {"embed_dim": 192, "num_heads": [6, 12, 12, 6], "window_size": [6, 6], "depth": 6},
-    "Pangu": {"embed_dim": 192, "num_heads": [6, 12, 12, 6], "window_size": [6, 6], "depth": 6},
+    "Pangu": {"embed_dim": 192, "num_heads": [6, 12, 12, 6], "window_size": [2, 6, 6], "depth": 6},
     "Crossformer": {"d_model": 256, "n_heads": 4, "d_ff": 512, "seg_len": 6, "e_layers": 3, "d_layers": 1},
     "NNG": {"hidden_dim": 256, "num_processor_layers": 8, "mesh_level": 3},
     "OneForecast": {"hidden_dim": 256, "num_processor_layers": 8, "mesh_level": 3},
@@ -62,7 +62,7 @@ FORECAST_MODELS = {
     "NNG", "OneForecast", "GraphCast",
 }
 
-AMP_AUTO_DISABLE_MODELS = {"FNO2d", "HiNOTE", "MWT2d", "M2NO2d", "MG-DDPM", "SRNO", "NNG", "GraphCast"}
+AMP_AUTO_DISABLE_MODELS = {"FNO2d", "HiNOTE", "MWT2d", "M2NO2d", "MG-DDPM", "SRNO"}
 HEAVY_MODELS = {
     "GalerkinTransformer", "MWT2d", "SRNO",
     "SwinTransformerV2", "SwinMLP",

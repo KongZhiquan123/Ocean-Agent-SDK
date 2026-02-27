@@ -1,12 +1,13 @@
 """
 @file nng.py
 
-@description NNG (Neural Network on Graphs) model with icosahedron mesh-based processing.
+@description NNG (Neural Network on Graphs) model with pure PyTorch graph operations (no DGL dependency).
 @author Leizheng
 @date 2026-02-27
-@version 1.0.0
+@version 1.1.0
 
 @changelog
+  - 2026-02-27 Leizheng: v1.1.0 removed DGL dependency, replaced with pure PyTorch/numpy
   - 2026-02-27 Leizheng: v1.0.0 initial creation - adapted from NeuralFramework
 """
 
@@ -20,137 +21,44 @@ from torch import Tensor
 from typing import Tuple, List, Optional
 from einops import rearrange, repeat, reduce
 
-try:
-    import dgl
-    import dgl.function as fn
-    from sklearn.neighbors import NearestNeighbors
-    _HAS_DGL = True
-except Exception:
-    _HAS_DGL = False
-
-# Try to import CuGraphOps acceleration
-try:
-    from pylibcugraphops.pytorch import BipartiteCSC
-    USE_CUGRAPHOPS = True
-except ImportError:
-    USE_CUGRAPHOPS = False
-    print("[in NNG.py] CuGraphOps not available for NNG, using DGL backend (slower)")
+from sklearn.neighbors import NearestNeighbors
 
 
 # ============================================================================
-# CuGraphOps Graph Structure (if available)
+# Graph Operation Functions (DGL-free)
 # ============================================================================
-class CuGraphCSC:
-    """Lightweight CuGraphOps wrapper"""
-    def __init__(self, offsets, indices, num_src, num_dst):
-        self.offsets = offsets
-        self.indices = indices
-        self.num_src_nodes = num_src
-        self.num_dst_nodes = num_dst
-        self.bipartite_csc = None
-        self.dgl_graph = None
 
-    @staticmethod
-    def from_dgl(graph):
-        """Create from DGL graph"""
-        if hasattr(graph, "adj_tensors"):
-            offsets, indices, edge_perm = graph.adj_tensors("csc")
-        else:
-            offsets, indices, edge_perm = graph.adj_sparse("csc")
-
-        csc = CuGraphCSC(
-            offsets.to(dtype=torch.int64),
-            indices.to(dtype=torch.int64),
-            graph.num_src_nodes(),
-            graph.num_dst_nodes(),
-        )
-        return csc, edge_perm
-
-    def to_bipartite_csc(self):
-        """Convert to BipartiteCSC"""
-        if not USE_CUGRAPHOPS or not self.offsets.is_cuda:
-            raise RuntimeError("CuGraphOps not available or data not on GPU")
-
-        if self.bipartite_csc is None:
-            self.bipartite_csc = BipartiteCSC(
-                self.offsets, self.indices, self.num_src_nodes
-            )
-        return self.bipartite_csc
-
-    def to_dgl_graph(self):
-        """Convert to DGL graph"""
-        if self.dgl_graph is None:
-            offsets = self.offsets
-            dst_degree = offsets[1:] - offsets[:-1]
-            src_indices = self.indices
-            dst_indices = torch.repeat_interleave(
-                torch.arange(
-                    0, offsets.size(0) - 1, dtype=offsets.dtype, device=offsets.device
-                ),
-                dst_degree,
-                dim=0,
-            )
-            self.dgl_graph = dgl.heterograph(
-                {("src", "e", "dst"): ("coo", (src_indices, dst_indices))},
-                idtype=torch.int32,
-            )
-        return self.dgl_graph
-
-    def to(self, device):
-        self.offsets = self.offsets.to(device)
-        self.indices = self.indices.to(device)
-        return self
-
-
-# ============================================================================
-# Graph Operation Functions
-# ============================================================================
-def concat_efeat(efeat, nfeat, graph):
-    """Concatenate edge features and node features"""
+def concat_efeat(efeat, nfeat, src_idx, dst_idx):
+    """Concatenate edge features with source and destination node features."""
     if isinstance(nfeat, Tensor):
         src_feat = dst_feat = nfeat
     else:
         src_feat, dst_feat = nfeat
 
-    if isinstance(graph, CuGraphCSC):
-        graph = graph.to_dgl_graph()
-
-    with graph.local_scope():
-        graph.srcdata["x"] = src_feat
-        graph.dstdata["x"] = dst_feat
-        graph.edata["x"] = efeat
-        graph.apply_edges(
-            lambda edges: {
-                "cat": torch.cat(
-                    [edges.data["x"], edges.src["x"], edges.dst["x"]], dim=1
-                )
-            }
-        )
-        return graph.edata["cat"]
+    return torch.cat([efeat, src_feat[src_idx], dst_feat[dst_idx]], dim=-1)
 
 
-def aggregate_and_concat(efeat, nfeat, graph, aggregation="sum"):
-    """Aggregate edge features to nodes"""
-    if USE_CUGRAPHOPS and isinstance(graph, CuGraphCSC) and efeat.is_cuda:
-        from pylibcugraphops.pytorch.operators import agg_concat_e2n
-        bipartite = graph.to_bipartite_csc()
-        return agg_concat_e2n(nfeat, efeat, bipartite, aggregation)
+def aggregate_and_concat(efeat, nfeat, dst_idx, num_dst_nodes, aggregation="sum"):
+    """Aggregate edge features to destination nodes and concatenate with node features."""
+    aggregated = torch.zeros(num_dst_nodes, efeat.shape[1],
+                            device=efeat.device, dtype=efeat.dtype)
 
-    if isinstance(graph, CuGraphCSC):
-        graph = graph.to_dgl_graph()
+    if aggregation == "sum":
+        aggregated.index_add_(0, dst_idx, efeat)
+    elif aggregation == "mean":
+        aggregated.index_add_(0, dst_idx, efeat)
+        counts = torch.zeros(num_dst_nodes, device=efeat.device, dtype=torch.float32)
+        counts.index_add_(0, dst_idx,
+                         torch.ones(dst_idx.shape[0], device=efeat.device, dtype=torch.float32))
+        aggregated = aggregated / counts.clamp(min=1).unsqueeze(-1)
 
-    with graph.local_scope():
-        graph.edata["x"] = efeat
-        if aggregation == "sum":
-            graph.update_all(fn.copy_e("x", "m"), fn.sum("m", "h"))
-        elif aggregation == "mean":
-            graph.update_all(fn.copy_e("x", "m"), fn.mean("m", "h"))
-        return torch.cat([graph.dstdata["h"], nfeat], dim=-1)
+    return torch.cat([aggregated, nfeat], dim=-1)
 
 
 # ============================================================================
 # Basic MLP Modules
 # ============================================================================
+
 class MLP(nn.Module):
     def __init__(
         self,
@@ -176,7 +84,8 @@ class MLP(nn.Module):
 
 
 class EdgeMLP(nn.Module):
-    """Edge update MLP"""
+    """Edge update MLP using edge indices instead of graph."""
+
     def __init__(
         self,
         efeat_dim: int,
@@ -191,21 +100,23 @@ class EdgeMLP(nn.Module):
             efeat_dim + src_dim + dst_dim, output_dim, hidden_dim, hidden_layers
         )
 
-    def forward(self, efeat: Tensor, nfeat, graph) -> Tensor:
+    def forward(self, efeat: Tensor, nfeat, src_idx: Tensor, dst_idx: Tensor) -> Tensor:
         if isinstance(nfeat, Tensor):
             src_feat = dst_feat = nfeat
         else:
             src_feat, dst_feat = nfeat
 
-        cat_feat = concat_efeat(efeat, (src_feat, dst_feat), graph)
+        cat_feat = concat_efeat(efeat, (src_feat, dst_feat), src_idx, dst_idx)
         return self.mlp(cat_feat)
 
 
 # ============================================================================
 # Temporal Encoding Module
 # ============================================================================
+
 class TemporalEncoder(nn.Module):
-    """Temporal encoding for multi-frame processing"""
+    """Temporal encoding for multi-frame processing."""
+
     def __init__(self, hidden_dim, input_len):
         super().__init__()
         self.input_len = input_len
@@ -213,10 +124,6 @@ class TemporalEncoder(nn.Module):
         self.temporal_mlp = MLP(hidden_dim * 2, hidden_dim, hidden_dim)
 
     def forward(self, x, time_step):
-        """
-        x: (B*H*W, hidden_dim) - flattened spatial features
-        time_step: int - current time step
-        """
         temporal_emb = self.temporal_embedding[time_step].unsqueeze(0)
         temporal_emb = temporal_emb.expand(x.shape[0], -1)
         x_concat = torch.cat([x, temporal_emb], dim=-1)
@@ -226,37 +133,31 @@ class TemporalEncoder(nn.Module):
 # ============================================================================
 # Encoder/Decoder/Processor Modules
 # ============================================================================
+
 class Embedder(nn.Module):
     def __init__(
         self, input_dim_grid=2, input_dim_mesh=3, input_dim_edges=4, hidden_dim=512,
         input_len=7, add_3d_dim=True
     ):
         super().__init__()
-        # Adapt input dimensions for 2D ocean data
-        # If add_3d_dim is True, we expand 2D data to 3D by adding a depth dimension
-        grid_input_dim = input_dim_grid * 2 if add_3d_dim else input_dim_grid  # 2D + pseudo-3D
+        grid_input_dim = input_dim_grid * 2 if add_3d_dim else input_dim_grid
 
         self.grid_mlp = MLP(grid_input_dim, hidden_dim, hidden_dim)
         self.mesh_mlp = MLP(input_dim_mesh, hidden_dim, hidden_dim)
         self.g2m_edge_mlp = MLP(input_dim_edges, hidden_dim, hidden_dim)
         self.mesh_edge_mlp = MLP(input_dim_edges, hidden_dim, hidden_dim)
 
-        # Temporal encoder for multi-frame processing
         self.temporal_encoder = TemporalEncoder(hidden_dim, input_len)
         self.add_3d_dim = add_3d_dim
 
     def forward(self, grid_feat, mesh_feat, g2m_efeat, mesh_efeat, time_step=None):
-        # Process 2D data for both 2D and 3D pathways
         if self.add_3d_dim:
-            # Duplicate 2D features to simulate 3D processing
-            # Add a small constant as pseudo-depth information
             pseudo_3d_feat = grid_feat.clone()
-            pseudo_3d_feat = pseudo_3d_feat + 0.01  # Small offset for 3D pathway
+            pseudo_3d_feat = pseudo_3d_feat + 0.01
             grid_feat = torch.cat([grid_feat, pseudo_3d_feat], dim=-1)
 
         grid_emb = self.grid_mlp(grid_feat)
 
-        # Add temporal encoding if processing multiple frames
         if time_step is not None:
             grid_emb = self.temporal_encoder(grid_emb, time_step)
 
@@ -278,9 +179,9 @@ class Encoder(nn.Module):
         self.src_mlp = MLP(hidden_dim, hidden_dim, hidden_dim)
         self.dst_mlp = MLP(hidden_dim * 2, hidden_dim, hidden_dim)
 
-    def forward(self, efeat, grid_feat, mesh_feat, graph):
-        efeat_new = self.edge_mlp(efeat, (grid_feat, mesh_feat), graph)
-        cat_feat = aggregate_and_concat(efeat_new, mesh_feat, graph, self.aggregation)
+    def forward(self, efeat, grid_feat, mesh_feat, src_idx, dst_idx, num_dst_nodes):
+        efeat_new = self.edge_mlp(efeat, (grid_feat, mesh_feat), src_idx, dst_idx)
+        cat_feat = aggregate_and_concat(efeat_new, mesh_feat, dst_idx, num_dst_nodes, self.aggregation)
         mesh_feat_new = self.dst_mlp(cat_feat) + mesh_feat
         grid_feat_new = self.src_mlp(grid_feat) + grid_feat
         return grid_feat_new, mesh_feat_new
@@ -296,19 +197,17 @@ class Decoder(nn.Module):
         self.node_mlp = MLP(hidden_dim * 2, hidden_dim, hidden_dim)
         self.m2g_edge_mlp = MLP(4, hidden_dim, hidden_dim)
 
-        # Output projection for multi-frame
         self.output_len = output_len
         self.frame_projections = nn.ModuleList([
             MLP(hidden_dim, hidden_dim, hidden_dim) for _ in range(output_len)
         ])
 
-    def forward(self, m2g_efeat, grid_feat, mesh_feat, graph, frame_idx=0):
+    def forward(self, m2g_efeat, grid_feat, mesh_feat, src_idx, dst_idx, num_dst_nodes, frame_idx=0):
         m2g_efeat_emb = self.m2g_edge_mlp(m2g_efeat)
-        efeat_new = self.edge_mlp(m2g_efeat_emb, (mesh_feat, grid_feat), graph)
-        cat_feat = aggregate_and_concat(efeat_new, grid_feat, graph, self.aggregation)
+        efeat_new = self.edge_mlp(m2g_efeat_emb, (mesh_feat, grid_feat), src_idx, dst_idx)
+        cat_feat = aggregate_and_concat(efeat_new, grid_feat, dst_idx, num_dst_nodes, self.aggregation)
         decoded = self.node_mlp(cat_feat) + grid_feat
 
-        # Apply frame-specific projection
         if frame_idx < len(self.frame_projections):
             decoded = self.frame_projections[frame_idx](decoded)
 
@@ -324,9 +223,9 @@ class ProcessorLayer(nn.Module):
         )
         self.node_mlp = MLP(hidden_dim * 2, hidden_dim, hidden_dim)
 
-    def forward(self, efeat, nfeat, graph):
-        efeat_new = self.edge_mlp(efeat, nfeat, graph) + efeat
-        cat_feat = aggregate_and_concat(efeat_new, nfeat, graph, self.aggregation)
+    def forward(self, efeat, nfeat, src_idx, dst_idx, num_nodes):
+        efeat_new = self.edge_mlp(efeat, nfeat, src_idx, dst_idx) + efeat
+        cat_feat = aggregate_and_concat(efeat_new, nfeat, dst_idx, num_nodes, self.aggregation)
         nfeat_new = self.node_mlp(cat_feat) + nfeat
         return efeat_new, nfeat_new
 
@@ -338,15 +237,16 @@ class Processor(nn.Module):
             [ProcessorLayer(hidden_dim, aggregation) for _ in range(num_layers)]
         )
 
-    def forward(self, efeat, nfeat, graph):
+    def forward(self, efeat, nfeat, src_idx, dst_idx, num_nodes):
         for layer in self.layers:
-            efeat, nfeat = layer(efeat, nfeat, graph)
+            efeat, nfeat = layer(efeat, nfeat, src_idx, dst_idx, num_nodes)
         return efeat, nfeat
 
 
 # ============================================================================
 # Geometry Utility Functions
 # ============================================================================
+
 def deg2rad(deg):
     return deg * np.pi / 180
 
@@ -370,31 +270,63 @@ def xyz2latlon(xyz: Tensor, radius: float = 1) -> Tensor:
     return torch.stack([rad2deg(lat), rad2deg(lon)], dim=1)
 
 
-def add_edge_features(graph, pos, normalize=True):
-    if isinstance(pos, tuple):
-        src_pos, dst_pos = pos
-    else:
-        src_pos = dst_pos = pos
+# ============================================================================
+# Graph Utilities (DGL-free)
+# ============================================================================
 
-    src, dst = graph.edges()
-    src_pos = src_pos[src.long()]
-    dst_pos = dst_pos[dst.long()]
+def make_bidirected_edges(src: np.ndarray, dst: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """Make edges bidirectional by adding reverse edges and removing duplicates."""
+    all_src = np.concatenate([src, dst])
+    all_dst = np.concatenate([dst, src])
+    edges = np.stack([all_src, all_dst], axis=1)
+    unique_edges = np.unique(edges, axis=0)
+    return unique_edges[:, 0], unique_edges[:, 1]
 
-    disp = src_pos - dst_pos
+
+def compute_edge_features(src_idx, dst_idx, src_pos, dst_pos=None, normalize=True):
+    """Compute edge features from positions without DGL.
+
+    Uses simple displacement-based features (NNG style).
+
+    Args:
+        src_idx: Source node indices [num_edges]
+        dst_idx: Destination node indices [num_edges]
+        src_pos: Source positions [num_src, 3]
+        dst_pos: Destination positions [num_dst, 3], defaults to src_pos
+        normalize: Whether to normalize by max displacement
+
+    Returns:
+        Edge features [num_edges, 4] (3 displacement + 1 distance)
+    """
+    if dst_pos is None:
+        dst_pos = src_pos
+
+    s = src_pos[src_idx.long()]
+    d = dst_pos[dst_idx.long()]
+
+    disp = s - d
     disp_norm = torch.linalg.norm(disp, dim=-1, keepdim=True)
 
     if normalize:
         max_norm = torch.max(disp_norm)
-        graph.edata["x"] = torch.cat([disp / max_norm, disp_norm / max_norm], dim=-1)
-    else:
-        graph.edata["x"] = torch.cat([disp, disp_norm], dim=-1)
+        return torch.cat([disp / max_norm, disp_norm / max_norm], dim=-1)
+    return torch.cat([disp, disp_norm], dim=-1)
 
-    return graph
+
+def compute_node_features(pos):
+    """Compute node features from 3D positions.
+
+    Converts to lat/lon in radians, then computes [cos(lat), sin(lon), cos(lon)].
+    """
+    latlon = xyz2latlon(pos)
+    lat, lon = deg2rad(latlon[:, 0]), deg2rad(latlon[:, 1])
+    return torch.stack([torch.cos(lat), torch.sin(lon), torch.cos(lon)], dim=-1)
 
 
 # ============================================================================
 # Mesh Generation
 # ============================================================================
+
 class TriangularMesh:
     def __init__(self, vertices: np.ndarray, faces: np.ndarray):
         self.vertices = vertices
@@ -457,13 +389,15 @@ def faces_to_edges(faces: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
 
 
 # ============================================================================
-# Graph Construction
+# Graph Construction (DGL-free)
 # ============================================================================
-class Graph:
+
+class GraphStructure:
+    """Build and store graph edge indices and features using pure numpy/PyTorch."""
+
     def __init__(
-        self, lat_lon_grid, mesh_level=6, multimesh=True, use_cugraphops=False
+        self, lat_lon_grid, mesh_level=6, multimesh=True
     ):
-        self.use_cugraphops = use_cugraphops and USE_CUGRAPHOPS
         self.lat_lon_grid_flat = rearrange(lat_lon_grid, "h w c -> (h w) c")
 
         meshes = get_mesh_hierarchy(mesh_level)
@@ -476,37 +410,35 @@ class Graph:
 
         self.mesh_vertices = all_vertices
         self.mesh_faces = all_faces
-        self.mesh_src, self.mesh_dst = faces_to_edges(all_faces)
-        self.finest_mesh_vertices = meshes[-1].vertices
-        finest_src, finest_dst = faces_to_edges(meshes[-1].faces)
 
-        src_coords = self.finest_mesh_vertices[finest_src]
-        dst_coords = self.finest_mesh_vertices[finest_dst]
+        # Compute max edge length from finest mesh
+        finest_src, finest_dst = faces_to_edges(meshes[-1].faces)
+        src_coords = meshes[-1].vertices[finest_src]
+        dst_coords = meshes[-1].vertices[finest_dst]
         self.max_edge_len = np.sqrt(
             np.max(np.sum((src_coords - dst_coords) ** 2, axis=1))
         )
 
-    def create_mesh_graph(self):
-        graph = dgl.graph((self.mesh_src, self.mesh_dst), idtype=torch.int32)
-        graph = dgl.to_bidirected(graph)
+    def build_mesh_graph(self):
+        """Build mesh graph: returns (src_idx, dst_idx, nfeat, efeat)."""
+        mesh_src, mesh_dst = faces_to_edges(self.mesh_faces)
+        mesh_src_bi, mesh_dst_bi = make_bidirected_edges(mesh_src, mesh_dst)
+
+        src_idx = torch.from_numpy(mesh_src_bi).long()
+        dst_idx = torch.from_numpy(mesh_dst_bi).long()
         mesh_pos = torch.tensor(self.mesh_vertices, dtype=torch.float32)
-        graph = add_edge_features(graph, mesh_pos)
+        num_nodes = len(self.mesh_vertices)
 
-        latlon = xyz2latlon(mesh_pos)
-        lat, lon = deg2rad(latlon[:, 0]), deg2rad(latlon[:, 1])
-        graph.ndata["x"] = torch.stack(
-            [torch.cos(lat), torch.sin(lon), torch.cos(lon)], dim=-1
-        )
+        efeat = compute_edge_features(src_idx, dst_idx, mesh_pos)
+        nfeat = compute_node_features(mesh_pos)
 
-        if self.use_cugraphops:
-            csc, edge_perm = CuGraphCSC.from_dgl(graph)
-            edata = graph.edata["x"][edge_perm]
-            return csc, graph.ndata["x"], edata
+        return src_idx, dst_idx, num_nodes, nfeat, efeat
 
-        return graph, graph.ndata["x"], graph.edata["x"]
-
-    def create_g2m_graph(self):
+    def build_g2m_graph(self):
+        """Build grid-to-mesh graph: returns (src_idx, dst_idx, efeat)."""
         cartesian_grid = latlon2xyz(self.lat_lon_grid_flat)
+        mesh_pos = torch.tensor(self.mesh_vertices, dtype=torch.float32)
+
         nbrs = NearestNeighbors(n_neighbors=4).fit(self.mesh_vertices)
         distances, indices = nbrs.kneighbors(cartesian_grid.numpy())
 
@@ -517,22 +449,17 @@ class Graph:
                     src.append(i)
                     dst.append(indices[i][j])
 
-        graph = dgl.heterograph(
-            {("grid", "g2m", "mesh"): (src, dst)}, idtype=torch.int32
-        )
-        graph.srcdata["pos"] = cartesian_grid.to(torch.float32)
-        graph.dstdata["pos"] = torch.tensor(self.mesh_vertices, dtype=torch.float32)
-        graph = add_edge_features(graph, (graph.srcdata["pos"], graph.dstdata["pos"]))
+        src_idx = torch.tensor(src, dtype=torch.long)
+        dst_idx = torch.tensor(dst, dtype=torch.long)
 
-        if self.use_cugraphops:
-            csc, edge_perm = CuGraphCSC.from_dgl(graph)
-            edata = graph.edata["x"][edge_perm]
-            return csc, edata
+        efeat = compute_edge_features(src_idx, dst_idx, cartesian_grid.float(), mesh_pos)
+        return src_idx, dst_idx, efeat
 
-        return graph, graph.edata["x"]
-
-    def create_m2g_graph(self):
+    def build_m2g_graph(self):
+        """Build mesh-to-grid graph: returns (src_idx, dst_idx, num_grid_nodes, efeat)."""
         cartesian_grid = latlon2xyz(self.lat_lon_grid_flat)
+        mesh_pos = torch.tensor(self.mesh_vertices, dtype=torch.float32)
+
         centroids = np.array(
             [self.mesh_vertices[face].mean(axis=0) for face in self.mesh_faces],
             dtype=np.float32,
@@ -542,40 +469,33 @@ class Graph:
         _, indices = nbrs.kneighbors(cartesian_grid.numpy())
         indices = indices.flatten()
 
-        src = [p for i in indices for p in self.mesh_faces[i]]
+        src = [int(p) for i in indices for p in self.mesh_faces[i]]
         dst = [i for i in range(len(cartesian_grid)) for _ in range(3)]
 
-        graph = dgl.heterograph(
-            {("mesh", "m2g", "grid"): (src, dst)}, idtype=torch.int32
-        )
-        graph.srcdata["pos"] = torch.tensor(self.mesh_vertices, dtype=torch.float32)
-        graph.dstdata["pos"] = cartesian_grid.to(torch.float32)
-        graph = add_edge_features(graph, (graph.srcdata["pos"], graph.dstdata["pos"]))
+        src_idx = torch.tensor(src, dtype=torch.long)
+        dst_idx = torch.tensor(dst, dtype=torch.long)
+        num_grid_nodes = len(cartesian_grid)
 
-        if self.use_cugraphops:
-            csc, edge_perm = CuGraphCSC.from_dgl(graph)
-            edata = graph.edata["x"][edge_perm]
-            return csc, edata
-
-        return graph, graph.edata["x"]
+        efeat = compute_edge_features(src_idx, dst_idx, mesh_pos, cartesian_grid.float())
+        return src_idx, dst_idx, num_grid_nodes, efeat
 
 
 # ============================================================================
 # Main Model
 # ============================================================================
+
 class NNG(nn.Module):
-    """Neural Network on Graphs for Ocean Velocity Prediction"""
+    """Neural Network on Graphs for Ocean Velocity Prediction.
+    Uses pure PyTorch operations - no DGL dependency.
+    """
 
     def __init__(self, args):
-        if not _HAS_DGL:
-            raise ImportError("NNG requires 'dgl' and 'scikit-learn'. Install via: pip install dgl scikit-learn")
-
         super().__init__()
 
         # Extract parameters from args
         self.input_len = args.get('input_len', 7)
         self.output_len = args.get('output_len', 1)
-        self.in_channels = args.get('in_channels', 2)  # uo, vo
+        self.in_channels = args.get('in_channels', 2)
         self.input_res = args.get('input_res', (240, 240))
 
         # Model architecture parameters
@@ -584,33 +504,37 @@ class NNG(nn.Module):
         self.hidden_dim = args.get('hidden_dim', 128)
         self.processor_layers = args.get('processor_layers', 16)
         self.aggregation = args.get('aggregation', 'sum')
-        self.use_cugraphops = args.get('use_cugraphops', True)
-        self.add_3d_dim = args.get('add_3d_dim', True)  # Whether to process 2D data as pseudo-3D
+        self.add_3d_dim = args.get('add_3d_dim', True)
 
-        # Create lat-lon grid for 240x240 resolution
+        # Create lat-lon grid
         lats = torch.linspace(-90, 90, steps=self.input_res[0] + 1)[:-1]
         lons = torch.linspace(-180, 180, steps=self.input_res[1] + 1)[1:]
         lat_grid, lon_grid = torch.meshgrid(lats, lons, indexing="ij")
-        self.lat_lon_grid = torch.stack([lat_grid, lon_grid], dim=-1)
+        lat_lon_grid = torch.stack([lat_grid, lon_grid], dim=-1)
 
-        # Build graphs
-        self.use_cugraphops = self.use_cugraphops and USE_CUGRAPHOPS
-        self.graph = Graph(
-            self.lat_lon_grid, self.mesh_level, self.multimesh, self.use_cugraphops
-        )
+        # Build graph structure (pure PyTorch)
+        graph_struct = GraphStructure(lat_lon_grid, self.mesh_level, self.multimesh)
 
-        mesh_graph_out = self.graph.create_mesh_graph()
-        g2m_graph_out = self.graph.create_g2m_graph()
-        m2g_graph_out = self.graph.create_m2g_graph()
+        # Mesh graph
+        mesh_src, mesh_dst, num_mesh, mesh_nfeat, mesh_efeat = graph_struct.build_mesh_graph()
+        self.register_buffer("mesh_src_idx", mesh_src)
+        self.register_buffer("mesh_dst_idx", mesh_dst)
+        self.num_mesh_nodes = num_mesh
+        self.register_buffer("mesh_ndata", mesh_nfeat)
+        self.register_buffer("mesh_edata", mesh_efeat)
 
-        if self.use_cugraphops:
-            self.mesh_graph, self.mesh_ndata, self.mesh_edata = mesh_graph_out
-            self.g2m_graph, self.g2m_edata = g2m_graph_out
-            self.m2g_graph, self.m2g_edata = m2g_graph_out
-        else:
-            self.mesh_graph, self.mesh_ndata, self.mesh_edata = mesh_graph_out
-            self.g2m_graph, self.g2m_edata = g2m_graph_out
-            self.m2g_graph, self.m2g_edata = m2g_graph_out
+        # G2M graph
+        g2m_src, g2m_dst, g2m_efeat = graph_struct.build_g2m_graph()
+        self.register_buffer("g2m_src_idx", g2m_src)
+        self.register_buffer("g2m_dst_idx", g2m_dst)
+        self.register_buffer("g2m_edata", g2m_efeat)
+
+        # M2G graph
+        m2g_src, m2g_dst, num_grid, m2g_efeat = graph_struct.build_m2g_graph()
+        self.register_buffer("m2g_src_idx", m2g_src)
+        self.register_buffer("m2g_dst_idx", m2g_dst)
+        self.num_grid_nodes = num_grid
+        self.register_buffer("m2g_edata", m2g_efeat)
 
         # Model components
         self.embedder = Embedder(
@@ -627,91 +551,62 @@ class NNG(nn.Module):
             for _ in range(self.output_len)
         ])
 
-        # Move graphs to appropriate device
-        self._graphs_device = None
-
-    def _move_graphs_to_device(self, device):
-        """Move graphs to device (called once)"""
-        if self._graphs_device != device:
-            self.mesh_ndata = self.mesh_ndata.to(device)
-            self.mesh_edata = self.mesh_edata.to(device)
-            self.g2m_edata = self.g2m_edata.to(device)
-            self.m2g_edata = self.m2g_edata.to(device)
-
-            if self.use_cugraphops:
-                self.mesh_graph = self.mesh_graph.to(device)
-                self.g2m_graph = self.g2m_graph.to(device)
-                self.m2g_graph = self.m2g_graph.to(device)
-            else:
-                self.mesh_graph = self.mesh_graph.to(device)
-                self.g2m_graph = self.g2m_graph.to(device)
-                self.m2g_graph = self.m2g_graph.to(device)
-
-            self._graphs_device = device
-
     def forward(self, x: Tensor) -> Tensor:
         """
-        x: (B, T_in, C, H, W)
-        return: (B, T_out, C, H, W)
+        Args:
+            x: (B, T_in, C, H, W) input tensor
+        Returns:
+            (B, T_out, C, H, W) output tensor
         """
         B, T_in, C, H, W = x.shape
-        device = x.device
 
-        # Move graphs to device if needed
-        self._move_graphs_to_device(device)
-
-        # Process each batch item separately (NNG currently supports batch_size=1)
         outputs = []
         for b in range(B):
             batch_outputs = []
-
-            # Process input frames sequentially and accumulate features
             accumulated_grid_feat = None
 
             for t in range(T_in):
-                # Extract single frame
                 frame = x[b, t]  # (C, H, W)
-                frame = rearrange(frame, "c h w -> (h w) c")  # (H*W, C)
+                frame = rearrange(frame, "c h w -> (h w) c")
 
                 # Embedding with temporal encoding
                 grid_emb, mesh_emb, g2m_emb, mesh_edge_emb = self.embedder(
                     frame, self.mesh_ndata, self.g2m_edata, self.mesh_edata, time_step=t
                 )
 
-                # Encode
-                grid_feat, mesh_feat = self.encoder(g2m_emb, grid_emb, mesh_emb, self.g2m_graph)
+                # Encode: grid -> mesh
+                grid_feat, mesh_feat = self.encoder(
+                    g2m_emb, grid_emb, mesh_emb,
+                    self.g2m_src_idx, self.g2m_dst_idx, self.num_mesh_nodes
+                )
 
                 # Accumulate features across time
                 if accumulated_grid_feat is None:
                     accumulated_grid_feat = grid_feat
                 else:
-                    accumulated_grid_feat = accumulated_grid_feat + grid_feat * 0.5  # Weighted accumulation
+                    accumulated_grid_feat = accumulated_grid_feat + grid_feat * 0.5
 
-                # Process
+                # Process mesh
                 mesh_edge_feat, mesh_feat = self.processor(
-                    mesh_edge_emb, mesh_feat, self.mesh_graph
+                    mesh_edge_emb, mesh_feat,
+                    self.mesh_src_idx, self.mesh_dst_idx, self.num_mesh_nodes
                 )
 
             # Decode for each output frame
             for out_t in range(self.output_len):
-                # Decode with frame-specific processing
                 grid_out = self.decoder(
                     self.m2g_edata, accumulated_grid_feat, mesh_feat,
-                    self.m2g_graph, frame_idx=out_t
+                    self.m2g_src_idx, self.m2g_dst_idx, self.num_grid_nodes,
+                    frame_idx=out_t
                 )
 
-                # Output projection
                 output = self.output_mlps[out_t](grid_out)
                 output = rearrange(
                     output, "(h w) c -> c h w", h=self.input_res[0], w=self.input_res[1]
                 )
                 batch_outputs.append(output)
 
-            # Stack output frames
-            batch_output = torch.stack(batch_outputs, dim=0)  # (T_out, C, H, W)
+            batch_output = torch.stack(batch_outputs, dim=0)
             outputs.append(batch_output)
 
-        # Stack batch outputs
-        output = torch.stack(outputs, dim=0)  # (B, T_out, C, H, W)
-
-        return output
+        return torch.stack(outputs, dim=0)
