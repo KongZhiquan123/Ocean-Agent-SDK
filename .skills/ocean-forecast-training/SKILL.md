@@ -43,7 +43,7 @@ Changelog:
 |------|------|
 | `ocean_forecast_check_gpu` | 查看可用 GPU |
 | `ocean_forecast_list_models` | 列出可用预测模型 |
-| `ocean_forecast_train` | 启动训练或推理（含事件驱动启动监控） |
+| `ocean_forecast_train_start` | 启动训练或推理（含事件驱动启动监控） |
 | `ocean_forecast_train_status` | 查询训练状态/日志/终止/等待状态变化 |
 | `ocean_forecast_train_visualize` | 生成训练可视化图表（mode=train）或预测对比图（mode=predict） |
 | `ocean_forecast_train_report` | 生成训练报告 |
@@ -57,13 +57,13 @@ Changelog:
    ↓
 2. 确认数据 → 用户提供 dataset_root（预处理输出目录）和 log_dir
    ↓
-3. 验证数据 → ocean_forecast_train（Stage 1: 自动调用 validate_dataset.py）
+3. 验证数据 → ocean_forecast_train_start（Stage 1: 自动调用 validate_dataset.py）
    │  展示: dyn_vars, spatial_shape, splits, time_range
    ↓
 4. 选择模型 → ocean_forecast_list_models，用户选择
    │  推荐: FNO2d > UNet2d > SwinTransformerV2 > Transformer
    ↓
-5. 确认参数 → ocean_forecast_train（Stage 3）
+5. 确认参数 → ocean_forecast_train_start（Stage 3）
    │  时序参数: in_t（默认 7）, out_t（默认 1）, stride（默认 1）
    │  训练参数: epochs, lr, batch_size(默认 4), GPU 选择
    │  OOM 防护: use_amp（默认开启）, gradient_checkpointing（默认开启）
@@ -71,7 +71,7 @@ Changelog:
    ↓
 6. 参数汇总 → 展示所有参数，等待"确认执行"
    ↓
-7. 启动训练 → ocean_forecast_train（Stage 4, user_confirmed=true）
+7. 启动训练 → ocean_forecast_train_start（Stage 4, user_confirmed=true）
    │  工具内部等待 training_start 事件（最长 5 分钟）
    │  若返回 status="error"：展示错误 + 建议
    ↓
@@ -104,7 +104,7 @@ predict 模式对测试集执行全量推理，支持自回归 rollout 多步预
 ```
 1. 确认参数 → dataset_root, log_dir, model_name, ckpt_path（可选）
    ↓
-2. 启动推理 → ocean_forecast_train({ mode: "predict", dataset_root, log_dir, model_name, ... })
+2. 启动推理 → ocean_forecast_train_start({ mode: "predict", dataset_root, log_dir, model_name, ... })
    │  工具内部等待 predict_start 事件（最长 5 分钟）
    ↓
 3. 等待完成 → ocean_forecast_train_status({ action: "wait", process_id, timeout: 300 })

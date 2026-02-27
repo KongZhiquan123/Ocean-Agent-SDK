@@ -171,8 +171,8 @@ data: {"type":"done","metadata":{"agentId":"agt-abc123","timestamp":170688960000
    - `ocean_sr_preprocess_report`: 报告生成
 
 3. **海洋超分训练 (Ocean SR Training)**
-   - `ocean_sr_gpu_check`: GPU 检查
-   - `ocean_sr_model_list`: 模型列表
+   - `ocean_sr_check_gpu`: GPU 检查
+   - `ocean_sr_list_models`: 模型列表
    - `ocean_sr_train_start`: 模型训练
    - `ocean_sr_train_status`: 训练状态查询
    - `ocean_sr_train_report`: 训练报告生成

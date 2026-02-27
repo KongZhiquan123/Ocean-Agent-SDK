@@ -1,4 +1,6 @@
 # utils/helper.py
+import os
+
 import yaml
 import torch
 import shutil
@@ -75,34 +77,14 @@ def save_config(args: Dict[str, Any], saving_path: str) -> None:
         yaml.safe_dump(args, f, sort_keys=False)
 
 
-def get_dir_path(args: Dict[str, Any], create_dir: bool = True) -> Tuple[str, str]:
-    """
-    Build a directory path for the current run.
-
-    Directory structure:
-        log_dir / dataset / mm_dd / (model + "_HH_MM_SS")
-
-    Returns:
-        dir_path (str): full directory path to create/use.
-        dir_name (str): short name used for logging / run id.
-    """
-    model = args["model"]["name"]
-    dataset = args["data"]["name"]
-    base_path = args["log"]["log_dir"]
-
-    now = datetime.now()
-    date_str = now.strftime("%m_%d")
-    time_str = now.strftime("_%H_%M_%S")
-
-    dir_name = f"{date_str}_{model}{time_str}"
-    dir_path = Path(base_path) / dataset / date_str / f"{model}{time_str}"
-
+def get_dir_path(args, create_dir=True):
+    """直接使用 log_dir 作为输出目录，不再创建子目录"""
+    path = args['log']['log_dir']
     if create_dir:
-        dir_path.mkdir(parents=True, exist_ok=True)
+        os.makedirs(path, exist_ok=True)
+    return path, os.path.basename(path)
 
-    return str(dir_path), dir_name
-
-
+    
 def set_up_logger(args: Dict[str, Any]) -> Tuple[str, str]:
     """
     Initialize logging to both a file (train.log) and the console.

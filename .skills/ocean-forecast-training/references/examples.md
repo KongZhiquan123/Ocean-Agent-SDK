@@ -10,7 +10,7 @@ Agent: 好的！我先帮您检查 GPU 环境。
 
 用户: 数据在 /data/ocean/preprocessed，输出放到 /data/ocean/forecast_output
 Agent: 收到，我来验证数据集。
-      [调用 ocean_forecast_train({ dataset_root: "/data/ocean/preprocessed", log_dir: "/data/ocean/forecast_output" })]
+      [调用 ocean_forecast_train_start({ dataset_root: "/data/ocean/preprocessed", log_dir: "/data/ocean/forecast_output" })]
 
       数据集验证结果：
       - 变量: uo, vo, thetao
@@ -24,7 +24,7 @@ Agent: 收到，我来验证数据集。
       [调用 ocean_forecast_list_models]
 
 用户: 用 FNO2d
-Agent: [调用 ocean_forecast_train({ ..., model_name: "FNO2d" })]
+Agent: [调用 ocean_forecast_train_start({ ..., model_name: "FNO2d" })]
 
       请确认训练参数：
       - 时序参数: in_t=7, out_t=1, stride=1（7 天历史预测 1 天）
@@ -35,7 +35,7 @@ Agent: [调用 ocean_forecast_train({ ..., model_name: "FNO2d" })]
       需要调整参数吗？
 
 用户: in_t 改成 14 天，其他参数确认
-Agent: [调用 ocean_forecast_train({ ..., in_t: 14, user_confirmed: true, confirmation_token: "xxx" })]
+Agent: [调用 ocean_forecast_train_start({ ..., in_t: 14, user_confirmed: true, confirmation_token: "xxx" })]
 
       训练已启动！进程 ID: forecast-abc123
       - 模型: FNO2d
@@ -50,7 +50,7 @@ Agent: [调用 ocean_forecast_train({ ..., in_t: 14, user_confirmed: true, confi
 
 ```
 用户: 训练完成了，帮我对测试集做预测
-Agent: [调用 ocean_forecast_train({ mode: "predict", dataset_root: "/data/ocean/preprocessed", log_dir: "/data/ocean/forecast_output", model_name: "FNO2d" })]
+Agent: [调用 ocean_forecast_train_start({ mode: "predict", dataset_root: "/data/ocean/preprocessed", log_dir: "/data/ocean/forecast_output", model_name: "FNO2d" })]
 
       推理已启动！进程 ID: predict-xyz789
       正在加载 best_model.pth 对测试集执行预测...

@@ -125,7 +125,7 @@ ocean_forecast_train_report({
    → 生成 5 个训练图表到 plots/
 
 4. 执行推理并生成预测可视化
-   → ocean_forecast_train({ mode: "predict", ... })
+   → ocean_forecast_train_start({ mode: "predict", ... })
    → ocean_forecast_train_visualize({ log_dir: "...", mode: "predict" })
    → 生成预测对比图到 plots/
 

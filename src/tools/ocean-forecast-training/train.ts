@@ -255,7 +255,7 @@ function formatRecommendationMessage(rec: Record<string, unknown>): string {
 }
 
 export const oceanForecastTrainTool = defineTool({
-  name: 'ocean_forecast_train',
+  name: 'ocean_forecast_train_start',
   description: `执行海洋时序预测模型训练或测试。
 
 **分阶段确认流程**（每阶段必须等待用户确认）：

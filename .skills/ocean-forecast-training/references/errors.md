@@ -36,7 +36,7 @@ ValueError: Cannot detect spatial shape
 - dyn_vars 列表与实际目录不匹配
 
 ### 解决方案
-1. 运行 `ocean_forecast_train` 第一阶段验证数据集
+1. 运行 `ocean_forecast_train_start` 第一阶段验证数据集
 2. 检查 var_names.json 配置
 3. 确保所有变量目录下的 NPY 文件形状一致
 

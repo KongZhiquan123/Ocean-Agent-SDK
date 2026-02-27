@@ -4,7 +4,7 @@
 
 ---
 
-## ocean_sr_gpu_check - 查看可用 GPU
+## ocean_sr_check_gpu - 查看可用 GPU
 
 无需参数，直接调用。
 
@@ -15,7 +15,7 @@
 
 ---
 
-## ocean_sr_model_list - 列出可用模型
+## ocean_sr_list_models - 列出可用模型
 
 无需参数，直接调用。
 
