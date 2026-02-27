@@ -4,9 +4,10 @@
 @description Generate training report for ocean forecast models.
 @author Leizheng
 @date 2026-02-26
-@version 1.0.0
+@version 1.1.0
 
 @changelog
+  - 2026-02-27 Leizheng: v1.1.0 fix visualization detection + log/config discovery fallbacks
   - 2026-02-26 Leizheng: v1.0.0 initial version for ocean forecast training
 """
 
@@ -124,15 +125,23 @@ def find_plot_files(log_dir: str) -> Dict[str, str]:
         'loss_curve.png': '训练损失曲线',
         'metrics_curve.png': '验证指标随训练变化',
         'lr_curve.png': '学习率调度曲线',
-        'metrics_comparison.png': '验证与测试指标对比',
+        'per_var_metrics.png': '逐变量验证指标对比',
         'training_summary.png': '训练摘要',
-        'sample_comparison.png': '测试样本 Input/Prediction/Ground Truth 对比',
+        'predict_overview.png': '测试集预测总览',
     }
 
     for filename, description in expected_plots.items():
         filepath = os.path.join(plots_dir, filename)
         if os.path.exists(filepath):
             plot_files[filename] = description
+
+    # Dynamically discover predict_sample_*.png files
+    try:
+        for f in os.listdir(plots_dir):
+            if f.startswith('predict_sample_') and f.endswith('.png'):
+                plot_files[f] = f'预测样本对比: {f}'
+    except OSError:
+        pass
 
     return plot_files
 
@@ -433,11 +442,11 @@ def generate_report(log_dir: str, yaml_config: Optional[Dict], log_data: Dict) -
             lines.append("![学习率变化曲线](plots/lr_curve.png)")
             lines.append("")
 
-        # Metrics comparison
-        if 'metrics_comparison.png' in plot_files:
-            lines.append("#### 验证集与测试集指标对比")
+        # Per-variable metrics
+        if 'per_var_metrics.png' in plot_files:
+            lines.append("#### 逐变量验证指标对比")
             lines.append("")
-            lines.append("![验证集与测试集指标对比](plots/metrics_comparison.png)")
+            lines.append("![逐变量验证指标对比](plots/per_var_metrics.png)")
             lines.append("")
 
         # Training summary
@@ -447,14 +456,22 @@ def generate_report(log_dir: str, yaml_config: Optional[Dict], log_data: Dict) -
             lines.append("![训练总结](plots/training_summary.png)")
             lines.append("")
 
-        # Sample comparison (Input / Prediction / Ground Truth)
-        if 'sample_comparison.png' in plot_files:
-            lines.append("#### 测试样本对比 (Input / Prediction / Ground Truth)")
+        # Predict overview
+        if 'predict_overview.png' in plot_files:
+            lines.append("#### 测试集预测总览")
             lines.append("")
-            lines.append("下图展示了测试集样本的输入序列、模型预测输出、真值以及绝对误差分布：")
+            lines.append("下图展示了测试集预测的总体结果：")
             lines.append("")
-            lines.append("![测试样本对比](plots/sample_comparison.png)")
+            lines.append("![测试集预测总览](plots/predict_overview.png)")
             lines.append("")
+
+        # Dynamic predict_sample_*.png files
+        for fname, desc in plot_files.items():
+            if fname.startswith('predict_sample_') and fname.endswith('.png'):
+                lines.append(f"#### {desc}")
+                lines.append("")
+                lines.append(f"![{desc}](plots/{fname})")
+                lines.append("")
     else:
         lines.append("*无可视化图表*")
         lines.append("")
@@ -563,12 +580,36 @@ def main():
             yaml_config = cfg
             break
 
+    # Fallback: search _ocean_forecast_code directory for config yaml
+    if not yaml_config:
+        code_dir = os.path.join(log_dir, '_ocean_forecast_code')
+        if os.path.isdir(code_dir):
+            try:
+                for f in os.listdir(code_dir):
+                    if f.endswith('_config.yaml') or f.endswith('_config.yml'):
+                        cfg = load_yaml_safe(os.path.join(code_dir, f))
+                        if cfg:
+                            yaml_config = cfg
+                            break
+            except OSError:
+                pass
+
     log_data = {}
     for name in ['train.log', 'training.log']:
         log_path = os.path.join(log_dir, name)
         if os.path.exists(log_path):
             log_data = parse_structured_log(log_path)
             break
+
+    # Fallback: search train-*.log (process manager logs also contain __event__ markers)
+    if not log_data.get('training_start'):
+        import glob
+        train_logs = sorted(glob.glob(os.path.join(log_dir, 'train-*.log')))
+        for log_path in train_logs:
+            candidate = parse_structured_log(log_path)
+            if candidate.get('training_start'):
+                log_data = candidate
+                break
 
     if not log_data.get('training_start') and not yaml_config:
         print(f"[Warning] 未找到结构化日志事件，也未找到配置文件，报告可能不完整")

@@ -5,9 +5,11 @@
  *              Reuses shared trainingProcessManager.
  * @author Leizheng
  * @date 2026-02-26
- * @version 1.1.0
+ * @version 1.3.0
  *
  * @changelog
+ *   - 2026-02-27 Leizheng: v1.3.0 strengthen auto-predict note to explicitly warn against calling ocean_forecast_train predict mode
+ *   - 2026-02-27 Leizheng: v1.2.0 add auto-predict note + predict visualization action to training completion
  *   - 2026-02-26 Leizheng: v1.1.0 completed state returns progress + visualization/report actions
  *   - 2026-02-26 Leizheng: v1.0.0 initial version for ocean forecast training
  */
@@ -155,8 +157,10 @@ export const oceanForecastTrainStatusTool = defineTool({
           } else {
             watchResponse.actions = [
               `生成训练可视化: ocean_forecast_train_visualize({ log_dir: "${logDir ?? '...'}", mode: "train" })`,
+              `生成预测可视化: ocean_forecast_train_visualize({ log_dir: "${logDir ?? '...'}", mode: "predict" })`,
               `生成训练报告: ocean_forecast_train_report({ log_dir: "${logDir ?? '...'}" })`,
             ]
+            watchResponse.note = '训练结束时已自动运行推理（auto-predict），predictions/ 目录已包含测试集预测结果。请直接调用上面的 visualize 和 report 工具生成图表与报告。【重要】不要再调用 ocean_forecast_train({ mode: "predict" })，否则会重复推理。'
           }
         }
       }
@@ -243,8 +247,10 @@ export const oceanForecastTrainStatusTool = defineTool({
           } else {
             logsResponse.actions = [
               `生成训练可视化: ocean_forecast_train_visualize({ log_dir: "${logDir ?? '...'}", mode: "train" })`,
+              `生成预测可视化: ocean_forecast_train_visualize({ log_dir: "${logDir ?? '...'}", mode: "predict" })`,
               `生成训练报告: ocean_forecast_train_report({ log_dir: "${logDir ?? '...'}" })`,
             ]
+            logsResponse.note = '训练结束时已自动运行推理（auto-predict），predictions/ 目录已包含测试集预测结果。请直接调用上面的 visualize 和 report 工具生成图表与报告。【重要】不要再调用 ocean_forecast_train({ mode: "predict" })，否则会重复推理。'
           }
         }
       }
@@ -323,8 +329,10 @@ function buildStatusResponse(
     } else {
       actions.push(
         `生成训练可视化: ocean_forecast_train_visualize({ log_dir: "${logDir ?? '...'}", mode: "train" })`,
+        `生成预测可视化: ocean_forecast_train_visualize({ log_dir: "${logDir ?? '...'}", mode: "predict" })`,
         `生成训练报告: ocean_forecast_train_report({ log_dir: "${logDir ?? '...'}" })`,
       )
+      response.note = '训练结束时已自动运行推理（auto-predict），predictions/ 目录已包含测试集预测结果。请直接调用上面的 visualize 和 report 工具生成图表与报告。【重要】不要再调用 ocean_forecast_train({ mode: "predict" })，否则会重复推理。'
     }
     response.actions = actions
   } else {
