@@ -1,12 +1,13 @@
 """
 @file oneforecast.py
 
-@description OneForecast model with simplified graph operations.
+@description OneForecast model with pure PyTorch graph operations (no DGL dependency).
 @author Leizheng
 @date 2026-02-27
-@version 1.0.0
+@version 1.1.0
 
 @changelog
+  - 2026-02-27 Leizheng: v1.1.0 removed DGL dependency, replaced with pure PyTorch/numpy
   - 2026-02-27 Leizheng: v1.0.0 initial creation - adapted from NeuralFramework
 """
 
@@ -16,36 +17,13 @@ import numpy as np
 from typing import Tuple, List, Optional
 from einops import rearrange
 
-try:
-    import dgl
-    import dgl.function as fn
-    from sklearn.neighbors import NearestNeighbors
-    _HAS_DGL = True
-except Exception:
-    _HAS_DGL = False
-
 from scipy.spatial import transform
-import copy
+from sklearn.neighbors import NearestNeighbors
 
 
 # ============================================================================
-# Core Graph Utilities (same as before)
+# Geometry Utilities
 # ============================================================================
-
-def create_graph(src, dst, to_bidirected=True, dtype=torch.int32):
-    """Create DGL graph from source and destination nodes."""
-    graph = dgl.graph((src, dst), idtype=dtype)
-    if to_bidirected:
-        graph = dgl.to_bidirected(graph)
-    return graph
-
-
-def create_heterograph(src, dst, labels, dtype=torch.int32, num_nodes_dict=None):
-    """Create heterogeneous DGL graph."""
-    return dgl.heterograph(
-        {labels: ("coo", (src, dst))}, num_nodes_dict=num_nodes_dict, idtype=dtype
-    )
-
 
 def latlon2xyz(latlon: torch.Tensor, radius=1.0, unit="deg") -> torch.Tensor:
     """Convert lat/lon to 3D Cartesian coordinates."""
@@ -100,48 +78,72 @@ def geospatial_rotation(
     return torch.matmul(rotation, invar).squeeze(-1)
 
 
-def add_edge_features(graph, pos, normalize=True):
-    """Add edge features to graph based on node positions."""
-    if isinstance(pos, tuple):
-        src_pos, dst_pos = pos
-    else:
-        src_pos = dst_pos = pos
+# ============================================================================
+# Graph Utilities (DGL-free)
+# ============================================================================
 
-    src, dst = graph.edges()
-    src_pos, dst_pos = src_pos[src.long()], dst_pos[dst.long()]
+def make_bidirected_edges(src: np.ndarray, dst: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """Make edges bidirectional by adding reverse edges and removing duplicates."""
+    all_src = np.concatenate([src, dst])
+    all_dst = np.concatenate([dst, src])
+    edges = np.stack([all_src, all_dst], axis=1)
+    unique_edges = np.unique(edges, axis=0)
+    return unique_edges[:, 0], unique_edges[:, 1]
+
+
+def compute_edge_features(
+    src_idx: torch.Tensor, dst_idx: torch.Tensor,
+    src_pos: torch.Tensor, dst_pos: torch.Tensor = None,
+    normalize: bool = True
+) -> torch.Tensor:
+    """Compute edge features from source/destination positions without DGL.
+
+    Args:
+        src_idx: Source node indices [num_edges]
+        dst_idx: Destination node indices [num_edges]
+        src_pos: Source node positions [num_src_nodes, 3] (xyz coords)
+        dst_pos: Destination node positions [num_dst_nodes, 3], defaults to src_pos
+        normalize: Whether to normalize features by max displacement
+
+    Returns:
+        Edge features [num_edges, 4] (3 displacement + 1 distance)
+    """
+    if dst_pos is None:
+        dst_pos = src_pos
+
+    s = src_pos[src_idx.long()]
+    d = dst_pos[dst_idx.long()]
 
     # Convert to local coordinate system
-    dst_latlon = xyz2latlon(dst_pos, unit="rad")
+    dst_latlon = xyz2latlon(d, unit="rad")
     dst_lat, dst_lon = dst_latlon[:, 0], dst_latlon[:, 1]
 
     theta_azimuthal = torch.where(dst_lon >= 0, 2 * np.pi - dst_lon, -dst_lon)
     theta_polar = torch.where(dst_lat >= 0, dst_lat, 2 * np.pi + dst_lat)
 
-    src_pos = geospatial_rotation(src_pos, theta_azimuthal, "z", "rad")
-    dst_pos = geospatial_rotation(dst_pos, theta_azimuthal, "z", "rad")
-    src_pos = geospatial_rotation(src_pos, theta_polar, "y", "rad")
-    dst_pos = geospatial_rotation(dst_pos, theta_polar, "y", "rad")
+    s = geospatial_rotation(s, theta_azimuthal, "z", "rad")
+    d = geospatial_rotation(d, theta_azimuthal, "z", "rad")
+    s = geospatial_rotation(s, theta_polar, "y", "rad")
+    d = geospatial_rotation(d, theta_polar, "y", "rad")
 
-    disp = src_pos - dst_pos
+    disp = s - d
     disp_norm = torch.linalg.norm(disp, dim=-1, keepdim=True)
 
     if normalize:
         max_norm = disp_norm.max()
-        graph.edata["x"] = torch.cat([disp / max_norm, disp_norm / max_norm], dim=-1)
-    else:
-        graph.edata["x"] = torch.cat([disp, disp_norm], dim=-1)
-
-    return graph
+        return torch.cat([disp / max_norm, disp_norm / max_norm], dim=-1)
+    return torch.cat([disp, disp_norm], dim=-1)
 
 
-def add_node_features(graph, pos):
-    """Add node features based on positions."""
+def compute_node_features(pos: torch.Tensor) -> torch.Tensor:
+    """Compute node features from 3D positions without DGL.
+
+    Uses xyz2latlon (returns degrees) and applies trig functions directly,
+    matching original DGL-based implementation behavior.
+    """
     latlon = xyz2latlon(pos)
     lat, lon = latlon[:, 0], latlon[:, 1]
-    graph.ndata["x"] = torch.stack(
-        [torch.cos(lat), torch.sin(lon), torch.cos(lon)], dim=-1
-    )
-    return graph
+    return torch.stack([torch.cos(lat), torch.sin(lon), torch.cos(lon)], dim=-1)
 
 
 def faces_to_edges(faces: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
@@ -152,7 +154,7 @@ def faces_to_edges(faces: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
 
 
 # ============================================================================
-# Simplified Mesh Generation
+# Mesh Generation
 # ============================================================================
 
 class TriangularMesh:
@@ -257,7 +259,7 @@ class MLP(nn.Module):
 
 
 class EdgeMLP(nn.Module):
-    """MLP for edge feature updates using concatenation - DataParallel compatible."""
+    """MLP for edge feature updates using concatenation."""
 
     def __init__(self, efeat_dim, nfeat_dim, out_dim, hidden_dim, num_layers=1):
         super().__init__()
@@ -265,10 +267,12 @@ class EdgeMLP(nn.Module):
 
     def forward(self, efeat, nfeat, src_idx, dst_idx):
         """
-        Modified forward to accept indices directly instead of graph.
-        This ensures indices are on the same device as features.
+        Args:
+            efeat: Edge features [num_edges, efeat_dim]
+            nfeat: Node features - single tensor or (src_feat, dst_feat) tuple
+            src_idx: Source node indices [num_edges]
+            dst_idx: Destination node indices [num_edges]
         """
-        # Handle both single tensor and tuple of tensors
         if isinstance(nfeat, tuple):
             src_feat, dst_feat = nfeat
             cat_feat = torch.cat([efeat, src_feat[src_idx], dst_feat[dst_idx]], dim=-1)
@@ -279,7 +283,7 @@ class EdgeMLP(nn.Module):
 
 
 class GraphEncoder(nn.Module):
-    """Encode grid to mesh - DataParallel compatible."""
+    """Encode grid to mesh."""
 
     def __init__(self, hidden_dim, num_layers=1):
         super().__init__()
@@ -290,16 +294,22 @@ class GraphEncoder(nn.Module):
         self.src_mlp = MLP(hidden_dim, hidden_dim, hidden_dim, num_layers)
 
     def forward(self, efeat, src_feat, dst_feat, src_idx, dst_idx, num_dst_nodes):
-        """Modified to work without graph object."""
-        # Update edges
+        """
+        Args:
+            efeat: Edge features [num_edges, hidden_dim]
+            src_feat: Source (grid) node features [num_src_nodes, hidden_dim]
+            dst_feat: Destination (mesh) node features [num_dst_nodes, hidden_dim]
+            src_idx: Source node indices [num_edges]
+            dst_idx: Destination node indices [num_edges]
+            num_dst_nodes: Number of destination nodes
+        """
         efeat_new = self.edge_mlp(efeat, (src_feat, dst_feat), src_idx, dst_idx)
 
-        # Manual aggregation without DGL
+        # Aggregate edge features to destination nodes
         agg_feat = torch.zeros(num_dst_nodes, efeat_new.shape[1],
                               dtype=efeat_new.dtype, device=efeat_new.device)
         agg_feat.index_add_(0, dst_idx, efeat_new)
 
-        # Update nodes
         dst_feat_new = dst_feat + self.dst_mlp(torch.cat([agg_feat, dst_feat], dim=-1))
         src_feat_new = src_feat + self.src_mlp(src_feat)
 
@@ -307,7 +317,7 @@ class GraphEncoder(nn.Module):
 
 
 class GraphDecoder(nn.Module):
-    """Decode mesh to grid - DataParallel compatible."""
+    """Decode mesh to grid."""
 
     def __init__(self, hidden_dim, num_layers=1):
         super().__init__()
@@ -317,21 +327,27 @@ class GraphDecoder(nn.Module):
         self.node_mlp = MLP(hidden_dim * 2, hidden_dim, hidden_dim, num_layers)
 
     def forward(self, efeat, src_feat, dst_feat, src_idx, dst_idx, num_dst_nodes):
-        """Modified to work without graph object."""
-        # Update edges
+        """
+        Args:
+            efeat: Edge features [num_edges, hidden_dim]
+            src_feat: Source (mesh) node features [num_src_nodes, hidden_dim]
+            dst_feat: Destination (grid) node features [num_dst_nodes, hidden_dim]
+            src_idx: Source node indices [num_edges]
+            dst_idx: Destination node indices [num_edges]
+            num_dst_nodes: Number of destination nodes
+        """
         efeat_new = self.edge_mlp(efeat, (src_feat, dst_feat), src_idx, dst_idx)
 
-        # Manual aggregation
+        # Aggregate edge features to destination nodes
         agg_feat = torch.zeros(num_dst_nodes, efeat_new.shape[1],
                               dtype=efeat_new.dtype, device=efeat_new.device)
         agg_feat.index_add_(0, dst_idx, efeat_new)
 
-        # Update dst nodes
         return dst_feat + self.node_mlp(torch.cat([agg_feat, dst_feat], dim=-1))
 
 
 class MeshProcessor(nn.Module):
-    """Process mesh features - DataParallel compatible."""
+    """Process mesh features."""
 
     def __init__(self, hidden_dim, num_layers=16):
         super().__init__()
@@ -350,12 +366,19 @@ class MeshProcessor(nn.Module):
         )
 
     def forward(self, efeat, nfeat, src_idx, dst_idx, num_nodes):
-        """Modified to work without graph object."""
+        """
+        Args:
+            efeat: Edge features [num_edges, hidden_dim]
+            nfeat: Node features [num_nodes, hidden_dim]
+            src_idx: Source node indices [num_edges]
+            dst_idx: Destination node indices [num_edges]
+            num_nodes: Number of nodes
+        """
         for layer in self.layers:
             # Update edges
             efeat = efeat + layer["edge"](efeat, nfeat, src_idx, dst_idx)
 
-            # Manual aggregation
+            # Aggregate to nodes
             agg = torch.zeros(num_nodes, efeat.shape[1],
                             dtype=efeat.dtype, device=efeat.device)
             agg.index_add_(0, dst_idx, efeat)
@@ -367,22 +390,16 @@ class MeshProcessor(nn.Module):
 
 
 # ============================================================================
-# Main Model - DataParallel Compatible
+# Main Model
 # ============================================================================
 
 class OneForecast(nn.Module):
     """
-    OneForecast adapted for DataParallel training.
-    Key changes:
-    - Graph operations are replaced with index-based operations
-    - Each forward pass creates its own graph copy on the correct device
-    - No shared state between GPU replicas
+    OneForecast model for ocean velocity prediction.
+    Uses pure PyTorch operations - no DGL dependency.
     """
 
     def __init__(self, args):
-        if not _HAS_DGL:
-            raise ImportError("OneForecast requires 'dgl' and 'scikit-learn'. Install via: pip install dgl scikit-learn")
-
         super().__init__()
 
         # Temporal configuration
@@ -400,7 +417,7 @@ class OneForecast(nn.Module):
         self.mesh_level = args.get('mesh_level', 4)
         self.multimesh = args.get('multimesh', False)
 
-        # Build graph structure (CPU only, will be copied to device as needed)
+        # Build graph structure (CPU only, pure PyTorch)
         self._build_graph_structure()
 
         # Input projection
@@ -418,7 +435,7 @@ class OneForecast(nn.Module):
         self.g2m_edge_embedder = MLP(4, self.hidden_dim, self.hidden_dim, self.num_layers)
         self.m2g_edge_embedder = MLP(4, self.hidden_dim, self.hidden_dim, self.num_layers)
 
-        # Core components (DataParallel compatible)
+        # Core components
         self.encoder = GraphEncoder(self.hidden_dim, self.num_layers)
         self.processor = MeshProcessor(self.hidden_dim, self.processor_layers)
         self.decoder = GraphDecoder(self.hidden_dim, self.num_layers)
@@ -433,7 +450,7 @@ class OneForecast(nn.Module):
         )
 
     def _build_graph_structure(self):
-        """Build graph structure on CPU."""
+        """Build graph structure using pure numpy/PyTorch (no DGL)."""
         H, W = self.input_res
         lat = torch.linspace(-90, 90, H + 1)[:-1]
         lon = torch.linspace(-180, 180, W + 1)[1:]
@@ -447,24 +464,24 @@ class OneForecast(nn.Module):
         self.mesh_vertices = mesh.vertices
         self.mesh_faces = mesh.faces
 
-        # Get mesh edges
+        # Get mesh edges (bidirectional)
         mesh_src, mesh_dst = faces_to_edges(mesh.faces)
-        self.register_buffer("mesh_src_idx", torch.from_numpy(mesh_src).long())
-        self.register_buffer("mesh_dst_idx", torch.from_numpy(mesh_dst).long())
+        mesh_src_bi, mesh_dst_bi = make_bidirected_edges(mesh_src, mesh_dst)
+        self.register_buffer("mesh_src_idx", torch.from_numpy(mesh_src_bi).long())
+        self.register_buffer("mesh_dst_idx", torch.from_numpy(mesh_dst_bi).long())
         self.num_mesh_nodes = len(self.mesh_vertices)
 
         # Store mesh positions
         mesh_pos = torch.from_numpy(self.mesh_vertices).float()
         self.register_buffer("mesh_pos", mesh_pos)
 
-        # Create mesh edge features
-        mesh_graph = create_graph(mesh_src, mesh_dst)
-        mesh_graph = add_edge_features(mesh_graph, mesh_pos)
-        mesh_graph = add_node_features(mesh_graph, mesh_pos)
-        self.register_buffer("mesh_nfeat_static", mesh_graph.ndata["x"])
-        self.register_buffer("mesh_efeat_static", mesh_graph.edata["x"])
+        # Compute mesh edge and node features (DGL-free)
+        mesh_efeat = compute_edge_features(self.mesh_src_idx, self.mesh_dst_idx, mesh_pos)
+        mesh_nfeat = compute_node_features(mesh_pos)
+        self.register_buffer("mesh_nfeat_static", mesh_nfeat)
+        self.register_buffer("mesh_efeat_static", mesh_efeat)
 
-        # Build g2m connections
+        # Build g2m connections (grid to mesh)
         grid_xyz = latlon2xyz(lat_lon_grid)
         nbrs = NearestNeighbors(n_neighbors=4).fit(self.mesh_vertices)
         distances, indices = nbrs.kneighbors(grid_xyz.numpy())
@@ -479,20 +496,16 @@ class OneForecast(nn.Module):
                     g2m_src.append(i)
                     g2m_dst.append(indices[i][j])
 
-        self.register_buffer("g2m_src_idx", torch.tensor(g2m_src, dtype=torch.long))
-        self.register_buffer("g2m_dst_idx", torch.tensor(g2m_dst, dtype=torch.long))
+        g2m_src_t = torch.tensor(g2m_src, dtype=torch.long)
+        g2m_dst_t = torch.tensor(g2m_dst, dtype=torch.long)
+        self.register_buffer("g2m_src_idx", g2m_src_t)
+        self.register_buffer("g2m_dst_idx", g2m_dst_t)
 
-        # Create g2m edge features
-        g2m_graph = create_heterograph(g2m_src, g2m_dst, ("grid", "g2m", "mesh"))
-        g2m_graph.srcdata["pos"] = grid_xyz.float()
-        g2m_graph.dstdata["pos"] = mesh_pos
-        g2m_graph = add_edge_features(
-            g2m_graph,
-            (g2m_graph.srcdata["pos"], g2m_graph.dstdata["pos"]),
-        )
-        self.register_buffer("g2m_efeat_static", g2m_graph.edata["x"])
+        # Compute g2m edge features (DGL-free)
+        g2m_efeat = compute_edge_features(g2m_src_t, g2m_dst_t, grid_xyz.float(), mesh_pos)
+        self.register_buffer("g2m_efeat_static", g2m_efeat)
 
-        # Build m2g connections
+        # Build m2g connections (mesh to grid)
         centroids = self._get_centroids(self.mesh_vertices, self.mesh_faces)
         nbrs = NearestNeighbors(n_neighbors=1).fit(centroids)
         _, indices = nbrs.kneighbors(grid_xyz.numpy())
@@ -501,19 +514,15 @@ class OneForecast(nn.Module):
         m2g_src = [p for i in indices for p in self.mesh_faces[i]]
         m2g_dst = [i for i in range(len(grid_xyz)) for _ in range(3)]
 
-        self.register_buffer("m2g_src_idx", torch.tensor(m2g_src, dtype=torch.long))
-        self.register_buffer("m2g_dst_idx", torch.tensor(m2g_dst, dtype=torch.long))
+        m2g_src_t = torch.tensor(m2g_src, dtype=torch.long)
+        m2g_dst_t = torch.tensor(m2g_dst, dtype=torch.long)
+        self.register_buffer("m2g_src_idx", m2g_src_t)
+        self.register_buffer("m2g_dst_idx", m2g_dst_t)
         self.num_grid_nodes = len(grid_xyz)
 
-        # Create m2g edge features
-        m2g_graph = create_heterograph(m2g_src, m2g_dst, ("mesh", "m2g", "grid"))
-        m2g_graph.srcdata["pos"] = mesh_pos
-        m2g_graph.dstdata["pos"] = grid_xyz.float()
-        m2g_graph = add_edge_features(
-            m2g_graph,
-            (m2g_graph.srcdata["pos"], m2g_graph.dstdata["pos"]),
-        )
-        self.register_buffer("m2g_efeat_static", m2g_graph.edata["x"])
+        # Compute m2g edge features (DGL-free)
+        m2g_efeat = compute_edge_features(m2g_src_t, m2g_dst_t, mesh_pos, grid_xyz.float())
+        self.register_buffer("m2g_efeat_static", m2g_efeat)
 
     @staticmethod
     def _max_edge_length(mesh):
@@ -529,23 +538,21 @@ class OneForecast(nn.Module):
 
     def forward(self, x):
         """
-        DataParallel compatible forward pass.
+        Forward pass.
         Args:
             x: [B, T_in, C, H, W] input tensor
         Returns:
             [B, T_out, C, H, W] output tensor
         """
         B, T_in, C, H, W = x.shape
-        device = x.device
 
-        # Process batch all at once instead of loop
         # Reshape: [B, T_in, C, H, W] -> [B, H*W, T_in*C]
         x = rearrange(x, 'b t c h w -> b (h w) (t c)')
 
         # Project to hidden dimension
         grid_feat = self.input_projection(x)  # [B, H*W, hidden_dim]
 
-        # Process each sample (still need loop due to graph operations)
+        # Process each sample
         outputs = []
         for i in range(B):
             sample_feat = grid_feat[i]  # [H*W, hidden_dim]

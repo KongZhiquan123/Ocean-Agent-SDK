@@ -1,12 +1,13 @@
 """
 @file graphcast.py
 
-@description GraphCast model with mesh-based graph neural network processing.
+@description GraphCast model with pure PyTorch graph operations (no DGL dependency).
 @author Leizheng
 @date 2026-02-27
-@version 1.0.0
+@version 1.1.0
 
 @changelog
+  - 2026-02-27 Leizheng: v1.1.0 removed DGL dependency, replaced with pure PyTorch/numpy
   - 2026-02-27 Leizheng: v1.0.0 initial creation - adapted from NeuralFramework
 """
 
@@ -16,16 +17,7 @@ import torch.nn as nn
 from einops import rearrange, repeat
 from typing import Tuple, List, Union, Optional
 from scipy.spatial import transform
-
-try:
-    import dgl
-    import dgl.function as fn
-    from dgl import DGLGraph
-    from sklearn.neighbors import NearestNeighbors
-    _HAS_DGL = True
-except Exception:
-    _HAS_DGL = False
-    DGLGraph = None
+from sklearn.neighbors import NearestNeighbors
 
 
 # =============================================================================
@@ -184,22 +176,30 @@ def faces_to_edges(faces: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
 
 
 # =============================================================================
-# Graph Construction
+# Graph Utilities (DGL-free)
 # =============================================================================
 
-def create_graph(src: List, dst: List, bidirected: bool = True) -> DGLGraph:
-    """Create DGL graph from edge lists."""
-    graph = dgl.graph((src, dst), idtype=torch.int32)
-    if bidirected:
-        graph = dgl.to_bidirected(graph)
-    return graph
+def make_bidirected_edges(src: np.ndarray, dst: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """Make edges bidirectional by adding reverse edges and removing duplicates."""
+    all_src = np.concatenate([src, dst])
+    all_dst = np.concatenate([dst, src])
+    edges = np.stack([all_src, all_dst], axis=1)
+    unique_edges = np.unique(edges, axis=0)
+    return unique_edges[:, 0], unique_edges[:, 1]
 
 
-def add_edge_features(
-    graph: DGLGraph, src_pos: torch.Tensor, dst_pos: torch.Tensor
-) -> DGLGraph:
-    """Add edge features based on node positions."""
-    src_idx, dst_idx = graph.edges()
+def compute_edge_features(
+    src_idx: torch.Tensor, dst_idx: torch.Tensor,
+    src_pos: torch.Tensor, dst_pos: torch.Tensor
+) -> torch.Tensor:
+    """Compute edge features based on node positions (GraphCast-style).
+
+    Uses local coordinate transformation: rotates src to align dst with [1,0,0],
+    then computes displacement from [1,0,0].
+
+    Returns:
+        Edge features [num_edges, 4] (3 displacement + 1 distance)
+    """
     src_coords = src_pos[src_idx.long()]
     dst_coords = dst_pos[dst_idx.long()]
 
@@ -215,63 +215,40 @@ def add_edge_features(
     src_rot = geospatial_rotation(src_coords, theta_az, "z", "rad")
     src_rot = geospatial_rotation(src_rot, theta_polar, "y", "rad")
 
-    # Edge features: displacement + distance
-    disp = src_rot - torch.tensor([1, 0, 0], device=src_rot.device)
+    # Edge features: displacement from [1,0,0] + distance
+    disp = src_rot - torch.tensor([1, 0, 0], device=src_rot.device, dtype=src_rot.dtype)
     dist = torch.norm(disp, dim=-1, keepdim=True)
     max_dist = dist.max()
 
-    graph.edata["x"] = torch.cat([disp / max_dist, dist / max_dist], dim=-1)
-    return graph
+    return torch.cat([disp / max_dist, dist / max_dist], dim=-1)
 
 
 # =============================================================================
-# Graph Operations
+# Graph Operations (DGL-free)
 # =============================================================================
 
-def concat_efeat_dgl(
-    efeat: torch.Tensor, src_feat: torch.Tensor, dst_feat: torch.Tensor, graph: DGLGraph
+def concat_efeat(
+    efeat: torch.Tensor, src_feat: torch.Tensor, dst_feat: torch.Tensor,
+    src_idx: torch.Tensor, dst_idx: torch.Tensor
 ) -> torch.Tensor:
-    """Concatenate edge and node features using manual indexing.
-
-    This avoids device conflicts when graph is on CPU but features are on GPU.
-    """
-    # Get edge connections (on CPU)
-    src, dst = graph.edges()
-
-    # Move indices to feature device and index
-    device = efeat.device
-    src_indexed = src_feat[src.to(device)]  # [num_edges, src_dim]
-    dst_indexed = dst_feat[dst.to(device)]  # [num_edges, dst_dim]
-
-    # Concatenate edge features with source and destination node features
-    return torch.cat([efeat, src_indexed, dst_indexed], dim=-1)
+    """Concatenate edge and node features using edge indices."""
+    return torch.cat([efeat, src_feat[src_idx], dst_feat[dst_idx]], dim=-1)
 
 
-def aggregate_and_concat_dgl(
-    efeat: torch.Tensor, dst_feat: torch.Tensor, graph: DGLGraph, agg: str = "sum"
+def aggregate_and_concat(
+    efeat: torch.Tensor, dst_feat: torch.Tensor,
+    dst_idx: torch.Tensor, num_dst_nodes: int, agg: str = "sum"
 ) -> torch.Tensor:
-    """Aggregate edge features to nodes and concatenate using manual indexing.
-
-    This avoids device conflicts when graph is on CPU but features are on GPU.
-    """
-    # Get edge connections (on CPU)
-    _, dst = graph.edges()
-
-    # Move dst indices to feature device
-    device = efeat.device
-    dst_device = dst.to(device)
-
-    # Aggregate edge features to destination nodes
-    num_dst_nodes = dst_feat.shape[0]
-    aggregated = torch.zeros(num_dst_nodes, efeat.shape[1], device=device, dtype=efeat.dtype)
+    """Aggregate edge features to nodes and concatenate."""
+    aggregated = torch.zeros(num_dst_nodes, efeat.shape[1],
+                            device=efeat.device, dtype=efeat.dtype)
 
     if agg == "sum":
-        aggregated.index_add_(0, dst_device, efeat)
+        aggregated.index_add_(0, dst_idx, efeat)
     else:  # mean
-        aggregated.index_add_(0, dst_device, efeat)
-        # Count edges per node for mean
-        counts = torch.zeros(num_dst_nodes, device=device, dtype=torch.float32)
-        counts.index_add_(0, dst_device, torch.ones_like(dst_device, dtype=torch.float32))
+        aggregated.index_add_(0, dst_idx, efeat)
+        counts = torch.zeros(num_dst_nodes, device=efeat.device, dtype=torch.float32)
+        counts.index_add_(0, dst_idx, torch.ones(dst_idx.shape[0], device=efeat.device, dtype=torch.float32))
         aggregated = aggregated / counts.clamp(min=1).unsqueeze(-1)
 
     return torch.cat([aggregated, dst_feat], dim=-1)
@@ -315,9 +292,10 @@ class EdgeMLP(nn.Module):
         efeat: torch.Tensor,
         src_feat: torch.Tensor,
         dst_feat: torch.Tensor,
-        graph: DGLGraph,
+        src_idx: torch.Tensor,
+        dst_idx: torch.Tensor,
     ) -> torch.Tensor:
-        cat_feat = concat_efeat_dgl(efeat, src_feat, dst_feat, graph)
+        cat_feat = concat_efeat(efeat, src_feat, dst_feat, src_idx, dst_idx)
         return self.mlp(cat_feat)
 
 
@@ -338,10 +316,12 @@ class Encoder(nn.Module):
         g2m_efeat: torch.Tensor,
         grid_feat: torch.Tensor,
         mesh_feat: torch.Tensor,
-        graph: DGLGraph,
+        src_idx: torch.Tensor,
+        dst_idx: torch.Tensor,
+        num_dst_nodes: int,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        efeat = self.edge_mlp(g2m_efeat, grid_feat, mesh_feat, graph)
-        agg_feat = aggregate_and_concat_dgl(efeat, mesh_feat, graph, self.agg)
+        efeat = self.edge_mlp(g2m_efeat, grid_feat, mesh_feat, src_idx, dst_idx)
+        agg_feat = aggregate_and_concat(efeat, mesh_feat, dst_idx, num_dst_nodes, self.agg)
         mesh_feat_new = mesh_feat + self.dst_mlp(agg_feat)
         grid_feat_new = grid_feat + self.src_mlp(grid_feat)
         return grid_feat_new, mesh_feat_new
@@ -363,10 +343,12 @@ class Decoder(nn.Module):
         m2g_efeat: torch.Tensor,
         grid_feat: torch.Tensor,
         mesh_feat: torch.Tensor,
-        graph: DGLGraph,
+        src_idx: torch.Tensor,
+        dst_idx: torch.Tensor,
+        num_dst_nodes: int,
     ) -> torch.Tensor:
-        efeat = self.edge_mlp(m2g_efeat, mesh_feat, grid_feat, graph)
-        agg_feat = aggregate_and_concat_dgl(efeat, grid_feat, graph, self.agg)
+        efeat = self.edge_mlp(m2g_efeat, mesh_feat, grid_feat, src_idx, dst_idx)
+        agg_feat = aggregate_and_concat(efeat, grid_feat, dst_idx, num_dst_nodes, self.agg)
         return grid_feat + self.node_mlp(agg_feat)
 
 
@@ -382,10 +364,11 @@ class ProcessorLayer(nn.Module):
         self.agg = agg
 
     def forward(
-        self, efeat: torch.Tensor, nfeat: torch.Tensor, graph: DGLGraph
+        self, efeat: torch.Tensor, nfeat: torch.Tensor,
+        src_idx: torch.Tensor, dst_idx: torch.Tensor, num_nodes: int
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        efeat_new = efeat + self.edge_mlp(efeat, nfeat, nfeat, graph)
-        agg_feat = aggregate_and_concat_dgl(efeat_new, nfeat, graph, self.agg)
+        efeat_new = efeat + self.edge_mlp(efeat, nfeat, nfeat, src_idx, dst_idx)
+        agg_feat = aggregate_and_concat(efeat_new, nfeat, dst_idx, num_nodes, self.agg)
         nfeat_new = nfeat + self.node_mlp(agg_feat)
         return efeat_new, nfeat_new
 
@@ -402,19 +385,20 @@ class Processor(nn.Module):
         )
 
     def forward(
-        self, efeat: torch.Tensor, nfeat: torch.Tensor, graph: DGLGraph
+        self, efeat: torch.Tensor, nfeat: torch.Tensor,
+        src_idx: torch.Tensor, dst_idx: torch.Tensor, num_nodes: int
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         for layer in self.layers:
-            efeat, nfeat = layer(efeat, nfeat, graph)
+            efeat, nfeat = layer(efeat, nfeat, src_idx, dst_idx, num_nodes)
         return efeat, nfeat
 
 
 # =============================================================================
-# Graph Builder
+# Graph Builder (DGL-free)
 # =============================================================================
 
 class GraphBuilder:
-    """Build graphs for GraphCast."""
+    """Build graphs for GraphCast using pure numpy/PyTorch."""
 
     def __init__(
         self, lat_lon_grid: torch.Tensor, mesh_level: int = 5, multimesh: bool = True
@@ -429,23 +413,46 @@ class GraphBuilder:
         self.mesh_vertices = torch.from_numpy(mesh.vertices).float()
         mesh_src, mesh_dst = faces_to_edges(mesh.faces)
 
-        # Create mesh graph
-        self.mesh_graph = create_graph(mesh_src, mesh_dst)
-        self.mesh_graph = add_edge_features(
-            self.mesh_graph, self.mesh_vertices, self.mesh_vertices
-        )
-        self.mesh_graph.ndata["pos"] = self.mesh_vertices
+        # Mesh graph (bidirected edges)
+        mesh_src_bi, mesh_dst_bi = make_bidirected_edges(mesh_src, mesh_dst)
+        self.mesh_src_idx = torch.from_numpy(mesh_src_bi).long()
+        self.mesh_dst_idx = torch.from_numpy(mesh_dst_bi).long()
+        self.num_mesh_nodes = len(self.mesh_vertices)
 
-        # Create g2m graph (grid to mesh)
+        # Mesh edge features
+        self.mesh_efeat = compute_edge_features(
+            self.mesh_src_idx, self.mesh_dst_idx,
+            self.mesh_vertices, self.mesh_vertices
+        )
+
+        # G2M graph (grid to mesh)
         grid_xyz = latlon2xyz(self.lat_lon_flat)
         max_edge_len = self._get_max_edge_len(finest)
-        self.g2m_graph = self._create_bipartite_graph(
-            grid_xyz, self.mesh_vertices, max_edge_len * 0.6, is_g2m=True
+
+        g2m_src, g2m_dst = self._find_bipartite_edges(
+            grid_xyz, self.mesh_vertices, max_edge_len * 0.6
+        )
+        self.g2m_src_idx = torch.tensor(g2m_src, dtype=torch.long)
+        self.g2m_dst_idx = torch.tensor(g2m_dst, dtype=torch.long)
+
+        # G2M edge features
+        self.g2m_efeat = compute_edge_features(
+            self.g2m_src_idx, self.g2m_dst_idx,
+            grid_xyz.float(), self.mesh_vertices
         )
 
-        # Create m2g graph (mesh to grid)
+        # M2G graph (mesh to grid)
         centroids = self._get_centroids(mesh)
-        self.m2g_graph = self._create_m2g_graph(grid_xyz, centroids, mesh.faces)
+        m2g_src, m2g_dst = self._find_m2g_edges(grid_xyz, centroids, mesh.faces)
+        self.m2g_src_idx = torch.tensor(m2g_src, dtype=torch.long)
+        self.m2g_dst_idx = torch.tensor(m2g_dst, dtype=torch.long)
+        self.num_grid_nodes = len(grid_xyz)
+
+        # M2G edge features
+        self.m2g_efeat = compute_edge_features(
+            self.m2g_src_idx, self.m2g_dst_idx,
+            self.mesh_vertices, grid_xyz.float()
+        )
 
     def _get_max_edge_len(self, mesh: TriangularMesh) -> float:
         src, dst = faces_to_edges(mesh.faces)
@@ -455,14 +462,13 @@ class GraphBuilder:
     def _get_centroids(self, mesh: TriangularMesh) -> np.ndarray:
         return np.mean(mesh.vertices[mesh.faces], axis=1)
 
-    def _create_bipartite_graph(
+    def _find_bipartite_edges(
         self,
         src_pos: torch.Tensor,
         dst_pos: Union[np.ndarray, torch.Tensor],
         max_dist: float,
-        is_g2m: bool,
-    ) -> DGLGraph:
-        # Convert to numpy for sklearn if needed
+    ) -> Tuple[List[int], List[int]]:
+        """Find bipartite edges using KNN within max_dist."""
         dst_pos_np = (
             dst_pos.cpu().numpy() if isinstance(dst_pos, torch.Tensor) else dst_pos
         )
@@ -477,37 +483,20 @@ class GraphBuilder:
                     src_idx.append(i)
                     dst_idx.append(indices[i][j])
 
-        graph = dgl.heterograph(
-            {("src", "edge", "dst"): (src_idx, dst_idx)}, idtype=torch.int32
-        )
-        graph.srcdata["pos"] = src_pos.float()
+        return src_idx, dst_idx
 
-        # Handle both tensor and numpy array
-        if isinstance(dst_pos, torch.Tensor):
-            graph.dstdata["pos"] = dst_pos.float()
-        else:
-            graph.dstdata["pos"] = torch.from_numpy(dst_pos).float()
-
-        graph = add_edge_features(graph, graph.srcdata["pos"], graph.dstdata["pos"])
-        return graph
-
-    def _create_m2g_graph(
+    def _find_m2g_edges(
         self, grid_xyz: torch.Tensor, centroids: np.ndarray, faces: np.ndarray
-    ) -> DGLGraph:
+    ) -> Tuple[List[int], List[int]]:
+        """Find mesh-to-grid edges by nearest face centroid."""
         nbrs = NearestNeighbors(n_neighbors=1).fit(centroids)
         _, indices = nbrs.kneighbors(grid_xyz.cpu().numpy())
         indices = indices.flatten()
 
-        src_idx = [p for i in indices for p in faces[i]]
+        src_idx = [int(p) for i in indices for p in faces[i]]
         dst_idx = [i for i in range(len(grid_xyz)) for _ in range(3)]
 
-        graph = dgl.heterograph(
-            {("src", "edge", "dst"): (src_idx, dst_idx)}, idtype=torch.int32
-        )
-        graph.srcdata["pos"] = self.mesh_vertices
-        graph.dstdata["pos"] = grid_xyz.float()
-        graph = add_edge_features(graph, graph.srcdata["pos"], graph.dstdata["pos"])
-        return graph
+        return src_idx, dst_idx
 
 
 # =============================================================================
@@ -517,18 +506,10 @@ class GraphBuilder:
 class GraphCast(nn.Module):
     """
     GraphCast model adapted for ocean velocity prediction.
-
-    Key adaptations:
-    1. Handles 2D ocean velocity data (u, v components)
-    2. Supports multi-frame input and output for video prediction
-    3. Adds pseudo-3D processing capability
-    4. Optimized for 240x240 spatial resolution
+    Uses pure PyTorch operations - no DGL dependency.
     """
 
     def __init__(self, args):
-        if not _HAS_DGL:
-            raise ImportError("GraphCast requires 'dgl' and 'scikit-learn'. Install via: pip install dgl scikit-learn")
-
         super().__init__()
 
         # Temporal configuration
@@ -542,33 +523,43 @@ class GraphCast(nn.Module):
 
         # Model architecture parameters
         self.hidden_dim = args.get('hidden_dim', 128)
-        self.mesh_level = args.get('mesh_level', 4)  # Reduced for 240x240 resolution
+        self.mesh_level = args.get('mesh_level', 4)
         self.processor_layers = args.get('processor_layers', 8)
         self.mlp_layers = args.get('mlp_layers', 1)
         self.multimesh = args.get('multimesh', True)
         self.aggregation = args.get('aggregation', 'sum')
 
         # Processing options
-        self.add_3d_dim = args.get('add_3d_dim', True)  # Process 2D as pseudo-3D
-        self.temporal_encoding = args.get('temporal_encoding', 'concat')  # 'concat' or 'rnn'
+        self.add_3d_dim = args.get('add_3d_dim', True)
+        self.temporal_encoding = args.get('temporal_encoding', 'concat')
 
-        # Build graphs
+        # Build graphs (pure PyTorch)
         lat = torch.linspace(-90, 90, self.input_res[0])
         lon = torch.linspace(-180, 180, self.input_res[1] + 1)[1:]
         lat_lon_grid = torch.stack(torch.meshgrid(lat, lon, indexing="ij"), dim=-1)
 
-        self.graph_builder = GraphBuilder(lat_lon_grid, self.mesh_level, self.multimesh)
+        graph_builder = GraphBuilder(lat_lon_grid, self.mesh_level, self.multimesh)
+
+        # Register graph structure as buffers (moves with .to(device))
+        self.register_buffer("mesh_pos", graph_builder.mesh_vertices)
+        self.register_buffer("g2m_efeat", graph_builder.g2m_efeat)
+        self.register_buffer("mesh_efeat", graph_builder.mesh_efeat)
+        self.register_buffer("m2g_efeat", graph_builder.m2g_efeat)
+        self.register_buffer("g2m_src_idx", graph_builder.g2m_src_idx)
+        self.register_buffer("g2m_dst_idx", graph_builder.g2m_dst_idx)
+        self.register_buffer("mesh_src_idx", graph_builder.mesh_src_idx)
+        self.register_buffer("mesh_dst_idx", graph_builder.mesh_dst_idx)
+        self.register_buffer("m2g_src_idx", graph_builder.m2g_src_idx)
+        self.register_buffer("m2g_dst_idx", graph_builder.m2g_dst_idx)
+        self.num_mesh_nodes = graph_builder.num_mesh_nodes
+        self.num_grid_nodes = graph_builder.num_grid_nodes
 
         # Calculate input dimensions based on temporal encoding
         if self.temporal_encoding == 'concat':
-            # Concatenate all input frames
             grid_input_dim = self.input_len * self.in_channels
             if self.add_3d_dim:
-                # Add pseudo depth channels (replicate 2D data)
-                grid_input_dim *= 2  # Process as both surface and pseudo-depth
+                grid_input_dim *= 2
         else:
-            # RNN-based temporal encoding
-            # Note: After RNN encoding, the output dimension is hidden_dim, not in_channels
             grid_input_dim = self.hidden_dim
             self.temporal_encoder = nn.GRU(
                 input_size=self.in_channels,
@@ -579,7 +570,7 @@ class GraphCast(nn.Module):
 
         # Feature embedders
         self.grid_embed = MLP(grid_input_dim, self.hidden_dim, self.hidden_dim, self.mlp_layers)
-        self.mesh_node_embed = MLP(3, self.hidden_dim, self.hidden_dim, self.mlp_layers)  # xyz coords
+        self.mesh_node_embed = MLP(3, self.hidden_dim, self.hidden_dim, self.mlp_layers)
         self.g2m_edge_embed = MLP(4, self.hidden_dim, self.hidden_dim, self.mlp_layers)
         self.mesh_edge_embed = MLP(4, self.hidden_dim, self.hidden_dim, self.mlp_layers)
         self.m2g_edge_embed = MLP(4, self.hidden_dim, self.hidden_dim, self.mlp_layers)
@@ -598,12 +589,6 @@ class GraphCast(nn.Module):
             nn.Linear(self.hidden_dim, output_channels),
         )
 
-        # Cache graph features
-        self.register_buffer("mesh_pos", self.graph_builder.mesh_vertices)
-        self.register_buffer("g2m_efeat", self.graph_builder.g2m_graph.edata["x"])
-        self.register_buffer("mesh_efeat", self.graph_builder.mesh_graph.edata["x"])
-        self.register_buffer("m2g_efeat", self.graph_builder.m2g_graph.edata["x"])
-
     def prepare_input(self, x: torch.Tensor) -> torch.Tensor:
         """
         Prepare input for processing.
@@ -616,23 +601,16 @@ class GraphCast(nn.Module):
         B, T, C, H, W = x.shape
 
         if self.temporal_encoding == 'concat':
-            # Concatenate temporal frames
             x = rearrange(x, 'b t c h w -> b (t c) h w')
-
             if self.add_3d_dim:
-                # Create pseudo-3D by duplicating data
-                # This simulates having both surface and depth information
                 x_surface = x
-                x_depth = x * 0.9  # Slightly attenuated for depth simulation
+                x_depth = x * 0.9
                 x = torch.cat([x_surface, x_depth], dim=1)
-
             return x
         else:
-            # RNN-based temporal encoding
             x = rearrange(x, 'b t c h w -> (b h w) t c')
             _, hidden = self.temporal_encoder(x)
-            # Use final hidden state
-            x_encoded = hidden[-1]  # [(B*H*W), hidden_dim]
+            x_encoded = hidden[-1]
             return rearrange(x_encoded, '(b h w) d -> b (h w) d', b=B, h=H, w=W)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -645,55 +623,43 @@ class GraphCast(nn.Module):
             [B, T_out, C, H, W] output predictions
         """
         B, T_in, C, H, W = x.shape
-        device = x.device
-
-        # Keep graphs on CPU to avoid DGL CUDA issues
-        # DGL will automatically handle feature transfer between CPU graph and GPU tensors
-        g2m_graph = self.graph_builder.g2m_graph
-        mesh_graph = self.graph_builder.mesh_graph
-        m2g_graph = self.graph_builder.m2g_graph
 
         # Handle batch processing
         outputs = []
         for b in range(B):
-            x_single = x[b:b+1]  # Keep batch dimension
+            x_single = x[b:b+1]
 
             # Prepare input
             x_processed = self.prepare_input(x_single)
 
             if self.temporal_encoding == 'concat':
-                # Reshape: [1, C_concat, H, W] -> [N, C_concat]
                 grid_feat = rearrange(x_processed, '1 c h w -> (h w) c')
             else:
-                # Already in [1, N, C] format
-                grid_feat = x_processed[0]  # Remove batch dim
-
-            # Ensure features are on correct device
-            mesh_pos = self.mesh_pos.to(device)
-            g2m_efeat = self.g2m_efeat.to(device)
-            mesh_efeat = self.mesh_efeat.to(device)
-            m2g_efeat = self.m2g_efeat.to(device)
+                grid_feat = x_processed[0]
 
             # Embed features
             grid_feat = self.grid_embed(grid_feat)
-            mesh_node_feat = self.mesh_node_embed(mesh_pos)
-            g2m_efeat_embed = self.g2m_edge_embed(g2m_efeat)
-            mesh_efeat_embed = self.mesh_edge_embed(mesh_efeat)
-            m2g_efeat_embed = self.m2g_edge_embed(m2g_efeat)
+            mesh_node_feat = self.mesh_node_embed(self.mesh_pos)
+            g2m_efeat_embed = self.g2m_edge_embed(self.g2m_efeat)
+            mesh_efeat_embed = self.mesh_edge_embed(self.mesh_efeat)
+            m2g_efeat_embed = self.m2g_edge_embed(self.m2g_efeat)
 
-            # Encode: grid -> mesh (use device-local graph)
+            # Encode: grid -> mesh
             grid_feat, mesh_node_feat = self.encoder(
-                g2m_efeat_embed, grid_feat, mesh_node_feat, g2m_graph
+                g2m_efeat_embed, grid_feat, mesh_node_feat,
+                self.g2m_src_idx, self.g2m_dst_idx, self.num_mesh_nodes
             )
 
-            # Process on mesh (use device-local graph)
+            # Process on mesh
             mesh_efeat_embed, mesh_node_feat = self.processor(
-                mesh_efeat_embed, mesh_node_feat, mesh_graph
+                mesh_efeat_embed, mesh_node_feat,
+                self.mesh_src_idx, self.mesh_dst_idx, self.num_mesh_nodes
             )
 
-            # Decode: mesh -> grid (use device-local graph)
+            # Decode: mesh -> grid
             grid_feat = self.decoder(
-                m2g_efeat_embed, grid_feat, mesh_node_feat, m2g_graph
+                m2g_efeat_embed, grid_feat, mesh_node_feat,
+                self.m2g_src_idx, self.m2g_dst_idx, self.num_grid_nodes
             )
 
             # Output
@@ -708,21 +674,4 @@ class GraphCast(nn.Module):
 
             outputs.append(output)
 
-        # Concatenate batch
         return torch.cat(outputs, dim=0)
-
-    def to(self, *args, **kwargs):
-        """Override to() to move parameters to target device.
-
-        Note: We keep graph structures on CPU to avoid DGL CUDA compatibility issues.
-        Graph node/edge features are registered as buffers and will be moved automatically.
-        DGL handles feature transfer between CPU graphs and GPU tensors efficiently.
-        """
-        # Call parent to() - moves all parameters and registered buffers
-        # This includes mesh_pos, g2m_efeat, mesh_efeat, m2g_efeat
-        self = super().to(*args, **kwargs)
-
-        # Note: Graphs (mesh_graph, g2m_graph, m2g_graph) remain on CPU
-        # This avoids DGL CUDA transfer crashes and is more efficient for static graphs
-
-        return self
