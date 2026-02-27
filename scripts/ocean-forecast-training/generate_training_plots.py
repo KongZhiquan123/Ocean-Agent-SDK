@@ -127,7 +127,7 @@ def extract_training_data(events: List[Dict[str, Any]]) -> Dict[str, Any]:
     training_end: Optional[Dict[str, Any]] = None
 
     for ev in events:
-        etype = ev.get('type', '')
+        etype = ev.get('event', '') or ev.get('type', '')
         if etype == 'epoch_train':
             epochs_train.append(ev)
         elif etype == 'epoch_valid':

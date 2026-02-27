@@ -15,7 +15,7 @@ import { findPythonWithModule, findFirstPythonPath } from '@/utils/python-manage
 import path from 'node:path'
 
 export const oceanForecastReportTool = defineTool({
-  name: 'ocean_forecast_generate_report',
+  name: 'ocean_forecast_train_report',
   description: `生成海洋时序预测训练 Markdown 报告
 
 从训练日志目录读取 config.yaml 和 train.log（结构化日志），自动生成综合报告。

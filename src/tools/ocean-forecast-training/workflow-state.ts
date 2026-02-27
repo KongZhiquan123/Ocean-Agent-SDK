@@ -3,9 +3,10 @@
  * @description Ocean forecast training workflow state machine - 4-stage confirmation logic
  * @author Leizheng
  * @date 2026-02-26
- * @version 1.0.0
+ * @version 1.1.0
  *
  * @changelog
+ *   - 2026-02-26 Leizheng: v1.1.0 expand token signature from 5→13 fields, protect device_ids etc.
  *   - 2026-02-26 Leizheng: v1.0.0 initial version for ocean forecast training
  */
 
@@ -232,7 +233,7 @@ export class ForecastTrainingWorkflow {
     return this.params
   }
 
-  private static readonly TOKEN_SALT = 'ocean-forecast-training-v1'
+  private static readonly TOKEN_SALT = 'ocean-forecast-training-v2'
 
   constructor(
     args: ForecastWorkflowParams,
@@ -275,7 +276,10 @@ export class ForecastTrainingWorkflow {
 
   /**
    * Generate execution confirmation token.
-   * Signature: hash(dataset_root + model_name + in_t + out_t + batch_size)
+   * Signature covers 13 fields: dataset_root, model_name, in_t, out_t,
+   * batch_size, dyn_vars, stride, epochs, lr, device_ids, distribute,
+   * distribute_mode, gradient_checkpointing.
+   * Any change to these fields after user confirmation invalidates the token.
    */
   generateConfirmationToken(): string {
     const { params } = this
@@ -285,6 +289,14 @@ export class ForecastTrainingWorkflow {
       in_t: params.in_t,
       out_t: params.out_t,
       batch_size: params.batch_size,
+      dyn_vars: params.dyn_vars ? [...params.dyn_vars].sort().join(',') : '',
+      stride: params.stride,
+      epochs: params.epochs,
+      lr: params.lr,
+      device_ids: params.device_ids ? params.device_ids.join(',') : '',
+      distribute: params.distribute,
+      distribute_mode: params.distribute_mode,
+      gradient_checkpointing: params.gradient_checkpointing,
     }
 
     const dataStr =

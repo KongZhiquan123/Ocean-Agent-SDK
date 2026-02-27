@@ -19,7 +19,7 @@ function shellEscapeDouble(str: string): string {
 }
 
 export const oceanForecastVisualizeTool = defineTool({
-  name: 'ocean_forecast_visualize',
+  name: 'ocean_forecast_train_visualize',
   description: `生成海洋时序预测训练可视化图表
 
 **训练模式 (mode=train, 默认)**：

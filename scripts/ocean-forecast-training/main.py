@@ -29,6 +29,9 @@ from trainers import TRAINER_REGISTRY
 
 def _log_json_event(event_data):
     """Emit structured JSON event for Agent process manager."""
+    # Normalise key: callers use "type" but TS expects "event"
+    if "type" in event_data and "event" not in event_data:
+        event_data["event"] = event_data.pop("type")
     json_str = json.dumps(event_data, ensure_ascii=False)
     print(f"__event__{json_str}__event__", flush=True)
 
@@ -56,7 +59,19 @@ def main():
             train_cfg["rank"] = args['train'].get('device_ids', [0])[0]
 
         # ========= Step 2. Setup logger and save config =========
-        if distributed:
+        mode = args.get("mode", train_cfg.get("mode", "train"))
+
+        if mode == "predict":
+            # Predict mode: reuse existing saving_path (no new directory)
+            saving_path = args.get("log", {}).get("saving_path") or args.get("log", {}).get("log_dir", ".")
+            saving_name = "predict"
+            import logging
+            logging.basicConfig(
+                level=logging.INFO,
+                format="%(asctime)s %(levelname)-8s %(message)s",
+                datefmt="%Y-%m-%d %H:%M:%S",
+            )
+        elif distributed:
             # Only rank 0 creates logger and writes config to disk
             if train_cfg["rank"] == 0:
                 saving_path, saving_name = set_up_logger(args)
@@ -87,8 +102,6 @@ def main():
         trainer = trainer_cls(args)
 
         # ========= Step 5. Run training / evaluation / prediction =========
-        mode = args.get("mode", train_cfg.get("mode", "train"))
-
         if mode == "predict":
             trainer.predict()
         else:

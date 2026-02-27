@@ -18,6 +18,7 @@
     "references/models.md",
     "references/parameters.md",
     "references/examples.md",
-    "references/errors.md"
+    "references/errors.md",
+    "references/visualization.md"
   ]
 }

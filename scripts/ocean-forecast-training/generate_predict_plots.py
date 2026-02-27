@@ -4,9 +4,10 @@
 @description Generate prediction visualization plots for ocean forecast models.
 @author Leizheng
 @date 2026-02-26
-@version 1.0.0
+@version 1.1.0
 
 @changelog
+  - 2026-02-26 Leizheng: v1.1.0 add coordinate axes, land mask, YlOrRd error cmap
   - 2026-02-26 Leizheng: v1.0.0 initial version for ocean forecast prediction visualization
 """
 
@@ -37,10 +38,94 @@ matplotlib.rcParams["axes.unicode_minus"] = False
 try:
     import cmocean
     DEFAULT_CMAP = cmocean.cm.thermal
-    ERROR_CMAP = cmocean.cm.amp
 except ImportError:
     DEFAULT_CMAP = "viridis"
-    ERROR_CMAP = "inferno"
+
+# Error colormap: YlOrRd gives white→yellow→orange→red,
+# low-error regions are white which clearly separates from gray land mask.
+ERROR_CMAP = "YlOrRd"
+
+
+# ============================================================================
+# Coordinate / mask helpers
+# ============================================================================
+
+def _make_grid_edges(centers: np.ndarray) -> np.ndarray:
+    """Convert N centre-point coordinates to N+1 edge coordinates for pcolormesh(shading='flat')."""
+    edges = np.empty(centers.size + 1, dtype=np.float64)
+    edges[1:-1] = 0.5 * (centers[:-1] + centers[1:])
+    edges[0] = centers[0] - (edges[1] - centers[0])
+    edges[-1] = centers[-1] + (centers[-1] - edges[-2])
+    return edges
+
+
+def load_static_data(dataset_root: Optional[str]) -> Dict[str, Optional[np.ndarray]]:
+    """Load lon, lat, and mask arrays from the preprocessed dataset.
+
+    Reads ``var_names.json`` for ``lon_var``, ``lat_var``, ``mask`` field names,
+    then loads the corresponding ``.npy`` files from ``static_variables/``.
+    File names carry a numeric prefix (e.g. ``40_lon_rho.npy``); the variable
+    name is extracted via ``base.split('_', 1)[-1]``.
+
+    Returns:
+        ``{'lon': ndarray|None, 'lat': ndarray|None, 'mask': ndarray|None}``
+    """
+    result: Dict[str, Optional[np.ndarray]] = {"lon": None, "lat": None, "mask": None}
+    if dataset_root is None:
+        return result
+
+    # Read var_names.json
+    var_names_path = os.path.join(dataset_root, "var_names.json")
+    lon_key: Optional[str] = None
+    lat_key: Optional[str] = None
+    mask_key: Optional[str] = None
+
+    if os.path.isfile(var_names_path):
+        try:
+            with open(var_names_path, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+            lon_key = cfg.get("lon_var")
+            lat_key = cfg.get("lat_var")
+            # mask can be a list of mask var names (e.g. ["mask_rho","mask_u",...])
+            # or a single string; we only need the primary mask (first element).
+            mask_val = cfg.get("mask")
+            if isinstance(mask_val, list):
+                mask_key = mask_val[0] if mask_val else None
+            else:
+                mask_key = mask_val
+        except Exception:
+            pass
+
+    # Scan static_variables/ directory
+    static_dir = os.path.join(dataset_root, "static_variables")
+    if not os.path.isdir(static_dir):
+        return result
+
+    # Build name→path mapping from numbered-prefix filenames
+    name_to_path: Dict[str, str] = {}
+    for fname in os.listdir(static_dir):
+        if not fname.endswith(".npy"):
+            continue
+        base = fname[:-4]  # strip .npy
+        var_name = base.split("_", 1)[-1] if "_" in base else base
+        name_to_path[var_name] = os.path.join(static_dir, fname)
+
+    # Load by explicit key or fallback keyword matching
+    def _load(key: Optional[str], keywords: List[str]) -> Optional[np.ndarray]:
+        if key and key in name_to_path:
+            return np.load(name_to_path[key])
+        # Fallback: match by keyword
+        for k in keywords:
+            for name, fpath in name_to_path.items():
+                if k in name.lower():
+                    return np.load(fpath)
+        return None
+
+    result["lon"] = _load(lon_key, ["lon"])
+    result["lat"] = _load(lat_key, ["lat"])
+    result["mask"] = _load(mask_key, ["mask"])
+
+    return result
 
 
 # ============================================================================
@@ -51,6 +136,11 @@ except ImportError:
 #   sample_{i:06d}_t{t}_var{c}_{var_name}.npy
 _PRED_PATTERN = re.compile(
     r"^sample_(?P<sample>\d+)_t(?P<timestep>\d+)_var(?P<varidx>\d+)_(?P<varname>.+)\.npy$"
+)
+
+# Ground truth files saved alongside predictions by predict()
+_TRUTH_PATTERN = re.compile(
+    r"^truth_(?P<sample>\d+)_t(?P<timestep>\d+)_var(?P<varidx>\d+)_(?P<varname>.+)\.npy$"
 )
 
 
@@ -111,8 +201,62 @@ def get_var_names_from_index(
 
 
 # ============================================================================
-# Ground truth loading
+# Ground truth loading (from truth_*.npy files saved by predict())
 # ============================================================================
+
+def load_ground_truth_from_pred_dir(
+    pred_dir: str,
+) -> Optional[np.ndarray]:
+    """Load ground truth from truth_*.npy files saved alongside predictions.
+
+    The predict() method in trainers/base.py saves denormalized ground truth
+    files with the naming convention: truth_{sample}_t{t}_var{c}_{varname}.npy
+
+    Returns:
+        Array of shape (N_samples, out_t, n_vars, H, W), or None if no
+        truth files are found.
+    """
+    if not os.path.isdir(pred_dir):
+        return None
+
+    truth_files: Dict[Tuple[int, int, int], str] = {}
+    max_sample = -1
+    max_ts = -1
+    max_var = -1
+
+    for fname in os.listdir(pred_dir):
+        m = _TRUTH_PATTERN.match(fname)
+        if m is None:
+            continue
+        s = int(m.group("sample"))
+        t = int(m.group("timestep"))
+        v = int(m.group("varidx"))
+        truth_files[(s, t, v)] = os.path.join(pred_dir, fname)
+        max_sample = max(max_sample, s)
+        max_ts = max(max_ts, t)
+        max_var = max(max_var, v)
+
+    if not truth_files:
+        return None
+
+    # Determine spatial shape from the first file
+    first_path = next(iter(truth_files.values()))
+    first_arr = np.load(first_path)
+    spatial = first_arr.shape  # (H, W)
+
+    N = max_sample + 1
+    out_t = max_ts + 1
+    C = max_var + 1
+
+    gt_data = np.zeros((N, out_t, C, *spatial), dtype=np.float32)
+    for (s, t, v), fpath in truth_files.items():
+        gt_data[s, t, v] = np.load(fpath).astype(np.float32)
+
+    return gt_data
+
+
+# ============================================================================
+# Ground truth loading (from dataset_root)
 
 def load_ground_truth_test_set(
     dataset_root: str,
@@ -247,6 +391,85 @@ def _add_colorbar(fig: plt.Figure, ax: plt.Axes, im: Any) -> None:
     fig.colorbar(im, cax=cax)
 
 
+def _plot_panel(
+    ax: plt.Axes,
+    data: np.ndarray,
+    lon: Optional[np.ndarray],
+    lat: Optional[np.ndarray],
+    mask: Optional[np.ndarray],
+    cmap,
+    vmin: float,
+    vmax: float,
+) -> Any:
+    """Unified panel drawing with optional coordinate axes and land masking.
+
+    * Applies land mask (mask==0 → NaN, shown as light-gray via ``set_bad``).
+    * If *lon*/*lat* are provided, uses ``pcolormesh`` with proper edges;
+      otherwise falls back to pixel-index ``pcolormesh``.
+    * Returns the QuadMesh (or equivalent) for colorbar attachment.
+    """
+    display = data.astype(np.float64, copy=True)
+
+    # ---- Apply land mask ----
+    if mask is not None:
+        if mask.shape == display.shape:
+            display[mask == 0] = np.nan
+        else:
+            # Nearest-neighbour resample mask to data shape
+            try:
+                from scipy.ndimage import zoom
+                factors = (display.shape[0] / mask.shape[0],
+                           display.shape[1] / mask.shape[1])
+                resampled = zoom(mask.astype(np.float32), factors, order=0)
+                display[resampled < 0.5] = np.nan
+            except ImportError:
+                pass  # scipy unavailable, skip mask resampling
+
+    # ---- Prepare colormap with land color ----
+    if isinstance(cmap, str):
+        cmap = plt.get_cmap(cmap).copy()
+    else:
+        cmap = cmap.copy()
+    cmap.set_bad(color="lightgray")
+
+    # ---- Validate coordinate dimensions against data ----
+    use_coords = False
+    if lon is not None and lat is not None:
+        H, W = display.shape
+        if lon.ndim == 1 and lat.ndim == 1:
+            use_coords = (lon.size == W and lat.size == H)
+        elif lon.ndim == 2 and lat.ndim == 2:
+            use_coords = (lon.shape == display.shape and lat.shape == display.shape)
+
+    # ---- Draw ----
+    if use_coords:
+        if lon.ndim == 1 and lat.ndim == 1:
+            # 1-D rectilinear → build edge grids
+            lon_e = _make_grid_edges(lon)
+            lat_e = _make_grid_edges(lat)
+            im = ax.pcolormesh(
+                lon_e, lat_e, display,
+                cmap=cmap, vmin=vmin, vmax=vmax, shading="flat",
+            )
+        else:
+            # 2-D curvilinear
+            im = ax.pcolormesh(
+                lon, lat, display,
+                cmap=cmap, vmin=vmin, vmax=vmax, shading="auto",
+            )
+        ax.tick_params(labelsize=7)
+    else:
+        # No valid coordinates → pixel indices
+        im = ax.pcolormesh(
+            display,
+            cmap=cmap, vmin=vmin, vmax=vmax, shading="auto",
+        )
+        ax.set_xticks([])
+        ax.set_yticks([])
+
+    return im
+
+
 def plot_single_sample_var(
     pred: np.ndarray,
     truth: Optional[np.ndarray],
@@ -255,20 +478,15 @@ def plot_single_sample_var(
     timestep: int,
     output_path: str,
     dpi: int = 150,
+    lon: Optional[np.ndarray] = None,
+    lat: Optional[np.ndarray] = None,
+    mask: Optional[np.ndarray] = None,
 ) -> str:
     """Plot a 3-panel (or 1-panel) comparison for one sample/variable/timestep.
 
     Panels: Prediction | Ground Truth | Absolute Error
     If ground truth is unavailable, only the prediction panel is shown.
-
-    Args:
-        pred: 2D array (H, W) with prediction values.
-        truth: 2D array (H, W) with ground truth values, or None.
-        var_name: Variable name for the title.
-        sample_idx: Sample index.
-        timestep: Timestep index.
-        output_path: Path to save the figure.
-        dpi: Output DPI.
+    Supports optional lon/lat coordinate axes and land mask overlay.
 
     Returns:
         The output_path on success.
@@ -294,21 +512,18 @@ def plot_single_sample_var(
         emax = float(np.nanpercentile(error[np.isfinite(error)], 99)) if np.any(np.isfinite(error)) else 1.0
 
         # Panel 1: Prediction
-        im0 = axes[0].imshow(pred, origin="lower", cmap=DEFAULT_CMAP, vmin=vmin, vmax=vmax, aspect="auto")
+        im0 = _plot_panel(axes[0], pred, lon, lat, mask, DEFAULT_CMAP, vmin, vmax)
         axes[0].set_title("Prediction", fontsize=11, fontweight="bold")
-        axes[0].axis("off")
         _add_colorbar(fig, axes[0], im0)
 
         # Panel 2: Ground Truth
-        im1 = axes[1].imshow(truth, origin="lower", cmap=DEFAULT_CMAP, vmin=vmin, vmax=vmax, aspect="auto")
+        im1 = _plot_panel(axes[1], truth, lon, lat, mask, DEFAULT_CMAP, vmin, vmax)
         axes[1].set_title("Ground Truth", fontsize=11, fontweight="bold")
-        axes[1].axis("off")
         _add_colorbar(fig, axes[1], im1)
 
         # Panel 3: Absolute Error
-        im2 = axes[2].imshow(error, origin="lower", cmap=ERROR_CMAP, vmin=0, vmax=emax, aspect="auto")
+        im2 = _plot_panel(axes[2], error, lon, lat, mask, ERROR_CMAP, 0, emax)
         axes[2].set_title("|Pred - Truth|", fontsize=11, fontweight="bold")
-        axes[2].axis("off")
         _add_colorbar(fig, axes[2], im2)
 
     else:
@@ -324,9 +539,8 @@ def plot_single_sample_var(
         else:
             vmin, vmax = 0.0, 1.0
 
-        im0 = ax.imshow(pred, origin="lower", cmap=DEFAULT_CMAP, vmin=vmin, vmax=vmax, aspect="auto")
+        im0 = _plot_panel(ax, pred, lon, lat, mask, DEFAULT_CMAP, vmin, vmax)
         ax.set_title("Prediction", fontsize=11, fontweight="bold")
-        ax.axis("off")
         _add_colorbar(fig, ax, im0)
 
     fig.suptitle(
@@ -349,19 +563,14 @@ def plot_overview_grid(
     sample_indices: List[int],
     output_path: str,
     dpi: int = 120,
+    lon: Optional[np.ndarray] = None,
+    lat: Optional[np.ndarray] = None,
+    mask: Optional[np.ndarray] = None,
 ) -> str:
     """Generate an overview grid showing all visualized samples.
 
-    Rows = samples, Columns = variables. Each cell shows the prediction heatmap.
-    If ground truth is available, a small error annotation is overlaid.
-
-    Args:
-        pred_index: Prediction file index from discover_predictions().
-        gt_data: Ground truth array (N, out_t, C, H, W) or None.
-        var_names: List of variable names.
-        sample_indices: List of sample indices to include.
-        output_path: Output file path.
-        dpi: Figure DPI.
+    Rows = samples, Columns = variables. Each cell shows the prediction heatmap
+    with optional coordinate axes and land mask overlay.
 
     Returns:
         The output_path on success.
@@ -408,12 +617,14 @@ def plot_overview_grid(
                 else:
                     vmin, vmax = 0.0, 1.0
 
-                im = ax.imshow(
-                    pred, origin="lower", cmap=DEFAULT_CMAP,
-                    vmin=vmin, vmax=vmax, aspect="auto",
-                )
-                ax.axis("off")
+                im = _plot_panel(ax, pred, lon, lat, mask, DEFAULT_CMAP, vmin, vmax)
                 _add_colorbar(fig, ax, im)
+
+                # Only show tick labels on outer edges to reduce clutter
+                if row < n_rows - 1:
+                    ax.set_xticklabels([])
+                if col > 0:
+                    ax.set_yticklabels([])
 
                 # Annotate with RMSE if ground truth is available
                 if gt_data is not None and si < gt_data.shape[0]:
@@ -519,65 +730,120 @@ def generate_predict_plots(
         vis_indices = [int(i * (n_total - 1) / max(n_vis - 1, 1)) for i in range(n_vis)]
         vis_sample_ids = [all_sample_ids[i] for i in vis_indices]
 
-    # ---- Load ground truth (optional) ----
+    # ---- Load ground truth ----
     gt_data: Optional[np.ndarray] = None
-    if dataset_root is not None and os.path.isdir(dataset_root):
-        # Try to load config from the log_dir first (config.yaml)
-        config_path = os.path.join(log_dir, "config.yaml")
-        in_t, out_t, stride = 1, 1, 1
-        gt_dyn_vars = var_names  # fallback to prediction variable names
 
-        if os.path.isfile(config_path):
-            try:
-                import yaml
-                with open(config_path, "r", encoding="utf-8") as f:
-                    train_cfg = yaml.safe_load(f)
-                data_cfg = train_cfg.get("data", {})
-                in_t = int(data_cfg.get("in_t", 1))
-                out_t = int(data_cfg.get("out_t", 1))
-                stride = int(data_cfg.get("stride", 1))
-                cfg_dyn_vars = data_cfg.get("dyn_vars")
-                if cfg_dyn_vars:
-                    gt_dyn_vars = cfg_dyn_vars
-            except Exception as e:
-                result["warnings"].append(f"Failed to parse config.yaml: {e}")
-        else:
-            # Try to get config from dataset var_names.json
-            ds_cfg = load_ground_truth_config(dataset_root)
-            if ds_cfg["dyn_vars"]:
-                gt_dyn_vars = ds_cfg["dyn_vars"]
-
+    # Priority 1: Truth files saved alongside predictions by predict()
+    gt_data = load_ground_truth_from_pred_dir(pred_dir)
+    if gt_data is not None:
         print(
-            f"[Info] Loading ground truth: in_t={in_t}, out_t={out_t}, "
-            f"stride={stride}, vars={gt_dyn_vars}",
+            f"[Info] Ground truth loaded from prediction dir: shape={gt_data.shape} "
+            f"(N={gt_data.shape[0]}, out_t={gt_data.shape[1]}, "
+            f"n_vars={gt_data.shape[2]}, H={gt_data.shape[3]}, W={gt_data.shape[4]})",
             file=sys.stderr,
         )
 
-        gt_data = load_ground_truth_test_set(
-            dataset_root=dataset_root,
-            dyn_vars=gt_dyn_vars,
-            in_t=in_t,
-            out_t=out_t,
-            stride=stride,
-        )
+    # Priority 2: Load from dataset_root (fallback)
+    if gt_data is None:
+        # Auto-detect dataset_root from config.yaml if not provided
+        if dataset_root is None:
+            config_path = os.path.join(log_dir, "config.yaml")
+            if os.path.isfile(config_path):
+                try:
+                    import yaml
+                    with open(config_path, "r", encoding="utf-8") as f:
+                        cfg = yaml.safe_load(f)
+                    data_cfg_auto = cfg.get("data", {})
+                    dataset_root = data_cfg_auto.get("dataset_root") or data_cfg_auto.get("data_path")
+                    if dataset_root:
+                        print(f"[Info] Auto-detected dataset_root from config.yaml: {dataset_root}", file=sys.stderr)
+                except Exception:
+                    pass
 
-        if gt_data is not None:
+            # Also try predict_meta.json
+            if dataset_root is None:
+                meta_path = os.path.join(pred_dir, "predict_meta.json")
+                if os.path.isfile(meta_path):
+                    try:
+                        with open(meta_path, "r", encoding="utf-8") as f:
+                            meta = json.load(f)
+                        dataset_root = meta.get("dataset_root")
+                        if dataset_root:
+                            print(f"[Info] Auto-detected dataset_root from predict_meta.json: {dataset_root}", file=sys.stderr)
+                    except Exception:
+                        pass
+
+        if dataset_root is not None and os.path.isdir(dataset_root):
+            # Try to load config from the log_dir first (config.yaml)
+            config_path = os.path.join(log_dir, "config.yaml")
+            in_t, out_t, stride = 1, 1, 1
+            gt_dyn_vars = var_names  # fallback to prediction variable names
+
+            if os.path.isfile(config_path):
+                try:
+                    import yaml
+                    with open(config_path, "r", encoding="utf-8") as f:
+                        train_cfg = yaml.safe_load(f)
+                    data_cfg = train_cfg.get("data", {})
+                    in_t = int(data_cfg.get("in_t", 1))
+                    out_t = int(data_cfg.get("out_t", 1))
+                    stride = int(data_cfg.get("stride", 1))
+                    cfg_dyn_vars = data_cfg.get("dyn_vars")
+                    if cfg_dyn_vars:
+                        gt_dyn_vars = cfg_dyn_vars
+                except Exception as e:
+                    result["warnings"].append(f"Failed to parse config.yaml: {e}")
+            else:
+                # Try to get config from dataset var_names.json
+                ds_cfg = load_ground_truth_config(dataset_root)
+                if ds_cfg["dyn_vars"]:
+                    gt_dyn_vars = ds_cfg["dyn_vars"]
+
             print(
-                f"[Info] Ground truth loaded: shape={gt_data.shape} "
-                f"(N_samples={gt_data.shape[0]}, out_t={gt_data.shape[1]}, "
-                f"n_vars={gt_data.shape[2]}, H={gt_data.shape[3]}, W={gt_data.shape[4]})",
+                f"[Info] Loading ground truth from dataset_root: in_t={in_t}, out_t={out_t}, "
+                f"stride={stride}, vars={gt_dyn_vars}",
                 file=sys.stderr,
             )
-        else:
-            result["warnings"].append(
-                "Could not load ground truth from dataset_root. "
-                "Plots will show prediction only (no comparison)."
+
+            gt_data = load_ground_truth_test_set(
+                dataset_root=dataset_root,
+                dyn_vars=gt_dyn_vars,
+                in_t=in_t,
+                out_t=out_t,
+                stride=stride,
             )
-            print("[Warn] Ground truth not available, showing predictions only.", file=sys.stderr)
-    else:
-        if dataset_root is not None:
-            result["warnings"].append(f"dataset_root does not exist: {dataset_root}")
-        print("[Info] No dataset_root provided, showing predictions only.", file=sys.stderr)
+
+            if gt_data is not None:
+                print(
+                    f"[Info] Ground truth loaded: shape={gt_data.shape} "
+                    f"(N={gt_data.shape[0]}, out_t={gt_data.shape[1]}, "
+                    f"n_vars={gt_data.shape[2]}, H={gt_data.shape[3]}, W={gt_data.shape[4]})",
+                    file=sys.stderr,
+                )
+            else:
+                result["warnings"].append(
+                    "Could not load ground truth from dataset_root. "
+                    "Plots will show prediction only (no comparison)."
+                )
+                print("[Warn] Ground truth not available, showing predictions only.", file=sys.stderr)
+        else:
+            if dataset_root is not None:
+                result["warnings"].append(f"dataset_root does not exist: {dataset_root}")
+            print("[Info] No ground truth available, showing predictions only.", file=sys.stderr)
+
+    # ---- Load static data (coordinates + land mask) ----
+    # Resolve dataset_root for static data loading (may have been auto-detected above)
+    static_data = load_static_data(dataset_root)
+    s_lon = static_data["lon"]
+    s_lat = static_data["lat"]
+    s_mask = static_data["mask"]
+    if s_lon is not None or s_lat is not None:
+        print(
+            f"[Info] Static data loaded: lon={'(' + 'x'.join(str(x) for x in s_lon.shape) + ')' if s_lon is not None else 'None'}, "
+            f"lat={'(' + 'x'.join(str(x) for x in s_lat.shape) + ')' if s_lat is not None else 'None'}, "
+            f"mask={'(' + 'x'.join(str(x) for x in s_mask.shape) + ')' if s_mask is not None else 'None'}",
+            file=sys.stderr,
+        )
 
     # ---- Generate per-sample comparison plots ----
     print(f"[Info] Generating per-sample plots for {len(vis_sample_ids)} samples...", file=sys.stderr)
@@ -622,6 +888,9 @@ def generate_predict_plots(
                         sample_idx=si,
                         timestep=ts_idx,
                         output_path=out_path,
+                        lon=s_lon,
+                        lat=s_lat,
+                        mask=s_mask,
                     )
                     result["plots"].append(out_path)
                     print(f"  [{si}] {out_name}", file=sys.stderr)
@@ -638,6 +907,9 @@ def generate_predict_plots(
             var_names=var_names,
             sample_indices=vis_sample_ids,
             output_path=overview_path,
+            lon=s_lon,
+            lat=s_lat,
+            mask=s_mask,
         )
         result["plots"].append(overview_path)
         print(f"  predict_overview.png", file=sys.stderr)

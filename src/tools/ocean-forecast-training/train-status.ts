@@ -5,9 +5,10 @@
  *              Reuses shared trainingProcessManager.
  * @author Leizheng
  * @date 2026-02-26
- * @version 1.0.0
+ * @version 1.1.0
  *
  * @changelog
+ *   - 2026-02-26 Leizheng: v1.1.0 completed state returns progress + visualization/report actions
  *   - 2026-02-26 Leizheng: v1.0.0 initial version for ocean forecast training
  */
 
@@ -127,7 +128,7 @@ export const oceanForecastTrainStatusTool = defineTool({
         }
       }
 
-      return {
+      const watchResponse: Record<string, unknown> = {
         status: 'ok',
         process_id,
         process_status: result.processStatus,
@@ -141,6 +142,26 @@ export const oceanForecastTrainStatusTool = defineTool({
             ? result.processInfo.errorSummary
             : undefined,
       }
+
+      // Append actions when process has finished so Agent knows the next step.
+      if (result.processStatus === 'completed' || result.processStatus === 'failed') {
+        const logDir = result.processInfo?.metadata?.logDir as string | undefined
+        const isPredict = result.processInfo?.metadata?.mode === 'predict'
+        if (result.processStatus === 'completed') {
+          if (isPredict) {
+            watchResponse.actions = [
+              `生成预测可视化: ocean_forecast_train_visualize({ log_dir: "${logDir ?? '...'}", mode: "predict" })`,
+            ]
+          } else {
+            watchResponse.actions = [
+              `生成训练可视化: ocean_forecast_train_visualize({ log_dir: "${logDir ?? '...'}", mode: "train" })`,
+              `生成训练报告: ocean_forecast_train_report({ log_dir: "${logDir ?? '...'}" })`,
+            ]
+          }
+        }
+      }
+
+      return watchResponse
     }
 
     const processInfo = trainingProcessManager.getProcess(process_id)
@@ -194,7 +215,7 @@ export const oceanForecastTrainStatusTool = defineTool({
         }
       }
 
-      return {
+      const logsResponse: Record<string, unknown> = {
         status: 'ok',
         process_id,
         process_status: processInfo.status,
@@ -208,6 +229,27 @@ export const oceanForecastTrainStatusTool = defineTool({
             ? `进程仍在运行，可使用 offset=${logsResult.offset} 获取后续日志`
             : '进程已结束',
       }
+
+      // Append next-step actions for completed/failed processes so Agent
+      // can discover the visualization / report workflow from logs queries too.
+      if (processInfo.status !== 'running') {
+        const logDir = processInfo.metadata?.logDir as string | undefined
+        const isPredict = processInfo.metadata?.mode === 'predict'
+        if (processInfo.status === 'completed') {
+          if (isPredict) {
+            logsResponse.actions = [
+              `生成预测可视化: ocean_forecast_train_visualize({ log_dir: "${logDir ?? '...'}", mode: "predict" })`,
+            ]
+          } else {
+            logsResponse.actions = [
+              `生成训练可视化: ocean_forecast_train_visualize({ log_dir: "${logDir ?? '...'}", mode: "train" })`,
+              `生成训练报告: ocean_forecast_train_report({ log_dir: "${logDir ?? '...'}" })`,
+            ]
+          }
+        }
+      }
+
+      return logsResponse
     }
 
     // Default: status query
@@ -238,7 +280,8 @@ function buildStatusResponse(
     errorLogFile: processInfo.errorLogFile,
   }
 
-  if (processInfo.status === 'running' && processInfo.progress) {
+  // Show progress for both running and completed states (final progress snapshot)
+  if (processInfo.progress) {
     response.progress = processInfo.progress
   }
 
@@ -260,17 +303,36 @@ function buildStatusResponse(
 
   const isPredict = processInfo.metadata?.mode === 'predict'
   const actionLabel = isPredict ? '推理' : '训练'
-  response.actions =
-    processInfo.status === 'running'
-      ? [
-          `查看日志: ocean_forecast_train_status({ action: "logs", process_id: "${process_id}", tail: 50 })`,
-          `等待完成: ocean_forecast_train_status({ action: "wait", process_id: "${process_id}", timeout: 120 })`,
-          `等待推送: ocean_forecast_train_status({ action: "watch", process_id: "${process_id}", timeout: 300 })`,
-          `终止${actionLabel}: ocean_forecast_train_status({ action: "kill", process_id: "${process_id}" })`,
-        ]
-      : [
-          `查看完整日志: ocean_forecast_train_status({ action: "logs", process_id: "${process_id}", tail: 200 })`,
-        ]
+  const logDir = processInfo.metadata?.logDir as string | undefined
+
+  if (processInfo.status === 'running') {
+    response.actions = [
+      `查看日志: ocean_forecast_train_status({ action: "logs", process_id: "${process_id}", tail: 50 })`,
+      `等待完成: ocean_forecast_train_status({ action: "wait", process_id: "${process_id}", timeout: 120 })`,
+      `等待推送: ocean_forecast_train_status({ action: "watch", process_id: "${process_id}", timeout: 300 })`,
+      `终止${actionLabel}: ocean_forecast_train_status({ action: "kill", process_id: "${process_id}" })`,
+    ]
+  } else if (processInfo.status === 'completed') {
+    const actions = [
+      `查看完整日志: ocean_forecast_train_status({ action: "logs", process_id: "${process_id}", tail: 200 })`,
+    ]
+    if (isPredict) {
+      actions.push(
+        `生成预测可视化: ocean_forecast_train_visualize({ log_dir: "${logDir ?? '...'}", mode: "predict" })`,
+      )
+    } else {
+      actions.push(
+        `生成训练可视化: ocean_forecast_train_visualize({ log_dir: "${logDir ?? '...'}", mode: "train" })`,
+        `生成训练报告: ocean_forecast_train_report({ log_dir: "${logDir ?? '...'}" })`,
+      )
+    }
+    response.actions = actions
+  } else {
+    // failed / killed
+    response.actions = [
+      `查看完整日志: ocean_forecast_train_status({ action: "logs", process_id: "${process_id}", tail: 200 })`,
+    ]
+  }
 
   return response
 }
@@ -280,13 +342,13 @@ function getNotificationMessage(type?: string): string {
     case 'training_start':
       return '训练启动成功，已开始执行。'
     case 'training_end':
-      return '训练已完成，最终指标见 notification.payload。'
+      return '训练已完成，最终指标见 notification.payload。建议接下来生成可视化图表和训练报告。'
     case 'predict_start':
       return '推理启动成功，已开始执行。'
     case 'training_error':
       return '过程中捕获到错误事件。'
     case 'predict_end':
-      return '推理已完成。'
+      return '推理已完成。建议接下来生成预测可视化图表。'
     case 'process_exit':
       return '进程已结束。'
     default:

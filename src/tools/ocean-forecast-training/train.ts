@@ -3,9 +3,10 @@
  * @description Ocean forecast training tool - 4-stage confirmation workflow
  * @author Leizheng
  * @date 2026-02-26
- * @version 1.0.0
+ * @version 1.1.0
  *
  * @changelog
+ *   - 2026-02-26 Leizheng: v1.1.0 fix PASS phase reads device_ids from mergedParams instead of raw args
  *   - 2026-02-26 Leizheng: v1.0.0 initial version for ocean forecast training
  */
 
@@ -534,17 +535,18 @@ export const oceanForecastTrainTool = defineTool({
     }
 
     // ===== 3. PASS 阶段：执行训练 =====
-    const {
-      dataset_root,
-      log_dir,
-      model_name,
-      dyn_vars,
-      mode = 'train',
-      device_ids = [0],
-      distribute = false,
-      distribute_mode = 'DDP',
-      ckpt_path,
-    } = args
+    // Read from merged workflow params (session-confirmed values) to ensure
+    // user-confirmed device_ids etc. are not overwritten by raw args defaults.
+    const mergedForExec = workflow.getParams()
+    const dataset_root = mergedForExec.dataset_root ?? args.dataset_root
+    const log_dir = mergedForExec.log_dir ?? args.log_dir
+    const model_name = mergedForExec.model_name ?? args.model_name
+    const dyn_vars = mergedForExec.dyn_vars ?? args.dyn_vars
+    const mode = mergedForExec.mode ?? args.mode ?? 'train'
+    const device_ids = mergedForExec.device_ids ?? args.device_ids ?? [0]
+    const distribute = mergedForExec.distribute ?? args.distribute ?? false
+    const distribute_mode = mergedForExec.distribute_mode ?? args.distribute_mode ?? 'DDP'
+    const ckpt_path = mergedForExec.ckpt_path ?? args.ckpt_path
 
     if (!log_dir) {
       return {
@@ -674,7 +676,7 @@ export const oceanForecastTrainTool = defineTool({
             `调用 ocean_forecast_train_status({ action: "wait", process_id: "${processInfo.id}", timeout: 300 }) 等待推理完成`,
             `调用 ocean_forecast_train_status({ process_id: "${processInfo.id}" }) 查看推理状态`,
             `调用 ocean_forecast_train_status({ action: "logs", process_id: "${processInfo.id}", tail: 50 }) 查看最新日志`,
-            `推理完成后调用 ocean_forecast_visualize({ log_dir: "${log_dir}", mode: "predict" }) 生成可视化`,
+            `推理完成后调用 ocean_forecast_train_visualize({ log_dir: "${log_dir}", mode: "predict" }) 生成可视化`,
           ],
         }
       }

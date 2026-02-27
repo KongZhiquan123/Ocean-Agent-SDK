@@ -87,7 +87,7 @@
 | `offset` | number | 日志字节偏移量 |
 | `timeout` | number | wait/watch 超时秒数（默认 120） |
 
-## ocean_forecast_visualize 参数
+## ocean_forecast_train_visualize 参数
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
@@ -96,7 +96,7 @@
 | `dataset_root` | string | predict 模式需要 |
 | `n_samples` | number | 最多可视化样本数（默认 5） |
 
-## ocean_forecast_generate_report 参数
+## ocean_forecast_train_report 参数
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
