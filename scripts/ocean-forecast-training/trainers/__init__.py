@@ -23,6 +23,16 @@ TRAINER_REGISTRY = {
     "ONO": BaseTrainer,
     "LSM": BaseTrainer,
     "LNO": BaseTrainer,
+    "OceanCNN": BaseTrainer,
+    "OceanResNet": BaseTrainer,
+    "OceanViT": BaseTrainer,
+    "Fuxi": BaseTrainer,
+    "Fengwu": BaseTrainer,
+    "Pangu": BaseTrainer,
+    "Crossformer": BaseTrainer,
+    "NNG": BaseTrainer,
+    "OneForecast": BaseTrainer,
+    "GraphCast": BaseTrainer,
 }
 
 __all__ = ['BaseTrainer', 'TRAINER_REGISTRY']

@@ -6,6 +6,7 @@
 @version 1.0.0
 
 @changelog
+  - 2026-02-27 Leizheng: v1.1.0 add 10 NeuralFramework model learning rates
   - 2026-02-26 Leizheng: v1.0.0 initial version for ocean forecast training
     - Probe with batch=1 via estimate_memory.py to measure per-sample GPU memory
     - Derive max batch_size (power-of-2, 70% safety margin)
@@ -61,6 +62,17 @@ BASE_LR: dict[str, float] = {
     'FNO1d':                1e-3,
     'UNet3d':               1e-3,
     'FNO3d':                1e-3,
+    # NeuralFramework models
+    'OceanCNN':             1e-3,
+    'OceanResNet':          1e-3,
+    'OceanViT':             3e-4,
+    'Fuxi':                 2e-4,
+    'Fengwu':               2e-4,
+    'Pangu':                2e-4,
+    'Crossformer':          3e-4,
+    'NNG':                  5e-4,
+    'OneForecast':          5e-4,
+    'GraphCast':            5e-4,
 }
 BASE_BATCH = 4  # Reference batch_size that the above BASE_LR values correspond to
 

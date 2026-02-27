@@ -828,8 +828,11 @@ class BaseTrainer:
             except OSError:
                 shutil.copy2(src_model, dst_model)
 
-        # Copy small files: train.log, config.yaml
-        for fname in ("train.log", "config.yaml"):
+        # Copy small files: config.yaml
+        # NOTE: Do NOT copy train.log — the TS wrapper already creates its own
+        # log file (train-{id}.log) in original_log_dir, and having two .log
+        # files causes duplicate event extraction in visualization scripts.
+        for fname in ("config.yaml",):
             src = os.path.join(self.saving_path, fname)
             dst = os.path.join(original_log_dir, fname)
             if os.path.exists(src) and not os.path.exists(dst):
@@ -1023,13 +1026,13 @@ class BaseTrainer:
         y: torch.Tensor,
     ) -> Dict[str, Dict[str, float]]:
         """
-        Compute per-variable RMSE and MAE.
+        Compute per-variable RMSE, MAE and MSE.
 
         Assumes the last dimension of y_pred / y is ``out_t * C`` where C is the
         number of dynamic variables. The tensor is reshaped to
         ``(B, ..., out_t, C)`` and metrics are computed per channel.
 
-        Returns a dict mapping variable name -> {"rmse": ..., "mae": ...}.
+        Returns a dict mapping variable name -> {"rmse": ..., "mae": ..., "mse": ...}.
         """
         dyn_vars: List[str] = self.data_args.get("dyn_vars", [])
         if not dyn_vars:
@@ -1056,7 +1059,8 @@ class BaseTrainer:
             diff = pred_c - targ_c
             rmse_val = float(torch.sqrt((diff * diff).mean()).item())
             mae_val = float(diff.abs().mean().item())
-            result[var_name] = {"rmse": rmse_val, "mae": mae_val}
+            mse_val = float((diff * diff).mean().item())
+            result[var_name] = {"rmse": rmse_val, "mae": mae_val, "mse": mse_val}
 
         return result
 
