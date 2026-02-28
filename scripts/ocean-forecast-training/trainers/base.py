@@ -8,6 +8,7 @@
 # @version      2.0.2
 #
 # @changelog
+#   - 2026-02-27 Leizheng: v2.0.3 remove _promote_artifacts (conflicts with custom output paths)
 #   - 2026-02-27 Leizheng: v2.0.2 add _promote_artifacts + saving_path in training_end event
 #   - 2026-02-26 Leizheng: v2.0.1 fix event key / double-stdout / predict batch_size
 #     - _log_json_event: "type" → "event" key (match SR + TS process manager)
@@ -794,65 +795,6 @@ class BaseTrainer:
                 self.main_log(f"Warning: auto-predict failed: {e}")
                 self._log_json_event({"type": "predict_error", "error": str(e)})
 
-        # Promote key artifacts to the original log_dir for downstream tools
-        if self._is_main_process():
-            try:
-                self._promote_artifacts()
-            except Exception as e:
-                self.main_log(f"Warning: promote artifacts failed: {e}")
-
-    def _promote_artifacts(self) -> None:
-        """Copy/symlink key artifacts from nested saving_path to original log_dir.
-
-        The logger creates a nested directory structure under log_dir
-        (log_dir/dataset/date/model_time/), but downstream TS tools only
-        know about the original log_dir.  This method bridges the gap by
-        placing symlinks or copies of critical files in log_dir.
-        """
-        import shutil
-
-        original_log_dir = self.args.get("log", {}).get("log_dir")
-        if not original_log_dir or not self.saving_path:
-            return
-        if os.path.normpath(original_log_dir) == os.path.normpath(self.saving_path):
-            return  # same directory, nothing to do
-
-        os.makedirs(original_log_dir, exist_ok=True)
-
-        # Symlink best_model.pth (large file — prefer symlink)
-        src_model = os.path.join(self.saving_path, "best_model.pth")
-        dst_model = os.path.join(original_log_dir, "best_model.pth")
-        if os.path.exists(src_model) and not os.path.exists(dst_model):
-            try:
-                os.symlink(os.path.abspath(src_model), dst_model)
-            except OSError:
-                shutil.copy2(src_model, dst_model)
-
-        # Copy small files: train.log, config.yaml
-        for fname in ("train.log", "config.yaml"):
-            src = os.path.join(self.saving_path, fname)
-            dst = os.path.join(original_log_dir, fname)
-            if os.path.exists(src) and not os.path.exists(dst):
-                shutil.copy2(src, dst)
-
-        # Copy plots directory if it exists
-        src_plots = os.path.join(self.saving_path, "plots")
-        dst_plots = os.path.join(original_log_dir, "plots")
-        if os.path.isdir(src_plots) and not os.path.exists(dst_plots):
-            try:
-                os.symlink(os.path.abspath(src_plots), dst_plots)
-            except OSError:
-                shutil.copytree(src_plots, dst_plots)
-
-        # Copy predictions directory if it exists
-        src_preds = os.path.join(self.saving_path, "predictions")
-        dst_preds = os.path.join(original_log_dir, "predictions")
-        if os.path.isdir(src_preds) and not os.path.exists(dst_preds):
-            try:
-                os.symlink(os.path.abspath(src_preds), dst_preds)
-            except OSError:
-                shutil.copytree(src_preds, dst_preds)
-
     # ----------------------------------------------------------------------
     # Train / eval
     # ----------------------------------------------------------------------
@@ -1023,13 +965,13 @@ class BaseTrainer:
         y: torch.Tensor,
     ) -> Dict[str, Dict[str, float]]:
         """
-        Compute per-variable RMSE and MAE.
+        Compute per-variable RMSE, MAE and MSE.
 
         Assumes the last dimension of y_pred / y is ``out_t * C`` where C is the
         number of dynamic variables. The tensor is reshaped to
         ``(B, ..., out_t, C)`` and metrics are computed per channel.
 
-        Returns a dict mapping variable name -> {"rmse": ..., "mae": ...}.
+        Returns a dict mapping variable name -> {"rmse": ..., "mae": ..., "mse": ...}.
         """
         dyn_vars: List[str] = self.data_args.get("dyn_vars", [])
         if not dyn_vars:
@@ -1056,7 +998,8 @@ class BaseTrainer:
             diff = pred_c - targ_c
             rmse_val = float(torch.sqrt((diff * diff).mean()).item())
             mae_val = float(diff.abs().mean().item())
-            result[var_name] = {"rmse": rmse_val, "mae": mae_val}
+            mse_val = float((diff * diff).mean().item())
+            result[var_name] = {"rmse": rmse_val, "mae": mae_val, "mse": mse_val}
 
         return result
 

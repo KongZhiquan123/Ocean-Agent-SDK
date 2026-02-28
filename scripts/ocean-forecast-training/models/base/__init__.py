@@ -1,6 +1,7 @@
 # models/base/__init__.py
 from .embedding import unified_pos_embedding, rotary_pos_embedding, rotary_2d_pos_embedding, rotary_3d_pos_embedding, timestep_embedding, RotaryEmbedding1D
 from .utils import get_activation
+from .forecast_adapter import ForecastModelAdapter
 
 from .mlp import BaseMLP
 from .attention import  (
@@ -31,4 +32,5 @@ __all__ = [
     "RoPE1DAdapter",
     "RoPE2DAdapter",
     "RoPE3DAdapter",
+    "ForecastModelAdapter",
 ]

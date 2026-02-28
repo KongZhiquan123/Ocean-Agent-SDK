@@ -7,6 +7,7 @@
 @version 1.0.0
 
 @changelog
+  - 2026-02-27 Leizheng: v1.1.0 add 10 NeuralFramework models
   - 2026-02-26 Leizheng: v1.0.0 initial version for ocean forecast training
 """
 
@@ -134,6 +135,77 @@ SUPPORTED_MODELS = [
         "description": "Fourier Neural Operator 3D",
         "recommended": False,
         "notes": "For volumetric data; captures 3D spectral patterns",
+    },
+    # NeuralFramework models
+    {
+        "name": "OceanCNN",
+        "category": "cnn",
+        "description": "Ocean CNN - basic encoder-decoder baseline",
+        "recommended": False,
+        "notes": "Simple baseline CNN; H,W must be divisible by 8",
+    },
+    {
+        "name": "OceanResNet",
+        "category": "cnn",
+        "description": "Ocean ResNet-18 - residual encoder-decoder",
+        "recommended": False,
+        "notes": "ResNet-18 backbone with decoder; auto-resizes spatial output",
+    },
+    {
+        "name": "OceanViT",
+        "category": "transformer",
+        "description": "Ocean Vision Transformer - patch-based ViT",
+        "recommended": False,
+        "notes": "Standard ViT; H,W must be divisible by patch_size (default 8)",
+    },
+    {
+        "name": "Fuxi",
+        "category": "transformer",
+        "description": "Fuxi - Swin-based 2D/3D dual path weather model",
+        "recommended": True,
+        "notes": "Weather-adapted architecture; requires timm; strong for large grids",
+    },
+    {
+        "name": "Fengwu",
+        "category": "transformer",
+        "description": "Fengwu - multi-scale 2D+3D encoder-decoder",
+        "recommended": False,
+        "notes": "Multi-scale architecture; high memory; requires einops",
+    },
+    {
+        "name": "Pangu",
+        "category": "transformer",
+        "description": "Pangu - earth-aware attention with 2D+3D paths",
+        "recommended": False,
+        "notes": "Earth-specific position bias; high memory; requires einops",
+    },
+    {
+        "name": "Crossformer",
+        "category": "transformer",
+        "description": "Crossformer - temporal-spatial two-stage attention",
+        "recommended": True,
+        "notes": "Explicit temporal modeling; good for multi-step prediction",
+    },
+    {
+        "name": "NNG",
+        "category": "graph",
+        "description": "NNG - Neural Network on Graphs with icosahedron mesh",
+        "recommended": False,
+        "notes": "Graph-based; requires scikit-learn + scipy; high memory",
+    },
+    {
+        "name": "OneForecast",
+        "category": "graph",
+        "description": "OneForecast - simplified graph neural network",
+        "recommended": False,
+        "notes": "Simplified graph ops; requires scikit-learn + scipy",
+    },
+    {
+        "name": "GraphCast",
+        "category": "graph",
+        "description": "GraphCast - mesh-based graph neural network",
+        "recommended": False,
+        "notes": "Mesh-based GNN; requires scikit-learn + scipy; high memory",
     },
 ]
 

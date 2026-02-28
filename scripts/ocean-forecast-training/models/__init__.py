@@ -11,6 +11,16 @@ from .gnot import GNOT
 from .ono import ONO
 from .lsm import LSM
 from .lno import LNO
+from .ocean_cnn import OceanCNN
+from .ocean_resnet import OceanResNet
+from .ocean_vit import OceanViT
+from .fuxi import Fuxi
+from .fengwu import Fengwu
+from .pangu import Pangu
+from .crossformer import Crossformer
+from .nng import NNG
+from .oneforecast import OneForecast
+from .graphcast import GraphCast
 
 
 MODEL_REGISTRY = {
@@ -31,13 +41,26 @@ MODEL_REGISTRY = {
     "ONO": ONO,
     "LSM": LSM,
     "LNO": LNO,
+    "OceanCNN": OceanCNN,
+    "OceanResNet": OceanResNet,
+    "OceanViT": OceanViT,
+    "Fuxi": Fuxi,
+    "Fengwu": Fengwu,
+    "Pangu": Pangu,
+    "Crossformer": Crossformer,
+    "NNG": NNG,
+    "OneForecast": OneForecast,
+    "GraphCast": GraphCast,
 }
 
 __all__ = [
-    "MODEL_REGISTRY", 
-    "MLP", "UNet1d", "UNet2d", "UNet3d", 
+    "MODEL_REGISTRY",
+    "MLP", "UNet1d", "UNet2d", "UNet3d",
     "FNO1d", "FNO2d", "FNO3d",
     "Transformer", "M2NO2d", "SwinTransformerV2", "SwinMLP",
     "GalerkinTransformer", "Transolver", "GNOT", "ONO", "LSM",
     "LNO",
-    ]
+    "OceanCNN", "OceanResNet", "OceanViT",
+    "Fuxi", "Fengwu", "Pangu", "Crossformer",
+    "NNG", "OneForecast", "GraphCast",
+]
