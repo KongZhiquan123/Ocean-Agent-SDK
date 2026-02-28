@@ -86,9 +86,8 @@
 | `mesh_level` | NNG/OneForecast/GraphCast | int | 3 | 网格细分级别 |
 
 **注意事项**:
-- NNG/GraphCast 的 AMP 默认关闭（图操作对半精度敏感）
 - Fuxi/Fengwu/Pangu 及 3 个图模型属于 HEAVY_MODELS，建议开启 gradient_checkpointing
-- 图模型需安装 `dgl` 和 `scikit-learn`：`pip install dgl scikit-learn`
+- 图模型需安装 `scikit-learn` 和 `scipy`：`pip install scikit-learn scipy`
 
 #### OOM 防护参数
 

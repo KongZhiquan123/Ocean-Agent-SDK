@@ -191,21 +191,21 @@ SUPPORTED_MODELS = [
         "category": "graph",
         "description": "NNG - Neural Network on Graphs with icosahedron mesh",
         "recommended": False,
-        "notes": "Graph-based; requires dgl + scikit-learn; high memory",
+        "notes": "Graph-based; requires scikit-learn + scipy; high memory",
     },
     {
         "name": "OneForecast",
         "category": "graph",
         "description": "OneForecast - simplified graph neural network",
         "recommended": False,
-        "notes": "Simplified graph ops; requires dgl + scikit-learn",
+        "notes": "Simplified graph ops; requires scikit-learn + scipy",
     },
     {
         "name": "GraphCast",
         "category": "graph",
         "description": "GraphCast - mesh-based graph neural network",
         "recommended": False,
-        "notes": "Mesh-based GNN; requires dgl + scikit-learn; high memory",
+        "notes": "Mesh-based GNN; requires scikit-learn + scipy; high memory",
     },
 ]
 

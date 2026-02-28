@@ -101,22 +101,22 @@
 
 #### NNG
 - **类别**: 图神经网络
-- **特点**: 基于正二十面体网格的消息传递
-- **依赖**: dgl, scikit-learn
-- **内存**: 高（属于 HEAVY_MODELS），AMP 默认关闭
+- **特点**: 基于正二十面体网格的消息传递，纯 PyTorch 实现
+- **依赖**: scikit-learn, scipy
+- **内存**: 高（属于 HEAVY_MODELS）
 - **配置**: hidden_dim=256, num_processor_layers=8, mesh_level=3
 
 #### OneForecast
 - **类别**: 图神经网络
-- **特点**: 简化图操作（无 DGL 对象共享），DataParallel 兼容
-- **依赖**: dgl, scikit-learn
+- **特点**: 简化图操作，纯 PyTorch index_add_ 消息传递，DataParallel 兼容
+- **依赖**: scikit-learn, scipy
 - **配置**: hidden_dim=256, num_processor_layers=8, mesh_level=3
 
 #### GraphCast
 - **类别**: 图神经网络
-- **特点**: 网格级消息传递 + 可选 RNN 时间编码
-- **依赖**: dgl, scikit-learn
-- **内存**: 高（属于 HEAVY_MODELS），AMP 默认关闭
+- **特点**: 网格级消息传递 + 可选 RNN 时间编码，纯 PyTorch 实现
+- **依赖**: scikit-learn, scipy
+- **内存**: 高（属于 HEAVY_MODELS）
 - **配置**: hidden_dim=256, num_processor_layers=8, mesh_level=3
 
 ### 其他模型
@@ -139,4 +139,4 @@
 5. **空间分辨率小 (<64x64)**: Transformer 或 MLP
 6. **多步预测**: Crossformer（显式时间建模优势）
 7. **气象预测风格**: Fuxi > Fengwu > Pangu（从简到复杂）
-8. **图方法探索**: OneForecast > NNG > GraphCast（需安装 dgl）
+8. **图方法探索**: OneForecast > NNG > GraphCast（需安装 scikit-learn + scipy）
