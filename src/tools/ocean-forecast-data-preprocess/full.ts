@@ -7,9 +7,10 @@
  * @author Leizheng
  * @contributors kongzhiquan
  * @date 2026-02-25
- * @version 1.2.0
+ * @version 1.2.1
  *
  * @changelog
+ *   - 2026-03-02 kongzhiquan: v1.2.1 在调用侧对 Step B 结果精简，避免超量 token 消耗
  *   - 2026-02-26 kongzhiquan: v1.2.0 添加notebook生成逻辑，执行完 Step B 后生成包含预处理代码和结果的 Jupyter Notebook，方便用户复现和调整预处理流程
  *   - 2026-02-26 Leizheng: v1.1.0 将 static_file 作为 grid_file 传给 forecast_preprocess.py
  *     - 支持 ROMS 等模式的独立网格文件（坐标/掩码变量不在数据文件中的情况）
@@ -23,7 +24,7 @@
  */
 
 import { defineTool } from '@shareai-lab/kode-sdk'
-import os from 'node:os'
+import { MAX_ERRORS, MAX_WARNINGS, MAX_RULE_ERRORS} from '@/utils/constants'
 import path from 'node:path'
 import { findFirstPythonPath } from '@/utils/python-manager'
 import { oceanInspectDataTool } from '../ocean-SR-data-preprocess/inspect'
@@ -31,7 +32,59 @@ import { oceanForecastPreprocessVisualizeTool } from './visualize'
 import { ForecastWorkflow, WorkflowState } from './workflow-state'
 import { generateForecastPreprocessCells, saveOrAppendNotebook } from './notebook'
 
-const DEFAULT_WORKERS = Math.max(1, Math.min(8, os.cpus().length || 1))
+/**
+ * 对 forecast_preprocess.py 返回的原始结果进行精简，
+ * 避免超量 warnings / validation errors 导致传给 Agent 的 token 爆炸。
+ * 完整原始结果已由 Python 侧写入 preprocess_manifest.json，此处只保留摘要。
+ */
+function summarizeStepBResult(raw: any): any {
+
+  const warnings: string[] = raw.warnings || []
+  const errors: string[]   = raw.errors   || []
+
+  const slimWarnings = warnings.length > MAX_WARNINGS
+    ? [...warnings.slice(0, MAX_WARNINGS), `...（共 ${warnings.length} 条警告，详见 preprocess_manifest.json）`]
+    : warnings
+
+  const slimErrors = errors.length > MAX_ERRORS
+    ? [...errors.slice(0, MAX_ERRORS), `...（共 ${errors.length} 条错误）`]
+    : errors
+
+  let slimValidation: any = raw.post_validation
+  if (slimValidation && typeof slimValidation === 'object' && !slimValidation.skipped) {
+    slimValidation = {}
+    for (const [ruleName, ruleResult] of Object.entries(raw.post_validation as Record<string, any>)) {
+      if (ruleResult && typeof ruleResult === 'object') {
+        const ruleErrors: string[] = ruleResult.errors || []
+        slimValidation[ruleName] = {
+          passed: ruleResult.passed,
+          error_count: ruleErrors.length,
+          ...(ruleErrors.length > 0 && {
+            errors_sample: ruleErrors.length > MAX_RULE_ERRORS
+              ? [...ruleErrors.slice(0, MAX_RULE_ERRORS), `...（共 ${ruleErrors.length} 条，详见 preprocess_manifest.json）`]
+              : ruleErrors
+          }),
+          ...(ruleResult.skipped  !== undefined && { skipped:  ruleResult.skipped }),
+          ...(ruleResult.warnings !== undefined && { warnings: ruleResult.warnings }),
+        }
+      } else {
+        slimValidation[ruleName] = ruleResult
+      }
+    }
+  }
+
+  return {
+    status:             raw.status,
+    message:            raw.message,
+    output_base:        raw.output_base,
+    splits:             raw.splits,
+    time_info:          raw.time_info,
+    static_vars_saved:  raw.static_vars_saved,
+    warnings:           slimWarnings,
+    errors:             slimErrors,
+    post_validation:    slimValidation,
+  }
+}
 
 function shellEscapeDouble(str: string): string {
   return str.replace(/[\\"$`!]/g, '\\$&')
@@ -419,7 +472,7 @@ export const oceanForecastPreprocessFullTool = defineTool({
 
     const stepBJson = await ctx.sandbox.fs.read(outputPath)
     const stepBResult = JSON.parse(stepBJson)
-    result.step_b = stepBResult
+    result.step_b = summarizeStepBResult(stepBResult)
 
     if (stepBResult.status === 'error') {
       result.overall_status = 'error'

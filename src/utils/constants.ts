@@ -25,3 +25,11 @@ export const SIMPLE_TOOL_LABELS: Record<string, string> = {
   ocean_inspect_data: '数据检查',
   ocean_validate_tensor: '张量约定验证'
 }
+
+// 文件查找工具的最大展示文件数，超过后会截断并提示查看完整数据
+export const MAX_FILE_SAMPLE = 5 as const
+
+// 最大警告和错误展示数，超过后会截断并提示查看完整数据
+export const MAX_WARNINGS = 5
+export const MAX_ERRORS = 3
+export const MAX_RULE_ERRORS = 3
