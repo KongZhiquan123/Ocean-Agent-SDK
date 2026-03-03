@@ -1,3 +1,14 @@
+"""
+@file swin_transformer_v2.py
+
+@description Swin Transformer V2 adapted for PDE forecasting with auto-pad support.
+@author Ze Liu (Microsoft), Leizheng
+@date 2026-03-03
+@version 1.1.0
+
+@changelog
+  - 2026-03-03 Leizheng: v1.1.0 auto-pad input to img_size in forward(), remove PatchEmbed hard assert
+"""
 # models/swin_transformer/swin_transformer_v2.py
 # --------------------------------------------------------
 # Swin Transformer V2
@@ -507,9 +518,16 @@ class PatchEmbed(nn.Module):
 
     def forward(self, x):
         B, C, H, W = x.shape
-        # FIXME look at relaxing size constraints
-        assert H == self.img_size[0] and W == self.img_size[1], \
-            f"Input image size ({H}*{W}) doesn't match model ({self.img_size[0]}*{self.img_size[1]})."
+        # Auto-pad to img_size if needed (outer forward() handles this,
+        # but be defensive in case PatchEmbed is called directly)
+        H_img, W_img = self.img_size
+        if H > H_img or W > W_img:
+            raise ValueError(
+                f"Input spatial size ({H}x{W}) exceeds model img_size ({H_img}x{W_img}). "
+                f"Increase img_size in model config to at least [{H}, {W}]."
+            )
+        if H != H_img or W != W_img:
+            x = F.pad(x, (0, W_img - W, 0, H_img - H), mode='replicate')
         x = self.proj(x).flatten(2).transpose(1, 2)  # B Ph*Pw C
         if self.norm is not None:
             x = self.norm(x)
@@ -694,6 +712,19 @@ class SwinTransformerV2(nn.Module):
 
         # (B, H, W, C_in) -> (B, C_in, H, W)
         x = x.permute(0, 3, 1, 2).contiguous()
+
+        # Auto-pad to img_size if input is smaller or misaligned
+        H_img, W_img = self.patch_embed.img_size
+        if H > H_img or W > W_img:
+            raise ValueError(
+                f"Input spatial size ({H}x{W}) exceeds model img_size ({H_img}x{W_img}). "
+                f"Increase img_size in model config to at least [{H}, {W}]."
+            )
+        if H != H_img or W != W_img:
+            pad_h = H_img - H
+            pad_w = W_img - W
+            if pad_h > 0 or pad_w > 0:
+                x = F.pad(x, (0, pad_w, 0, pad_h), mode='replicate')
 
         # Hierarchical Swin backbone
         x = self.forward_features(x)   # (B, L, C_feat)

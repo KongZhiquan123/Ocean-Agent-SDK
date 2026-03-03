@@ -2,13 +2,14 @@
 @file test_auto_padding.py
 
 @description Comprehensive test script for auto-padding in models with spatial size constraints.
-             Verifies that UNet1d, UNet3d, and OceanViT correctly handle arbitrary spatial sizes
-             (e.g. 400×441 ocean data) via auto-pad/crop in forward().
+             Verifies that UNet1d, UNet2d, UNet3d, OceanViT, and SwinTransformerV2 correctly
+             handle arbitrary spatial sizes (e.g. 400×441 ocean data) via auto-pad/crop in forward().
 @author Leizheng
 @date 2026-03-03
-@version 1.0.0
+@version 1.1.0
 
 @changelog
+  - 2026-03-03 Leizheng: v1.1.0 add UNet2d and SwinTransformerV2 tests
   - 2026-03-03 Leizheng: v1.0.0 initial creation
 """
 
@@ -52,6 +53,43 @@ def test_unet1d():
 
     print("=" * 60)
     print("UNet1d Auto-Padding Tests")
+    print("=" * 60)
+
+    all_passed = True
+    for desc, in_shape, expected_shape in test_cases:
+        try:
+            x = torch.randn(*in_shape)
+            with torch.no_grad():
+                out = model(x)
+            assert out.shape == expected_shape, f"Shape mismatch: {out.shape} != {expected_shape}"
+            print(f"  PASS  {desc}: {in_shape} -> {out.shape}")
+        except Exception as e:
+            print(f"  FAIL  {desc}: {in_shape} -> {e}")
+            traceback.print_exc()
+            all_passed = False
+
+    return all_passed
+
+
+def test_unet2d():
+    """Test UNet2d with various spatial sizes including non-aligned H/W."""
+    from unet.unet2d import UNet2d
+
+    model_params = {"in_channels": 3, "out_channels": 3, "init_features": 16, "norm": "group"}
+    model = UNet2d(model_params)
+    model.eval()
+
+    test_cases = [
+        # UNet2d uses (B, H, W, C) format
+        ("aligned 64x64", (1, 64, 64, 3), (1, 64, 64, 3)),
+        ("non-aligned H=400 W=441", (1, 400, 441, 3), (1, 400, 441, 3)),
+        ("non-aligned H=33 W=33", (1, 33, 33, 3), (1, 33, 33, 3)),
+        ("minimal aligned 16x16", (1, 16, 16, 3), (1, 16, 16, 3)),
+        ("non-aligned H=17 W=19", (1, 17, 19, 3), (1, 17, 19, 3)),
+    ]
+
+    print("\n" + "=" * 60)
+    print("UNet2d Auto-Padding Tests")
     print("=" * 60)
 
     all_passed = True
@@ -159,6 +197,58 @@ def test_ocean_vit():
     return all_passed
 
 
+def test_swin_transformer_v2():
+    """Test SwinTransformerV2 with various spatial sizes including non-aligned H/W."""
+    swin_mod = _import_module_from_file(
+        "swin_v2_mod",
+        os.path.join(PROJECT_ROOT, "models", "swin_transformer", "swin_transformer_v2.py"),
+    )
+    SwinTransformerV2 = swin_mod.SwinTransformerV2
+
+    # Use small config for speed. img_size=56 satisfies all constraints:
+    # patch_size=1, window_size=7, depths=[2,2] (2 layers) -> alignment = 1*7*2 = 14
+    # 56 / 1 = 56, 56 % 14 = 0 ✓
+    model_params = {
+        "in_channels": 3,
+        "out_channels": 3,
+        "img_size": 56,
+        "patch_size": 1,
+        "embed_dim": 32,
+        "depths": [2, 2],
+        "num_heads": [2, 4],
+        "window_size": 7,
+    }
+    model = SwinTransformerV2(model_params)
+    model.eval()
+
+    test_cases = [
+        # SwinTransformerV2 uses (B, H, W, C) format, output is interpolated to input H,W
+        ("exact img_size 56x56", (1, 56, 56, 3), (1, 56, 56, 3)),
+        ("smaller 40x41", (1, 40, 41, 3), (1, 40, 41, 3)),
+        ("smaller 33x33", (1, 33, 33, 3), (1, 33, 33, 3)),
+        ("minimal 14x14", (1, 14, 14, 3), (1, 14, 14, 3)),
+    ]
+
+    print("\n" + "=" * 60)
+    print("SwinTransformerV2 Auto-Padding Tests")
+    print("=" * 60)
+
+    all_passed = True
+    for desc, in_shape, expected_shape in test_cases:
+        try:
+            x = torch.randn(*in_shape)
+            with torch.no_grad():
+                out = model(x)
+            assert out.shape == expected_shape, f"Shape mismatch: {out.shape} != {expected_shape}"
+            print(f"  PASS  {desc}: {in_shape} -> {out.shape}")
+        except Exception as e:
+            print(f"  FAIL  {desc}: {in_shape} -> {e}")
+            traceback.print_exc()
+            all_passed = False
+
+    return all_passed
+
+
 def test_no_padding_overhead():
     """Verify that already-aligned inputs don't trigger any padding (sanity check)."""
     from unet.unet1d import UNet1d
@@ -188,8 +278,10 @@ def main():
 
     results = {}
     results["UNet1d"] = test_unet1d()
+    results["UNet2d"] = test_unet2d()
     results["UNet3d"] = test_unet3d()
     results["OceanViT"] = test_ocean_vit()
+    results["SwinTransformerV2"] = test_swin_transformer_v2()
     results["No-Padding Overhead"] = test_no_padding_overhead()
 
     print("\n" + "=" * 60)

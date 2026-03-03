@@ -525,16 +525,31 @@ class WindowAttention2D(nn.Module):
         B, N, C = x.shape
         assert N == H * W, "N must equal H * W."
 
+        ws = self.window_size
+        # Auto-pad H/W to nearest multiple of window_size
+        pad_h = (ws - H % ws) % ws
+        pad_w = (ws - W % ws) % ws
         x = x.view(B, H, W, C)
-        windows = window_partition(x, self.window_size)  # (B*nW, Ws*Ws, C)
+        if pad_h > 0 or pad_w > 0:
+            x = F.pad(x, (0, 0, 0, pad_w, 0, pad_h))  # pad W then H (last dims first for BHWC)
+            H_pad, W_pad = H + pad_h, W + pad_w
+        else:
+            H_pad, W_pad = H, W
+
+        windows = window_partition(x, ws)  # (B*nW, Ws*Ws, C)
         windows = self.attn(
             windows,
             attn_mask=attn_mask,
             key_padding_mask=key_padding_mask,
             rope_kwargs=rope_kwargs,
         )  # (B*nW, Ws*Ws, C)
-        x = window_reverse(windows, self.window_size, H, W)  # (B, H, W, C)
-        x = x.view(B, N, C)
+        x = window_reverse(windows, ws, H_pad, W_pad)  # (B, H_pad, W_pad, C)
+
+        # Crop back to original size
+        if pad_h > 0 or pad_w > 0:
+            x = x[:, :H, :W, :]
+
+        x = x.reshape(B, N, C)
         return x
 
 

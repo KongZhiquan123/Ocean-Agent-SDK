@@ -8,6 +8,7 @@
 
 @changelog
   - 2026-02-27 Leizheng: v1.1.0 add 10 NeuralFramework models support
+  - 2026-03-03 Leizheng: v1.2.0 auto-align img_size for Swin models
   - 2026-02-26 Leizheng: v1.0.0 initial version for ocean forecast training
 
 Usage:
@@ -208,6 +209,17 @@ def generate_config(params):
             model_config.setdefault("img_size", spatial_shape)
         if model_name in {"NNG", "OneForecast", "GraphCast"}:
             model_config.setdefault("input_res", spatial_shape)
+
+    # SwinTransformerV2: auto-align img_size to satisfy divisibility constraints
+    # Requires: img_size / patch_size divisible by window_size * 2^(num_layers-1)
+    if model_name == "SwinTransformerV2" and spatial_shape is not None:
+        patch_sz = model_config.get("patch_size", 1)
+        window_sz = model_config.get("window_size", 7)
+        n_layers = len(model_config.get("depths", [2, 2, 6, 2]))
+        alignment = patch_sz * window_sz * (2 ** (n_layers - 1))
+        aligned_h = ((spatial_shape[0] + alignment - 1) // alignment) * alignment
+        aligned_w = ((spatial_shape[1] + alignment - 1) // alignment) * alignment
+        model_config.setdefault("img_size", [aligned_h, aligned_w])
 
     # FNO2d specific: no upsample for forecast (same resolution in/out)
     if model_name == "FNO2d":

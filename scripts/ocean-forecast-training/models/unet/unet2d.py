@@ -1,9 +1,21 @@
+"""
+@file unet2d.py
+
+@description 2D U-Net backbone for PDE forecasting with auto-pad support.
+@author Leizheng
+@date 2026-03-03
+@version 1.1.0
+
+@changelog
+  - 2026-03-03 Leizheng: v1.1.0 replace hard assert with auto-pad/crop for arbitrary H,W
+"""
 # models/unet/unet2d.py
 from typing import Any, Dict, Tuple, Optional
 from collections import OrderedDict
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from utils import to_spatial
 
@@ -15,7 +27,8 @@ class UNet2d(nn.Module):
     This implementation assumes:
       - Input:  x of shape (B, H, W, C_in)
       - Output: y of shape (B, H, W, C_out)
-      - Spatial sizes H and W must be divisible by 16 (4 levels of pooling).
+      - Spatial sizes H and W are auto-padded to multiples of 16 (4 levels of pooling)
+        and cropped back after processing.
 
     The architecture follows the classic 4-level U-Net:
       enc1 -> enc2 -> enc3 -> enc4 -> bottleneck -> dec4 -> dec3 -> dec2 -> dec1.
@@ -184,13 +197,16 @@ class UNet2d(nn.Module):
         assert x.dim() == 4, f"Expected (B, H, W, C), got shape {x.shape}"
         B, H, W, C = x.shape
 
-        # 4 levels of 2x2 pooling → H/16, W/16 must be integer
-        assert H % 16 == 0 and W % 16 == 0, (
-            f"H and W must be divisible by 16 for this UNet configuration, got H={H}, W={W}."
-        )
-
         # (B, H, W, C) -> (B, C, H, W)
         x = x.permute(0, 3, 1, 2).contiguous()
+
+        # Auto-pad H/W to nearest multiple of 16 (4 levels of 2x2 pooling)
+        pad_h = (16 - H % 16) % 16
+        pad_w = (16 - W % 16) % 16
+        if pad_h > 0 or pad_w > 0:
+            # Use replicate if padding >= input size (reflect requires pad < dim)
+            mode = 'reflect' if (pad_h < H and pad_w < W) else 'replicate'
+            x = F.pad(x, (0, pad_w, 0, pad_h), mode=mode)
 
         # Encoder
         enc1 = self.encoder1(x)
@@ -218,7 +234,11 @@ class UNet2d(nn.Module):
         dec1 = torch.cat((dec1, enc1), dim=1)
         dec1 = self.decoder1(dec1)
 
-        out = self.conv(dec1)  # (B, C_out, H, W)
+        out = self.conv(dec1)  # (B, C_out, H_padded, W_padded)
+
+        # Crop back to original spatial size
+        if pad_h > 0 or pad_w > 0:
+            out = out[:, :, :H, :W]
 
         # (B, C_out, H, W) -> (B, H, W, C_out)
         out = out.permute(0, 2, 3, 1).contiguous()
