@@ -5,9 +5,10 @@
  * @author kongzhiquan
  * @contributors Leizheng
  * @date 2026-02-02
- * @version 1.8.0
+ * @version 1.8.1
  *
  * @changelog
+ *   - 2026-03-03 kongzhiquan: v1.8.1 移除 DANGEROUS_PATTERNS 中与 SDK sandbox.exec 重叠的冗余检查
  *   - 2026-02-26 kongzhiquan: v1.8.0 AgentConfig 新增 notebookPath 字段，写入 agent metadata
  *   - 2026-02-25 Leizheng: v1.7.1 修复 finally 中 await sendTask 阻塞 done 事件问题
  *     - sendTask rejected 时会在 finally 中抛出，导致 yield done 永远不执行
@@ -43,6 +44,7 @@ export interface AgentConfig {
   notebookPath?: string
   userId?: string
   files?: string[]
+  allowedPaths?: string[]
 }
 
 export interface SSEEvent {
@@ -80,7 +82,7 @@ export async function createAgent(config: AgentConfig): Promise<Agent> {
   const sandboxConfig = {
     kind: 'local' as const,
     workDir: config.workingDir,
-    allowPaths: ['/data', `${process.cwd()}/.skills`, config.outputsPath], // 允许访问数据目录、技能目录、输出目录
+    allowPaths: config.allowedPaths
   }
 
   const agent = await Agent.create(
@@ -112,21 +114,15 @@ export async function createAgent(config: AgentConfig): Promise<Agent> {
 // 权限控制 - 危险命令黑名单
 // ========================================
 
+// 对node_modules/@shareai-lab/kode-sdk/dist/infra/sandbox.js中DANGEROUS_PATTERNS进行补充
 const DANGEROUS_PATTERNS = [
-  /rm\s+(-[rRf]+\s+)*[\/~]/,         // rm -rf / 或 rm -rf ~
-  /rm\s+(-[rRf]+\s+)*\.\./,          // rm -rf ..
-  />\s*\/etc\//,                      // 重定向写入 /etc/
-  />\s*\/usr\//,                      // 重定向写入 /usr/
-  />\s*\/bin\//,                      // 重定向写入 /bin/
-  /sudo\s+/,                          // sudo 命令
-  /chmod\s+777/,                      // 危险权限
-  /chown\s+root/,                     // 改变所有者为 root
-  /mkfs/,                             // 格式化磁盘
-  /dd\s+.*of=\/dev/,                  // 写入设备
-  /:(){ :|:& };:/,                    // fork 炸弹
-  />\s*\/dev\/(sda|hda|nvme)/,        // 写入磁盘设备
-  /curl.*\|\s*(ba)?sh/,               // curl | bash 远程执行
-  /wget.*\|\s*(ba)?sh/,               // wget | bash 远程执行
+  /rm\s+(-[rRf]+\s+)*[\/~]/,         // rm -rf / 或 rm -rf ~（SDK 只拦截 rm -rf /）
+  /rm\s+(-[rRf]+\s+)*\.\./,          // rm -rf ..（SDK 未覆盖）
+  />\s*\/etc\//,                      // 重定向写入 /etc/（SDK 未覆盖）
+  />\s*\/usr\//,                      // 重定向写入 /usr/（SDK 未覆盖）
+  />\s*\/bin\//,                      // 重定向写入 /bin/（SDK 未覆盖）
+  /chmod\s+777/,                      // 任意路径 chmod 777（SDK 仅拦截根目录）
+  /chown\s+root/,                     // 改变所有者为 root（SDK 未覆盖）
 ]
 
 const SHELL_CONTROL_PATTERN = /[;&`<>]/ // 禁止命令拼接/重定向
@@ -203,7 +199,8 @@ function hasUnsafePath(command: string, allowedPaths?: string[]): boolean {
   return tokens.some(token => !isAllowedPathToken(token, allowedPaths))
 }
 
-export function setupAgentHandlers(agent: Agent, reqId: string, allowedPaths?: string[]): void {
+export function setupAgentHandlers(agent: Agent, reqId: string): void {
+  const allowedPaths = (agent as any).config.sandbox.allowPaths as string[] | undefined
   // 权限请求处理：检查危险命令
   agent.on('permission_required', async (event: any) => {
     const toolName = event.call.name

@@ -30,6 +30,6 @@ export const SIMPLE_TOOL_LABELS: Record<string, string> = {
 export const MAX_FILE_SAMPLE = 5 as const
 
 // 最大警告和错误展示数，超过后会截断并提示查看完整数据
-export const MAX_WARNINGS = 5
-export const MAX_ERRORS = 3
-export const MAX_RULE_ERRORS = 3
+export const MAX_WARNINGS = 5 as const
+export const MAX_ERRORS = 3 as const
+export const MAX_RULE_ERRORS = 3 as const
