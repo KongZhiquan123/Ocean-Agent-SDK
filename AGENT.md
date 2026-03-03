@@ -1,4 +1,4 @@
-# AGENT.md
+# CLAUDE.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
@@ -93,39 +93,20 @@ The service uses KODE SDK's three-channel event system:
 ### Agent Modes
 
 **Edit Mode** (`coding-assistant` template):
-- Full read/write file access (fs_read, fs_write, fs_edit)
-- Command execution (bash_run)
-- Todo management (todo_read, todo_write)
-- Skills system (skills tool)
-- Ocean preprocessing tools (ocean_inspect_data, ocean_validate_tensor, ocean_sr_preprocess_convert_npy, ocean_sr_preprocess_full)
+- File sandbox: fs_read, fs_write, fs_edit, fs_multi_edit, fs_glob, fs_grep enable full read/write plus batch edits.
+- Shell runner: bash_run, bash_logs, bash_kill (subject to the dangerous-command filter) for controlled CLI execution.
+- Workflow planning: todo_read, todo_write, and the skills tool (skills {"action":"list"} / skills {"action":"load","skill_name":"..."}) to load the required Skill before invoking domain workflows.
+- Ocean SR data preprocessing: ocean_inspect_data, ocean_validate_tensor, ocean_sr_preprocess_convert_npy, ocean_sr_preprocess_full, ocean_sr_preprocess_downsample, ocean_sr_preprocess_visualize, ocean_sr_preprocess_metrics, ocean_sr_preprocess_report.
+- Ocean SR training: ocean_sr_check_gpu, ocean_sr_list_models, ocean_sr_train_start, ocean_sr_train_status, ocean_sr_train_report, ocean_sr_train_visualize.
+- Ocean forecast data preprocessing: ocean_forecast_preprocess_full, ocean_forecast_preprocess_visualize, ocean_forecast_preprocess_report, ocean_forecast_preprocess_stats (shares ocean_inspect_data).
+- Ocean forecast training: ocean_forecast_check_gpu, ocean_forecast_list_models, ocean_forecast_train, ocean_forecast_train_status, ocean_forecast_report, ocean_forecast_visualize.
+
 
 **Ask Mode** (`qa-assistant` template):
-- Read-only file access (fs_read)
-- File search (fs_glob, fs_grep)
-- Read-only commands (bash_run with restrictions)
-
-### Ocean Data Preprocessing Workflow
-
-The service includes a specialized skill for ocean data preprocessing (`.skills/ocean-preprocess/`):
-
-**Pipeline**: NC files → [Step A: Inspect] → [Step B: Validate] → [Step C: Convert] → NPY files
-
-**Key Principles**:
-- No data normalization or transformation - only format conversion
-- Preserves original data structure completely
-- Interactive confirmation for mask/coordinate variable detection
-- Tensor shape conventions: Dynamic `[T,H,W]` or `[T,D,H,W]`, Static `[H,W]`
-
-**Tools**:
-1. `ocean_inspect_data`: Analyzes NC files, classifies variables (dynamic/static/mask)
-2. `ocean_validate_tensor`: Validates tensor shapes and generates var_names config
-3. `ocean_sr_preprocess_convert_npy`: Converts to NPY format with directory structure (hr/, static/)
-4. `ocean_sr_preprocess_full`: One-click execution of full A→B→C pipeline with interactive confirmation
-
-**Important**: The `ocean_sr_preprocess_full` tool implements a two-phase workflow:
-- Phase 1: Returns `awaiting_confirmation` status with suspected masks/coordinates
-- Agent must present these to user and ask for confirmation
-- Phase 2: Re-invoke with user-confirmed `mask_vars` and `static_vars` to execute full pipeline
+- Read-only file access: fs_read.
+- Index/search: fs_glob, fs_grep.
+- Data inspection: ocean_inspect_data (read-only mode for stats/visual previews).
+- bash_run is unavailable (ask mode forbids command execution).
 
 ### Skills System
 
@@ -237,7 +218,7 @@ When generating or modifying code files, always add/update a standardized header
  *   - YYYY-MM-DD Leizheng: version description
  */
 ```
-If the file already has a header, update the "Changelog" section. Only append `Leizheng` to "@contributors" when the file author is not Leizheng; if the author is Leizheng, do not add a contributors line.
+If the file already has a header, update the "Changelog" section and append `Leizheng`(your name should be here) to the "@contributors" list if not already present. If '@contributors' is not present, add it below the author line.
 
 ## Python Command Execution
 If you need to use Bash tools to run Python, please use the executable file path /home/lz/miniconda3/envs/pytorch/bin/python to ensure the correct Python environment is used.

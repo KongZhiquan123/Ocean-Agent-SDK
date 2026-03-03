@@ -24,7 +24,6 @@
  */
 
 import { defineTool } from '@shareai-lab/kode-sdk'
-import os from 'node:os'
 import { MAX_ERRORS, MAX_WARNINGS, MAX_RULE_ERRORS} from '@/utils/constants'
 import path from 'node:path'
 import { findFirstPythonPath } from '@/utils/python-manager'
@@ -32,8 +31,6 @@ import { oceanInspectDataTool } from '../ocean-SR-data-preprocess/inspect'
 import { oceanForecastPreprocessVisualizeTool } from './visualize'
 import { ForecastWorkflow, WorkflowState } from './workflow-state'
 import { generateForecastPreprocessCells, saveOrAppendNotebook } from './notebook'
-
-const DEFAULT_WORKERS = Math.max(1, Math.min(8, os.cpus().length || 1))
 
 /**
  * 对 forecast_preprocess.py 返回的原始结果进行精简，

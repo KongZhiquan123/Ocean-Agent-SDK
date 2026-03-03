@@ -77,7 +77,7 @@ Changelog:
 ```
 1. 确认数据 → 用户提供预处理数据目录和输出目录
    ↓
-2. 选择模型 → ocean_sr_model_list，用户选择
+2. 选择模型 → ocean_sr_list_models，用户选择
    ↓
 3. 确认参数 → epochs, lr, batch_size(默认4), GPU 选择
    │  → OOM 防护参数: use_amp（非 FFT 默认开启 / FFT 默认关闭）, gradient_checkpointing（默认开启）, patch_size
