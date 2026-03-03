@@ -84,7 +84,7 @@ def get_dir_path(args, create_dir=True):
         os.makedirs(path, exist_ok=True)
     return path, os.path.basename(path)
 
-    
+
 def set_up_logger(args: Dict[str, Any]) -> Tuple[str, str]:
     """
     Initialize logging to both a file (train.log) and the console.

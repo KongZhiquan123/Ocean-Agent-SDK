@@ -1,9 +1,22 @@
-# models/unet/unet3d.py
+"""
+@file unet3d.py
+
+@description 3D U-Net backbone for PDE / volumetric forecasting with auto-padding
+             support for arbitrary spatial sizes.
+@author Leizheng
+@date 2026-02-27
+@version 1.1.0
+
+@changelog
+  - 2026-02-27 Leizheng: v1.0.0 initial creation
+  - 2026-03-03 Leizheng: v1.1.0 replace hard assert with auto-pad/crop for D/H/W not divisible by 16
+"""
 from typing import Any, Dict, Tuple, Optional
 from collections import OrderedDict
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from utils import to_spatial
 
@@ -15,7 +28,7 @@ class UNet3d(nn.Module):
     Assumptions:
       - Input:  x of shape (B, D, H, W, C_in)
       - Output: y of shape (B, D, H, W, C_out)
-      - D, H, W must be divisible by 16 (4 levels of 2× downsampling).
+      - D, H, W are automatically padded to multiples of 16 if needed (4 levels of 2× downsampling).
 
     Architecture:
       enc1 -> enc2 -> enc3 -> enc4 -> bottleneck -> dec4 -> dec3 -> dec2 -> dec1.
@@ -184,14 +197,16 @@ class UNet3d(nn.Module):
         assert x.dim() == 5, f"Expected (B, D, H, W, C), got shape {x.shape}"
         B, D, H, W, C_in = x.shape
 
-        # 4 levels of 2x pooling → D/H/W / 16 must be integer
-        assert D % 16 == 0 and H % 16 == 0 and W % 16 == 0, (
-            f"D, H, W must be divisible by 16 for this UNet configuration, "
-            f"got D={D}, H={H}, W={W}."
-        )
-
         # (B, D, H, W, C_in) -> (B, C_in, D, H, W)
         x = x.permute(0, 4, 1, 2, 3).contiguous()
+
+        # Auto-pad D/H/W to nearest multiple of 16 (4 levels of 2× pooling)
+        # Use replicate mode: D dimension may be small (e.g. 7), reflect requires pad < input size
+        pad_d = (16 - D % 16) % 16
+        pad_h = (16 - H % 16) % 16
+        pad_w = (16 - W % 16) % 16
+        if pad_d > 0 or pad_h > 0 or pad_w > 0:
+            x = F.pad(x, (0, pad_w, 0, pad_h, 0, pad_d), mode='replicate')
 
         # Encoder
         enc1 = self.encoder1(x)
@@ -219,7 +234,11 @@ class UNet3d(nn.Module):
         dec1 = torch.cat((dec1, enc1), dim=1)
         dec1 = self.decoder1(dec1)
 
-        out = self.conv(dec1)  # (B, C_out, D, H, W)
+        out = self.conv(dec1)  # (B, C_out, D_padded, H_padded, W_padded)
+
+        # Crop back to original spatial size
+        if pad_d > 0 or pad_h > 0 or pad_w > 0:
+            out = out[:, :, :D, :H, :W]
 
         # (B, C_out, D, H, W) -> (B, D, H, W, C_out)
         out = out.permute(0, 2, 3, 4, 1).contiguous()

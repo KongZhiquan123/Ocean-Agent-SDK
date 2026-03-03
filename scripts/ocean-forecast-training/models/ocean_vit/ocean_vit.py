@@ -2,17 +2,20 @@
 @file ocean_vit.py
 
 @description Vision Transformer (ViT) model for ocean velocity prediction with positional encoding
-             and patch-based transformer encoder-decoder architecture.
+             and patch-based transformer encoder-decoder architecture. Includes auto-padding for
+             arbitrary spatial sizes not divisible by patch_size.
 @author Leizheng
 @date 2026-02-27
-@version 1.0.0
+@version 1.1.0
 
 @changelog
   - 2026-02-27 Leizheng: v1.0.0 initial creation - adapted from NeuralFramework
+  - 2026-03-03 Leizheng: v1.1.0 add auto-pad/crop for H/W not divisible by patch_size
 """
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import math
 from einops import rearrange
 
@@ -234,6 +237,14 @@ class OceanTransformer(nn.Module):
         # (B, T_in, C, H, W) -> (B, T_in*C, H, W)
         x = x.reshape(B, T_in * C, H, W)
 
+        # Auto-pad H/W to nearest multiple of patch_size
+        p = self.patch_size
+        pad_h = (p - H % p) % p
+        pad_w = (p - W % p) % p
+        if pad_h > 0 or pad_w > 0:
+            x = F.pad(x, (0, pad_w, 0, pad_h), mode='reflect')
+        H_pad, W_pad = H + pad_h, W + pad_w
+
         # Convert to patches
         patches = self.patchify(x)  # (B, num_patches, patch_dim)
         num_patches = patches.shape[1]
@@ -259,8 +270,12 @@ class OceanTransformer(nn.Module):
         # Decode to output patches
         output_patches = self.decoder(x)  # (B, num_patches, output_patch_dim)
 
-        # Unpatchify to image
-        output = self.unpatchify(output_patches, self.output_len * self.in_channels, H, W)  # (B, T_out*C, H, W)
+        # Unpatchify to image (use padded dimensions)
+        output = self.unpatchify(output_patches, self.output_len * self.in_channels, H_pad, W_pad)  # (B, T_out*C, H_pad, W_pad)
+
+        # Crop back to original spatial size
+        if pad_h > 0 or pad_w > 0:
+            output = output[:, :, :H, :W]
 
         # Reshape to output format
         # (B, T_out*C, H, W) -> (B, T_out, C, H, W)

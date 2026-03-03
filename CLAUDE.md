@@ -97,7 +97,7 @@ The service uses KODE SDK's three-channel event system:
 - Shell runner: bash_run, bash_logs, bash_kill (subject to the dangerous-command filter) for controlled CLI execution.
 - Workflow planning: todo_read, todo_write, and the skills tool (skills {"action":"list"} / skills {"action":"load","skill_name":"..."}) to load the required Skill before invoking domain workflows.
 - Ocean SR data preprocessing: ocean_inspect_data, ocean_validate_tensor, ocean_sr_preprocess_convert_npy, ocean_sr_preprocess_full, ocean_sr_preprocess_downsample, ocean_sr_preprocess_visualize, ocean_sr_preprocess_metrics, ocean_sr_preprocess_report.
-- Ocean SR training: ocean_sr_gpu_check, ocean_sr_model_list, ocean_sr_train_start, ocean_sr_train_status, ocean_sr_train_report, ocean_sr_train_visualize.
+- Ocean SR training: ocean_sr_check_gpu, ocean_sr_list_models, ocean_sr_train_start, ocean_sr_train_status, ocean_sr_train_report, ocean_sr_train_visualize.
 - Ocean forecast data preprocessing: ocean_forecast_preprocess_full, ocean_forecast_preprocess_visualize, ocean_forecast_preprocess_report, ocean_forecast_preprocess_stats (shares ocean_inspect_data).
 - Ocean forecast training: ocean_forecast_check_gpu, ocean_forecast_list_models, ocean_forecast_train, ocean_forecast_train_status, ocean_forecast_report, ocean_forecast_visualize.
 
