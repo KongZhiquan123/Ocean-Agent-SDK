@@ -1,9 +1,22 @@
-# models/unet/unet1d.py
+"""
+@file unet1d.py
+
+@description 1D U-Net backbone for PDE / sequence forecasting with auto-padding
+             support for arbitrary spatial sizes.
+@author Leizheng
+@date 2026-02-27
+@version 1.1.0
+
+@changelog
+  - 2026-02-27 Leizheng: v1.0.0 initial creation
+  - 2026-03-03 Leizheng: v1.1.0 replace hard assert with auto-pad/crop for N not divisible by 16
+"""
 from typing import Any, Dict, Tuple, Optional
 from collections import OrderedDict
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 class UNet1d(nn.Module):
@@ -13,7 +26,7 @@ class UNet1d(nn.Module):
     Assumptions:
       - Input:  x of shape (B, N, C_in)
       - Output: y of shape (B, N, C_out)
-      - N must be divisible by 16 (4 levels of 2× downsampling).
+      - N is automatically padded to a multiple of 16 if needed (4 levels of 2× downsampling).
 
     Architecture:
       enc1 -> enc2 -> enc3 -> enc4 -> bottleneck -> dec4 -> dec3 -> dec2 -> dec1.
@@ -182,13 +195,13 @@ class UNet1d(nn.Module):
         assert x.dim() == 3, f"Expected (B, N, C), got shape {x.shape}"
         B, N, C_in = x.shape
 
-        # 4 levels of 2x pooling → N / 16 must be integer
-        assert N % 16 == 0, (
-            f"N must be divisible by 16 for this UNet configuration, got N={N}."
-        )
-
         # (B, N, C_in) -> (B, C_in, N)
         x = x.permute(0, 2, 1).contiguous()
+
+        # Auto-pad N to nearest multiple of 16 (4 levels of 2× pooling)
+        pad_n = (16 - N % 16) % 16
+        if pad_n > 0:
+            x = F.pad(x, (0, pad_n), mode='reflect')
 
         # Encoder
         enc1 = self.encoder1(x)
@@ -216,7 +229,11 @@ class UNet1d(nn.Module):
         dec1 = torch.cat((dec1, enc1), dim=1)
         dec1 = self.decoder1(dec1)
 
-        out = self.conv(dec1)  # (B, C_out, N)
+        out = self.conv(dec1)  # (B, C_out, N_padded)
+
+        # Crop back to original spatial size
+        if pad_n > 0:
+            out = out[:, :, :N]
 
         # (B, C_out, N) -> (B, N, C_out)
         out = out.permute(0, 2, 1).contiguous()
