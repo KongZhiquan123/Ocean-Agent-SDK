@@ -218,11 +218,12 @@ app.post('/api/chat/stream', rateLimitMiddleware, requireAuth, async (req: Reque
   }
 
   try {
+    const allowedPaths = [outputsPath, workingDir, '/data', path.dirname(notebookPath)]
     // 尝试加载已有会话
     if (inputAgentId && conversationManager.hasSession(inputAgentId)) {
       agent = await conversationManager.getAgent(inputAgentId)
       if (agent) {
-        setupAgentHandlers(agent, reqId)
+        setupAgentHandlers(agent, reqId, allowedPaths) // 传递允许访问的路径列表
         console.log(`[server] [req ${reqId}] 加载会话: ${inputAgentId}`)
       }
     }
@@ -231,7 +232,7 @@ app.post('/api/chat/stream', rateLimitMiddleware, requireAuth, async (req: Reque
     if (!agent) {
       const agentConfig: AgentConfig = { mode, workingDir, outputsPath, notebookPath, userId, files }
       agent = await createAgent(agentConfig)
-      setupAgentHandlers(agent, reqId, [outputsPath, workingDir, '/data']) // 传递允许访问的路径列表
+      setupAgentHandlers(agent, reqId, allowedPaths) // 传递允许访问的路径列表
 
       // 注册到会话管理器
       conversationManager.registerSession(agent)

@@ -1,6 +1,6 @@
 # 训练参数参考
 
-## ocean_forecast_train 参数
+## ocean_forecast_train_start 参数
 
 ### 阶段 1: 数据确认
 

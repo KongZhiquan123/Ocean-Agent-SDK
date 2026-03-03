@@ -735,7 +735,7 @@ async function testOceanForecastTraining() {
 
 【Predict 模式（训练完成后）】
   训练完成后可对测试集做推理：
-  → ocean_forecast_train({ mode: "predict", ... })
+  → ocean_forecast_train_start({ mode: "predict", ... })
   → 支持自回归 rollout 多步预测
   → 预测结果保存到 log_dir/predictions/
 `)

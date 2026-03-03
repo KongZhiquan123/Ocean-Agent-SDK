@@ -9,8 +9,7 @@ from .helper import (
     load_config,
     save_config,
     get_dir_path,
-    set_up_logger,
-    save_code,
+    set_up_logger
 )
 
 # ----------------------------------------------------------------------
@@ -86,7 +85,6 @@ __all__ = [
     "save_config",
     "get_dir_path",
     "set_up_logger",
-    "save_code",
     # ddp
     "init_distributed",
     "debug_barrier",

@@ -63,8 +63,8 @@ Changelog:
 
 | 工具 | 用途 |
 |------|------|
-| `ocean_sr_gpu_check` | 查看可用 GPU |
-| `ocean_sr_model_list` | 列出可用模型 |
+| `ocean_sr_check_gpu` | 查看可用 GPU |
+| `ocean_sr_list_models` | 列出可用模型 |
 | `ocean_sr_train_start` | 启动训练或推理（含事件驱动启动监控，predict 模式跳过训练工作流） |
 | `ocean_sr_train_status` | 查询训练/推理状态/日志/终止训练/等待状态变化 |
 | `ocean_sr_train_visualize` | 生成训练可视化图表（mode=train）或推理对比图（mode=predict） |
