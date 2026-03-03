@@ -1,0 +1,29 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/pre-bash-guard.sh"
+          }
+        ],
+        "description": "Block dangerous bash commands (rm -rf /, sudo, secret exposure, etc.)"
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/post-edit-verify.sh",
+            "timeout": 30
+          }
+        ],
+        "description": "Auto-verify after code edits: typecheck for TS, py_compile for Python"
+      }
+    ]
+  }
+}

@@ -222,6 +222,24 @@ To customize, modify the `DANGEROUS_PATTERNS` array or add custom logic in `setu
 - **Python Detection**: The `python-manager.ts` utility scans common Python installation paths (pyenv, conda, system) for ocean preprocessing tools
 - **Data Storage**: KODE SDK stores agent state in `./.kode/` directory (configured via `KODE_STORE_PATH`)
 
+## Interaction Rules (MUST follow)
+
+1. **Ask before acting when requirements are unclear**: If the user's description is missing either
+   "expected behavior" or "actual behavior", ask specific clarifying questions first. Do NOT assume
+   and proceed. Bad: "Can you be more specific?" Good: "Is the expected output format X or Y?"
+
+2. **Diagnose before fixing**: When receiving a bug report, first analyze the root cause and confirm
+   with the user before writing any code. Never see an error log and jump straight to editing code.
+
+3. **Cross-layer change check**: When modifying ANY of the following layers, proactively check whether
+   other layers need synchronized updates:
+   - Python tool scripts (`scripts/`) ↔ TS tool definitions (`src/config.ts`) ↔ SKILL.md docs (`.skills/`) ↔ test client (`test-client.ts`)
+   - API/SSE interface (`src/server.ts`) ↔ conversation manager (`src/conversation-manager.ts`) ↔ test client ↔ README
+   - Model code (`scripts/ocean-forecast-training/models/`) ↔ training configs (`generate_config.py`) ↔ skill reference docs
+
+4. **Challenge over compliance**: If the user's proposed approach has a better alternative, or the user
+   may have missed an impact area, you MUST point it out. Do not stay silent to avoid interrupting momentum.
+
 ## Author Documentation before Modifications or Generations
 When generating or modifying code files, always add/update a standardized header comment at the top following this format:
 ```typescript
