@@ -60,10 +60,7 @@ import { defineTool } from '@shareai-lab/kode-sdk'
 import { findFirstPythonPath } from '@/utils/python-manager'
 import os from 'node:os'
 import path from 'node:path'
-
-function shellEscapeDouble(str: string): string {
-  return str.replace(/[\\"$`!]/g, '\\$&')
-}
+import { shellEscapeDouble } from '@/utils/shell'
 
 const DEFAULT_WORKERS = Math.max(1, Math.min(8, os.cpus().length || 1))
 

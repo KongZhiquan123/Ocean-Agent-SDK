@@ -34,10 +34,7 @@ import { defineTool } from '@shareai-lab/kode-sdk'
 import { findFirstPythonPath } from '@/utils/python-manager'
 import { z } from 'zod'
 import path from 'node:path'
-
-function shellEscapeDouble(str: string): string {
-  return str.replace(/[\\"$`!]/g, '\\$&')
-}
+import { shellEscapeDouble } from '@/utils/shell'
 
 // 使用 zod 定义 user_confirmation 的 schema
 const UserConfirmationSchema = z.object({

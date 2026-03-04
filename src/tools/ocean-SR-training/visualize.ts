@@ -19,13 +19,7 @@
 import { defineTool } from '@shareai-lab/kode-sdk'
 import { findPythonWithModule, findFirstPythonPath } from '@/utils/python-manager'
 import path from 'node:path'
-
-/**
- * 转义字符串使其可以安全嵌入 shell 双引号
- */
-function shellEscapeDouble(str: string): string {
-  return str.replace(/[\\"$`!]/g, '\\$&')
-}
+import { shellEscapeDouble } from '@/utils/shell'
 
 export const oceanSrTrainVisualizeTool = defineTool({
   name: 'ocean_sr_train_visualize',

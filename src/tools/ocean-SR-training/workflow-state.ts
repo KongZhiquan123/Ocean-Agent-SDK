@@ -333,7 +333,7 @@ export class TrainingWorkflow {
     return this.params
   }
 
-  private static readonly TOKEN_SALT = 'ocean-sr-training-v2'
+  private static readonly TOKEN_SALT = 'ocean-SR-training-v2'
 
   constructor(args: TrainingWorkflowParams, sessionOverrides?: TrainingWorkflowParams) {
     // 过滤掉 args 中的 undefined 值，防止无状态调用中空值覆盖 session 中用户确认过的参数

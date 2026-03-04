@@ -19,7 +19,7 @@ const myTool = defineTool({
   },
   async exec(args, ctx) {
     // Use ctx.sandbox for file operations
-    const result = await ctx.sandbox.readFile('/path/to/file')
+    const result = await ctx.sandbox.read('/path/to/file')
     return { result: 'success' }
   },
 })

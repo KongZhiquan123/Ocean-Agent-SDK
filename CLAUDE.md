@@ -39,7 +39,7 @@ SKILLS_DIR=./.skills                   # Optional: Skills directory
 
 ## Architecture
 
-> 详细模块说明、KODE SDK 集成、Skills 系统见 `docs/claude-references/architecture.md`
+> Detailed module description, KODE SDK integration, and Skills system can be found in docs/claude-references/architecture.md
 
 **Key entry points**: `src/config.ts` (DI + tool registration), `src/agent-manager.ts` (agent lifecycle + SSE), `src/server.ts` (HTTP + SSE), `src/conversation-manager.ts` (session pool)
 
@@ -49,8 +49,8 @@ SKILLS_DIR=./.skills                   # Optional: Skills directory
 
 ## API & Custom Tools
 
-> API 接口详情见 `docs/claude-references/api-usage.md`
-> 自定义工具开发、系统提示词修改、权限控制见 `docs/claude-references/custom-tools.md`
+> For API interface details, see docs/claude-references/api-usage.md
+> For custom tool development, system prompt modifications, and permission control, see docs/claude-references/custom-tools.md
 
 - Main endpoint: `POST /api/chat/stream` (X-API-Key header required, SSE response)
 - Health check: `GET /health`

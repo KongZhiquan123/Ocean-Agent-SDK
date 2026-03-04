@@ -8,6 +8,7 @@
  * @version 1.8.1
  *
  * @changelog
+ *   - 2026-03-04 kongzhiquan: v1.8.2 将与shell命令有关的函数移入utils
  *   - 2026-03-03 kongzhiquan: v1.8.1 移除 DANGEROUS_PATTERNS 中与 SDK sandbox.exec 重叠的冗余检查
  *   - 2026-02-26 kongzhiquan: v1.8.0 AgentConfig 新增 notebookPath 字段，写入 agent metadata
  *   - 2026-02-25 Leizheng: v1.7.1 修复 finally 中 await sendTask 阻塞 done 事件问题
@@ -32,7 +33,15 @@ import { Agent, type ProgressEvent, type AgentEvent, type MonitorErrorEvent } fr
 import { getDependencies } from './config'
 import { transformToolResult } from './utils/tool-result-transformer'
 import { transformToolUse } from './utils/tool-use-transformer'
-
+import { 
+  hasShellControlChars, 
+  isDangerousCommand, isReadOnlyPipeline, 
+  isWhitelisted, 
+  SAFE_READ_PATTERNS, 
+  SAFE_WRITE_PATTERNS, 
+  hasUnsafePath 
+} from './utils/shell'
+import { REQUEST_TIMEOUT_MS } from './utils/constants'
 // ========================================
 // 类型定义
 // ========================================
@@ -101,7 +110,7 @@ export async function createAgent(config: AgentConfig): Promise<Agent> {
   )
 
   // 增大 KODE SDK 内部处理超时（默认 5 分钟，预处理/训练流水线可能需要数小时）
-  ;(agent as any).PROCESSING_TIMEOUT = 2 * 60 * 60 * 1000 // 2 小时
+  ;(agent as any).PROCESSING_TIMEOUT = REQUEST_TIMEOUT_MS
 
   return agent
 }
@@ -109,95 +118,6 @@ export async function createAgent(config: AgentConfig): Promise<Agent> {
 // ========================================
 // Agent 事件处理
 // ========================================
-
-// ========================================
-// 权限控制 - 危险命令黑名单
-// ========================================
-
-// 对node_modules/@shareai-lab/kode-sdk/dist/infra/sandbox.js中DANGEROUS_PATTERNS进行补充
-const DANGEROUS_PATTERNS = [
-  /rm\s+(-[rRf]+\s+)*[\/~]/,         // rm -rf / 或 rm -rf ~（SDK 只拦截 rm -rf /）
-  /rm\s+(-[rRf]+\s+)*\.\./,          // rm -rf ..（SDK 未覆盖）
-  />\s*\/etc\//,                      // 重定向写入 /etc/（SDK 未覆盖）
-  />\s*\/usr\//,                      // 重定向写入 /usr/（SDK 未覆盖）
-  />\s*\/bin\//,                      // 重定向写入 /bin/（SDK 未覆盖）
-  /chmod\s+777/,                      // 任意路径 chmod 777（SDK 仅拦截根目录）
-  /chown\s+root/,                     // 改变所有者为 root（SDK 未覆盖）
-]
-
-const SHELL_CONTROL_PATTERN = /[;&`<>]/ // 禁止命令拼接/重定向
-const SUBSHELL_PATTERN = /\$\(/ // 禁止 $() 子命令
-const DOLLAR_PATTERN = /\$/ // 禁止环境变量展开
-const NEWLINE_PATTERN = /[\r\n]/ // 禁止换行注入
-
-const SAFE_READ_PATTERNS: RegExp[] = [
-  /^pwd$/,
-  /^whoami$/,
-  /^id$/,
-  /^date$/,
-  /^ls(\s+[-\w./]+)*$/,
-  /^cat\s+[-\w./]+$/,
-  /^head(\s+-n\s+\d+)?\s+[-\w./]+$/,
-  /^tail(\s+-n\s+\d+)?\s+[-\w./]+$/,
-  /^sed\s+-n\s+['"]?\d+(,\d+)?p['"]?\s+[-\w./]+$/,
-  /^rg\s+['"][^'"]+['"](\s+[-\w./]+)*$/,
-  /^(grep|egrep|fgrep)(\s+-[a-zA-Z]+)*\s+[^|]+\s+[-\w./]+$/,
-  /^diff(\s+-[a-zA-Z]+)*\s+[-\w./]+\s+[-\w./]+$/,
-  /^tree(\s+-[a-zA-Z]+)*(\s+[-\w./]+)?$/,
-  /^wc(\s+-[clmw]+)?\s+[-\w./]+$/,
-  /^stat\s+[-\w./]+$/,
-  /^du(\s+-h)?\s+[-\w./]+$/,
-  /^df(\s+-h)?$/,
-]
-
-const SAFE_WRITE_PATTERNS: RegExp[] = [
-  /^mkdir(\s+-p)?\s+[-\w./]+$/,
-  /^touch\s+[-\w./]+$/,
-  /^cp(\s+-[a-zA-Z]+)?\s+[-\w./]+\s+[-\w./]+$/,
-  /^mv(\s+-[a-zA-Z]+)?\s+[-\w./]+\s+[-\w./]+$/,
-]
-
-function isDangerousCommand(command: string): boolean {
-  return DANGEROUS_PATTERNS.some(pattern => pattern.test(command))
-}
-
-function hasShellControlChars(command: string): boolean {
-  return (
-    SHELL_CONTROL_PATTERN.test(command) ||
-    SUBSHELL_PATTERN.test(command) ||
-    DOLLAR_PATTERN.test(command) ||
-    NEWLINE_PATTERN.test(command)
-  )
-}
-
-function isWhitelisted(command: string, patterns: RegExp[]): boolean {
-  return patterns.some(pattern => pattern.test(command))
-}
-
-function splitPipeline(command: string): string[] {
-  return command.split('|').map((part) => part.trim()).filter(Boolean)
-}
-
-function isReadOnlyPipeline(command: string): boolean {
-  if (!command.includes('|')) return false
-  const parts = splitPipeline(command)
-  if (parts.length === 0) return false
-  return parts.every(part => isWhitelisted(part, SAFE_READ_PATTERNS))
-}
-
-function isAllowedPathToken(token: string, allowedPaths?: string[]): boolean {
-  const trimmed = token.replace(/^['"]|['"]$/g, '')
-  if (!trimmed || trimmed.startsWith('-')) return true
-  if (allowedPaths && allowedPaths.some(path => trimmed.startsWith(path))) return true
-  if (trimmed.includes('..')) return false
-  if (trimmed.startsWith('~')) return false
-  return true
-}
-
-function hasUnsafePath(command: string, allowedPaths?: string[]): boolean {
-  const tokens = command.split(/\s+/)
-  return tokens.some(token => !isAllowedPathToken(token, allowedPaths))
-}
 
 export function setupAgentHandlers(agent: Agent, reqId: string): void {
   const allowedPaths = (agent as any).config.sandbox.allowPaths as string[] | undefined

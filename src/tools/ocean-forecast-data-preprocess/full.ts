@@ -7,9 +7,10 @@
  * @author Leizheng
  * @contributors kongzhiquan
  * @date 2026-02-25
- * @version 1.2.1
+ * @version 1.3.0
  *
  * @changelog
+ *   - 2026-03-04 kongzhiquan: v1.3.0 合并 session 缓存，防止可选参数跨调用丢失
  *   - 2026-03-02 kongzhiquan: v1.2.1 在调用侧对 Step B 结果精简，避免超量 token 消耗
  *   - 2026-02-26 kongzhiquan: v1.2.0 添加notebook生成逻辑，执行完 Step B 后生成包含预处理代码和结果的 Jupyter Notebook，方便用户复现和调整预处理流程
  *   - 2026-02-26 Leizheng: v1.1.0 将 static_file 作为 grid_file 传给 forecast_preprocess.py
@@ -24,13 +25,17 @@
  */
 
 import { defineTool } from '@shareai-lab/kode-sdk'
-import { MAX_ERRORS, MAX_WARNINGS, MAX_RULE_ERRORS} from '@/utils/constants'
 import path from 'node:path'
 import { findFirstPythonPath } from '@/utils/python-manager'
 import { oceanInspectDataTool } from '../ocean-SR-data-preprocess/inspect'
 import { oceanForecastPreprocessVisualizeTool } from './visualize'
-import { ForecastWorkflow, WorkflowState } from './workflow-state'
+import { ForecastWorkflow, WorkflowState, type WorkflowParams } from './workflow-state'
 import { generateForecastPreprocessCells, saveOrAppendNotebook } from './notebook'
+import { shellEscapeDouble } from '@/utils/shell'
+import { loadSessionParams, saveSessionParams } from '@/utils/training-utils'
+
+/** 预处理会话参数缓存文件名 */
+const SESSION_FILENAME = '.ocean_forecast_preprocess_session.json' as const
 
 /**
  * 对 forecast_preprocess.py 返回的原始结果进行精简，
@@ -38,7 +43,9 @@ import { generateForecastPreprocessCells, saveOrAppendNotebook } from './noteboo
  * 完整原始结果已由 Python 侧写入 preprocess_manifest.json，此处只保留摘要。
  */
 function summarizeStepBResult(raw: any): any {
-
+  const MAX_WARNINGS = 5 as const
+  const MAX_ERRORS = 3 as const
+  const MAX_RULE_ERRORS = 3 as const
   const warnings: string[] = raw.warnings || []
   const errors: string[]   = raw.errors   || []
 
@@ -84,10 +91,6 @@ function summarizeStepBResult(raw: any): any {
     errors:             slimErrors,
     post_validation:    slimValidation,
   }
-}
-
-function shellEscapeDouble(str: string): string {
-  return str.replace(/[\\"$`!]/g, '\\$&')
 }
 
 export const oceanForecastPreprocessFullTool = defineTool({
@@ -270,6 +273,18 @@ export const oceanForecastPreprocessFullTool = defineTool({
   },
 
   async exec(args, ctx) {
+    // ===== 合并 session 缓存，防止可选参数跨调用丢失 =====
+    const sessionParams = args.output_base
+      ? await loadSessionParams<WorkflowParams>(args.output_base, SESSION_FILENAME, ctx)
+      : null
+    const effectiveArgs = sessionParams
+      ? {
+          ...sessionParams,
+          // 当前 args 中非 undefined 的值覆盖 session（用户新传入的参数优先）
+          ...Object.fromEntries(Object.entries(args).filter(([, v]) => v !== undefined))
+        }
+      : args
+
     const {
       nc_folder,
       nc_files,
@@ -296,7 +311,7 @@ export const oceanForecastPreprocessFullTool = defineTool({
       time_var,
       max_files,
       skip_visualize = false
-    } = args
+    } = effectiveArgs
 
     // 智能路径处理：支持目录或单个文件
     let actualNcFolder = nc_folder.trim()
@@ -363,6 +378,10 @@ export const oceanForecastPreprocessFullTool = defineTool({
         dynamic_vars_candidates: dynCandidates,
         suspected_masks: stepAResult.suspected_masks,
         suspected_coordinates: stepAResult.suspected_coordinates
+      }
+      // AWAITING_EXECUTION 时持久化全量参数，供后续执行调用恢复可选参数
+      if (stateCheck.currentState === WorkflowState.AWAITING_EXECUTION) {
+        await saveSessionParams(output_base, SESSION_FILENAME, effectiveArgs, ctx)
       }
       result.overall_status = prompt.status
       result.message = prompt.message

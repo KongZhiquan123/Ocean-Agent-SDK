@@ -32,6 +32,7 @@ import { conversationManager } from './conversation-manager'
 import { trainingProcessManager } from './utils/training-process-manager'
 import fs from 'fs/promises'
 import path from 'path'
+import { REQUEST_TIMEOUT_MS } from './utils/constants'
 // ========================================
 // 初始化
 // ========================================
@@ -267,7 +268,6 @@ app.post('/api/chat/stream', rateLimitMiddleware, requireAuth, async (req: Reque
   }, 2000)
 
   // 请求超时（2 小时，训练任务可能持续很长时间）
-  const REQUEST_TIMEOUT = 2 * 60 * 60 * 1000
   const timeoutTimer = setTimeout(() => {
     if (!res.writableEnded && !clientDisconnected) {
       console.warn(`[server] [req ${reqId}] 请求超时`)
@@ -280,7 +280,7 @@ app.post('/api/chat/stream', rateLimitMiddleware, requireAuth, async (req: Reque
       cleanup()
       res.end()
     }
-  }, REQUEST_TIMEOUT)
+  }, REQUEST_TIMEOUT_MS)
 
   // 监听客户端断开连接
   const cleanup = () => {

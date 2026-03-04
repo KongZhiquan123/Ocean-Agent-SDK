@@ -14,10 +14,7 @@
 import { defineTool } from '@shareai-lab/kode-sdk'
 import { findPythonWithModule, findFirstPythonPath } from '@/utils/python-manager'
 import path from 'node:path'
-
-function shellEscapeDouble(str: string): string {
-  return str.replace(/[\\"$`!]/g, '\\$&')
-}
+import { shellEscapeDouble } from '@/utils/shell'
 
 export const oceanForecastVisualizeTool = defineTool({
   name: 'ocean_forecast_train_visualize',

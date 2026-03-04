@@ -3,7 +3,7 @@
  *
  * @description Jupyter Notebook 通用工具
  *              提供 NotebookCell / Notebook 类型、辅助函数与通用的保存/追加逻辑
- *              供 ocean-preprocess 和 ocean-sr-training 等工具共享
+ *              供 ocean-preprocess 和 ocean-SR-training 等工具共享
  *
  * @author kongzhiquan
  * @date 2026-02-25

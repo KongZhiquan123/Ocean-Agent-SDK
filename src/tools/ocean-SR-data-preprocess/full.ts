@@ -6,9 +6,10 @@
  * @author leizheng
  * @contributors kongzhiquan, Leizheng
  * @date 2026-02-02
- * @version 3.7.1
+ * @version 3.8.0
  *
  * @changelog
+ *   - 2026-03-04 kongzhiquan: v3.8.0 合并 session 缓存，防止可选参数跨调用丢失
  *   - 2026-02-26 kongzhiquan: v3.7.1 Notebook 路径改用后端传入的 notebookPath（从 agent metadata 读取）
  *   - 2026-02-25 kongzhiquan: v3.7.0 向 Step A/B 传入 output_base 参数
  *     - inspect/validate 工具的 tempDir 统一使用 output_base/.ocean_preprocess_temp
@@ -82,9 +83,13 @@ import { oceanValidateTensorTool } from './validate'
 import { oceanSrPreprocessConvertNpyTool } from './convert'
 import { oceanSrPreprocessDownsampleTool } from './downsample'
 import { oceanSrPreprocessVisualizeTool } from './visualize'
-import { PreprocessWorkflow, WorkflowState } from './workflow-state'
+import { PreprocessWorkflow, WorkflowState, type WorkflowParams } from './workflow-state'
 import { generatePreprocessCells, saveOrAppendNotebook } from './notebook'
 import { findFirstPythonPath } from '@/utils/python-manager'
+import { loadSessionParams, saveSessionParams } from '@/utils/training-utils'
+
+/** 超分预处理会话参数缓存文件名 */
+const SESSION_FILENAME = '.ocean_sr_preprocess_session.json' as const
 
 const DEFAULT_WORKERS = Math.max(1, Math.min(8, os.cpus().length || 1))
 
@@ -352,6 +357,18 @@ export const oceanSrPreprocessFullTool = defineTool({
   },
 
   async exec(args, ctx) {
+    // ===== 合并 session 缓存，防止可选参数跨调用丢失 =====
+    const sessionParams = args.output_base
+      ? await loadSessionParams<WorkflowParams>(args.output_base, SESSION_FILENAME, ctx)
+      : null
+    const effectiveArgs = sessionParams
+      ? {
+          ...sessionParams,
+          // 当前 args 中非 undefined 的值覆盖 session（用户新传入的参数优先）
+          ...Object.fromEntries(Object.entries(args).filter(([, v]) => v !== undefined))
+        }
+      : args
+
     const {
       nc_folder,
       nc_files,
@@ -393,7 +410,7 @@ export const oceanSrPreprocessFullTool = defineTool({
       time_var,
       // 文件数限制参数
       max_files
-    } = args
+    } = effectiveArgs
 
     // 检测是否为粗网格模式（数值模型模式）
     const isNumericalModelMode = !!lr_nc_folder
@@ -476,6 +493,10 @@ export const oceanSrPreprocessFullTool = defineTool({
         dynamic_vars_candidates: dynCandidates,
         suspected_masks: stepAResult.suspected_masks,
         suspected_coordinates: stepAResult.suspected_coordinates
+      }
+      // AWAITING_EXECUTION 时持久化全量参数，供后续执行调用恢复可选参数
+      if (stateCheck.currentState === WorkflowState.AWAITING_EXECUTION) {
+        await saveSessionParams(output_base, SESSION_FILENAME, effectiveArgs, ctx)
       }
       result.overall_status = prompt.status
       result.message = prompt.message

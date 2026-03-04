@@ -6,7 +6,7 @@
 
 以下任一文件被修改时，必须执行此清单：
 - `src/tools/ocean-SR-data-preprocess/` 下任何文件
-- `src/tools/ocean-sr-training/` 下任何文件
+- `src/tools/ocean-SR-training/` 下任何文件
 - `src/tools/ocean-forecast-data-preprocess/` 下任何文件
 - `src/tools/ocean-forecast-training/` 下任何文件
 

@@ -10,7 +10,7 @@
  */
 
 import {oceanSrPreprocessTools} from './ocean-SR-data-preprocess'
-import {oceanSrTrainingTools} from './ocean-sr-training'
+import {oceanSrTrainingTools} from './ocean-SR-training'
 import {oceanForecastPreprocessTools} from './ocean-forecast-data-preprocess'
 import {oceanForecastTrainingTools} from './ocean-forecast-training'
 

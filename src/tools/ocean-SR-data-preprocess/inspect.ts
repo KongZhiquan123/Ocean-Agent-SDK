@@ -34,14 +34,10 @@
  */
 
 import { defineTool } from '@shareai-lab/kode-sdk'
-import { MAX_FILE_SAMPLE } from '@/utils/constants'
 import { truncateDict } from '@/utils/truncate'
 import { findFirstPythonPath } from '@/utils/python-manager'
 import path from 'node:path'
-
-function shellEscapeDouble(str: string): string {
-  return str.replace(/[\\"$`!]/g, '\\$&')
-}
+import { shellEscapeDouble } from '@/utils/shell'
 
 // ========================================
 // 类型定义
@@ -277,7 +273,7 @@ ${allVarNames.slice(0, 10).join(', ')}${allVarNames.length > 10 ? '...' : ''}
     }
 
     // 8. 截断大型列表，避免工具结果过长触发 prompt_too_long 错误
-    
+    const MAX_FILE_SAMPLE = 5 as const
     const totalFiles = inspectResult.file_list?.length ?? 0
     const totalDynamic = inspectResult.dynamic_files?.length ?? 0
     const totalStatic = inspectResult.suspected_static_files?.length ?? 0

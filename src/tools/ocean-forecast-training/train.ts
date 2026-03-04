@@ -16,7 +16,9 @@ import { trainingProcessManager } from '@/utils/training-process-manager'
 import { saveOrAppendNotebook, generateForecastTrainCells } from './notebook'
 import type { ForecastTrainNotebookParams } from './notebook'
 import path from 'node:path'
-import net from 'node:net'
+import { shellEscapeDouble, shellSafeJson, extractTaggedJson } from '@/utils/shell'
+import { isPortFree, findFreePort } from '@/utils/port'
+import { loadSessionParams, saveSessionParams, formatRecommendationMessage } from '@/utils/training-utils'
 import {
   ForecastTrainingWorkflow,
   ForecastTrainingState,
@@ -26,86 +28,7 @@ import {
   type ModelInfo,
 } from './workflow-state'
 
-/** 训练会话参数缓存文件名，用于跨无状态调用保留用户确认过的参数 */
-const SESSION_FILENAME = '.ocean_forecast_session.json'
-
-/** 从 log_dir 读取保存的训练会话参数（不存在或解析失败时返回 null） */
-async function loadSessionParams(
-  logDir: string,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  ctx: any,
-): Promise<ForecastWorkflowParams | null> {
-  try {
-    const sessionPath = path.join(logDir, SESSION_FILENAME)
-    const content = await ctx.sandbox.fs.read(sessionPath)
-    const parsed = JSON.parse(content)
-    return (parsed?.params as ForecastWorkflowParams) ?? null
-  } catch {
-    return null
-  }
-}
-
-/** 将当前全量参数写入 log_dir 的会话缓存文件 */
-async function saveSessionParams(
-  logDir: string,
-  params: ForecastWorkflowParams,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  ctx: any,
-): Promise<void> {
-  try {
-    const sessionPath = path.join(logDir, SESSION_FILENAME)
-    await ctx.sandbox.fs.write(sessionPath, JSON.stringify({ savedAt: Date.now(), params }))
-  } catch {
-    // 写入失败不影响主流程
-  }
-}
-
-/**
- * 将 JSON 字符串转义为可以安全嵌入 shell 单引号的形式
- * 策略：替换单引号为 '\'' (结束单引号 + 转义单引号 + 开始单引号)
- * 注：在 shell 单引号内，反斜杠等其他字符均为字面量，无需额外转义
- */
-function shellSafeJson(json: string): string {
-  return json.replace(/'/g, "'\\''")
-}
-
-/**
- * 转义字符串使其可以安全嵌入 shell 双引号
- * 在双引号内有特殊含义的字符：\ " $ ` !
- */
-function shellEscapeDouble(str: string): string {
-  return str.replace(/[\\"$`!]/g, '\\$&')
-}
-
-async function isPortFree(port: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const server = net.createServer()
-    server.unref()
-    server.once('error', () => resolve(false))
-    server.listen(port, () => {
-      server.close(() => resolve(true))
-    })
-  })
-}
-
-async function findFreePort(start = 29500, end = 29600): Promise<number | null> {
-  for (let port = start; port <= end; port += 1) {
-    // eslint-disable-next-line no-await-in-loop
-    if (await isPortFree(port)) return port
-  }
-  return null
-}
-
-function extractTaggedJson(output: string, tag: string): Record<string, unknown> | null {
-  const pattern = new RegExp(`__${tag}__([\\s\\S]*?)__${tag}__`)
-  const match = output.match(pattern)
-  if (!match) return null
-  try {
-    return JSON.parse(match[1])
-  } catch {
-    return null
-  }
-}
+const SESSION_FILENAME = '.ocean_forecast_train_session.json' as const
 
 async function validateDataset(
   datasetRoot: string,
@@ -181,77 +104,6 @@ async function runHyperparamRecommendation(
   } catch {
     return null
   }
-}
-
-/**
- * 将超参数推荐结果格式化为用户可读的消息段落。
- */
-function formatRecommendationMessage(rec: Record<string, unknown>): string {
-  const recommendations = rec.recommendations as Record<string, unknown> | undefined
-  const reasoning = rec.reasoning as Record<string, unknown> | undefined
-  const datasetInfo = rec.dataset_info as Record<string, unknown> | undefined
-  const gpuInfo = rec.gpu_info as Record<string, unknown> | undefined
-  const spectral = rec.spectral_analysis as Record<string, unknown> | undefined
-  const modelNotes = rec.model_notes as Record<string, unknown> | undefined
-
-  if (!recommendations) return ''
-
-  const lines: string[] = [
-    '================================================================================',
-    '                    💡 超参数推荐（基于实测显存 + 数据分析）',
-    '================================================================================',
-  ]
-
-  // 数据集 & GPU 基本信息
-  if (datasetInfo || gpuInfo) {
-    lines.push('\n【分析基础】')
-    if (datasetInfo) {
-      lines.push(`- 训练集：${datasetInfo.n_train} 个样本，空间分辨率 ${(datasetInfo.spatial_shape as number[])?.join(' × ') ?? '?'}，${datasetInfo.n_vars} 个变量`)
-    }
-    if (gpuInfo && gpuInfo.name) {
-      lines.push(`- GPU：${gpuInfo.name}（${gpuInfo.total_gb ?? '?'} GB）`)
-    }
-  }
-
-  // 推荐参数
-  lines.push('\n【推荐参数】')
-  if (recommendations.batch_size !== undefined)
-    lines.push(`- batch_size:        ${recommendations.batch_size}`)
-  if (recommendations.eval_batch_size !== undefined)
-    lines.push(`- eval_batch_size:   ${recommendations.eval_batch_size}`)
-  if (recommendations.epochs !== undefined)
-    lines.push(`- epochs:            ${recommendations.epochs}`)
-  if (recommendations.lr !== undefined)
-    lines.push(`- lr:                ${(recommendations.lr as number).toExponential(2)}`)
-  if (recommendations.gradient_checkpointing !== undefined)
-    lines.push(`- gradient_checkpointing: ${recommendations.gradient_checkpointing}`)
-
-  // 推荐理由
-  if (reasoning && Object.keys(reasoning).length > 0) {
-    lines.push('\n【推荐理由】')
-    for (const [key, val] of Object.entries(reasoning)) {
-      lines.push(`- ${key}: ${val}`)
-    }
-  }
-
-  // 频谱分析
-  if (spectral) {
-    lines.push('\n【数据频谱分析（仅供参考，不自动修改模型结构）】')
-    lines.push(`- 频率特征：${spectral.freq_desc}（k90 ≈ ${spectral.k90_mean}，max_k = ${spectral.max_k}）`)
-  }
-
-  // 模型特定提示
-  if (modelNotes) {
-    lines.push('\n【模型结构参数参考】')
-    for (const [, note] of Object.entries(modelNotes)) {
-      lines.push(`- ${note}`)
-    }
-  }
-
-  lines.push('\n⚠️ Agent 注意：以上为系统推荐值，请告知用户并询问是否采用或调整，再继续执行确认。')
-  lines.push('================================================================================')
-
-  return lines.join('\n')
 }
 
 export const oceanForecastTrainTool = defineTool({
@@ -460,7 +312,7 @@ export const oceanForecastTrainTool = defineTool({
 
     // ===== 1. 构建工作流参数（合并 session 缓存，防止可选参数跨调用丢失） =====
     const workflowArgs = { ...args }
-    const sessionParams = args.log_dir ? await loadSessionParams(args.log_dir, ctx) : null
+    const sessionParams = args.log_dir ? await loadSessionParams<ForecastWorkflowParams>(args.log_dir, SESSION_FILENAME, ctx) : null
     const workflow = new ForecastTrainingWorkflow(workflowArgs, sessionParams ?? undefined)
     const stateCheck = workflow.determineCurrentState()
 
@@ -510,13 +362,13 @@ export const oceanForecastTrainTool = defineTool({
 
       // AWAITING_EXECUTION 时持久化全量参数，供后续执行调用恢复可选参数（如 normalizer_type）
       if (stateCheck.currentState === ForecastTrainingState.AWAITING_EXECUTION && args.log_dir) {
-        await saveSessionParams(args.log_dir, workflow.getParams(), ctx)
+        await saveSessionParams(args.log_dir, SESSION_FILENAME, workflow.getParams(), ctx)
       }
       // AWAITING_EXECUTION 时运行超参数推荐（实测显存 + 数据集分析）
       if (stateCheck.currentState === ForecastTrainingState.AWAITING_EXECUTION) {
         const recResult = await runHyperparamRecommendation(args, pythonPath, trainingDir, ctx)
         if (recResult?.status === 'success') {
-          const recMsg = formatRecommendationMessage(recResult)
+          const recMsg = formatRecommendationMessage(recResult, { datasetShapeKey: 'spatial_shape', datasetShapeLabel: '空间分辨率' })
           if (recMsg) {
             prompt.message = `${prompt.message}\n\n${recMsg}`
           }
