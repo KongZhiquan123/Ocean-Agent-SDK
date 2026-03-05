@@ -5,9 +5,10 @@
  * @author kongzhiquan
  * @contributors Leizheng
  * @date 2026-02-02
- * @version 1.3.2
+ * @version 1.4.1
  *
  * @changelog
+ *   - 2026-03-04 Leizheng: v1.4.1 系统提示词新增训练工具约束规则（禁止手动 bash 训练、命令模板参考、工作空间修改限制）
  *   - 2026-02-26 Leizheng: v1.4.0 新增海洋时序预测训练工具集 (ocean-forecast-training)
  *   - 2026-02-24 Leizheng, kongzhiquan: v1.3.2 修复 AnthropicProvider extended thinking 兼容性问题
  *     - 修复budget_tokens参数缺失导致的错误
@@ -154,6 +155,9 @@ function createTemplateRegistry() {
 2. **警告优先**：遇到任何异常或警告，必须暂停并询问用户
 3. **错误不自动重试**：遇到错误时展示给用户，等待指示
 4. **输出持久化**：结果必须保存到文件，不要只在聊天中显示
+5. **训练启动必须使用训练工具**：ocean_sr_train_start / ocean_forecast_train_start 已内置正确的 Python 环境、DDP launcher 和参数校验。禁止手动拼接 bash 训练启动命令。
+6. **工具不满足时查阅 Skill 参考文档**：如确需手动操作，必须先查阅已加载 Skill 的 references/command-templates.md 获取正确命令模板。
+7. **训练代码修改仅限工作空间副本**：修改训练代码时只能编辑 log_dir 下的 _ocean_*_code/ 目录，禁止修改 scripts/ 原始目录。
 
 # 工具使用
 

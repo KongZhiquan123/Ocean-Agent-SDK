@@ -1,14 +1,20 @@
 ---
 name: ocean-SR-training
-description: 海洋超分辨率模型训练技能 - 支持多种模型架构的训练、测试、推理（含陆地掩码处理 + OOM 自动防护 + 错误实时反馈 + predict 全图预测）
-version: 4.3.0
+description: 海洋超分辨率模型训练技能 - 支持多种模型架构的训练、测试、推理（含陆地掩码处理 + OOM 自动防护 + 错误实时反馈 + predict 全图预测 + 续训/切换/恢复工作流）
+version: 4.4.0
 author: Leizheng
 contributors: kongzhiquan
-last_modified: 2026-02-11
+last_modified: 2026-03-04
 ---
 
 <!--
 Changelog:
+  - 2026-03-04 Leizheng: v4.4.0 新增 3 个运维工作流 + 禁止行为更新
+    - 断点续训工作流：ckpt_path 续训、追加 epoch、微调 lr
+    - 切换模型工作流：终止当前训练、新模型新 log_dir
+    - 训练失败恢复工作流：诊断→分类→恢复，代码修改仅限工作空间副本
+    - 禁止行为新增：手动训练（绕过工具拼 bash）
+    - 参考文档新增：troubleshooting.md、command-templates.md
   - 2026-02-11 Leizheng: v4.3.0 新增 predict 模式全图预测工作流
     - predict 快速通道：跳过训练工作流直接启动推理
     - predict 结构化事件：predict_start / predict_progress / predict_end
@@ -173,6 +179,92 @@ log_dir/
 
 ---
 
+## 断点续训工作流
+
+### 触发条件
+- 训练中断（进程崩溃、手动终止、服务器重启）
+- 用户要求追加 epoch 继续训练
+- 用户要求微调学习率后继续训练
+
+### 工作流
+
+```
+1. 确认续训条件 → 检查 log_dir 下是否有 best_model.pth
+   │  若无：提示用户无可用 checkpoint，需重新训练
+   ↓
+2. 确认参数 → 使用相同 model_name + ckpt_path 参数
+   │  可调整：epochs（追加）、lr（微调）、batch_size
+   │  不可变：model_name（模型架构必须一致）
+   ↓
+3. 参数汇总 → 展示所有参数（标注 ckpt_path），等待"确认执行"
+   ↓
+4. 启动训练 → ocean_sr_train_start({ ..., ckpt_path: "{log_dir}/best_model.pth" })
+   ↓
+5. 后续流程 → 同正常训练（等待 → 可视化 → 报告）
+```
+
+### 约束
+- `ckpt_path` 必须通过工具参数传入，禁止手动加载
+- 模型架构不可变：续训时 `model_name` 必须与原始训练一致
+- 若原始训练使用了 `patch_size`，续训时应保持相同设置
+
+---
+
+## 切换模型工作流
+
+### 触发条件
+- 用户要求更换模型重新训练
+- 当前模型效果不佳，需要尝试其他模型
+
+### 工作流
+
+```
+1. 终止当前训练 → ocean_sr_train_status({ action: "kill", process_id })
+   ↓
+2. 选择新模型 → ocean_sr_list_models，用户选择
+   ↓
+3. 新建 log_dir → 新模型必须使用新的 log_dir
+   │  禁止：复用旧模型的 log_dir
+   ↓
+4. 从参数确认步骤开始 → 进入正常训练工作流步骤 3
+```
+
+### 约束
+- 新模型 **必须使用新 log_dir**，禁止覆盖旧模型的训练输出
+- checkpoint 不可跨模型加载（不同模型架构的权重不兼容）
+
+---
+
+## 训练失败恢复工作流
+
+### 触发条件
+- 训练返回 `process_status="failed"`
+- `ocean_sr_train_status` 返回 `error_summary`
+
+### 诊断流程
+
+```
+1. 查看错误摘要 → ocean_sr_train_status({ action: "status", process_id })
+   │  读取 error_summary 和 suggestions
+   ↓
+2. 查看详细日志 → ocean_sr_train_status({ action: "logs", process_id, tail: 100 })
+   ↓
+3. 按决策树分类 → 参考 references/troubleshooting.md 诊断决策树
+   │
+   ├── 启动崩溃 → 检查 Python 环境 / DDP 配置 / 数据路径
+   ├── 训练中途失败 → 检查 OOM / NCCL / NaN / Shape
+   └── Agent bash 失败 → 立即回到训练工具
+   ↓
+4. 执行恢复 → 根据诊断结果调整参数，重新启动训练
+```
+
+### 代码修改规范
+- **只改工作空间副本**：修改训练代码时只能编辑 `{log_dir}/_ocean_sr_code/` 目录
+- **禁止修改原始目录**：`scripts/ocean-sr-training/` 目录禁止修改
+- 参考 `references/troubleshooting.md` 的工作空间文件结构和修改权限表
+
+---
+
 ## 主动状态检查
 
 **重要**：如果之前启动过训练进程，Agent 在每次收到用户新消息时，
@@ -210,6 +302,7 @@ log_dir/
 | **参数决策** | 自动决定 epochs、lr、batch_size、GPU |
 | **流程控制** | 跳过参数确认 |
 | **错误处理** | 自动重试失败的训练、不给出修改建议 |
+| **手动训练** | 绕过训练工具手动拼接 bash 训练启动命令 |
 
 ---
 
@@ -271,3 +364,5 @@ log_dir/                       ← 训练输出目录（由配置指定）
 | `references/visualization.md` | 可视化与报告生成 | 训练完成后生成报告时 |
 | `references/examples.md` | 对话示例 | 需要参考示例时 |
 | `references/errors.md` | 错误处理指南 | 遇到错误时 |
+| `references/troubleshooting.md` | 故障排查决策树与常见错误速查 | 训练失败诊断时 |
+| `references/command-templates.md` | 正确命令模板与禁止命令 | 需要手动操作时（优先用工具） |
