@@ -4,9 +4,10 @@
  * @description 训练进程管理器 —— TrainingProcessManager 主类
  * @author kongzhiquan
  * @date 2026-03-04
- * @version 3.2.0
+ * @version 3.3.0
  *
  * @changelog
+ *   - 2026-03-05 kongzhiquan: v3.3.0 startProcess/readLogs 改为异步，消除同步 fs 阻塞事件循环
  *   - 2026-03-04 kongzhiquan: v3.2.0 拆分为模块化文件，委托调用自由函数
  *   - 2026-02-25 Leizheng: v3.2.0 修复三个事件系统 Bug
  *   - 2026-02-11 Leizheng: v3.1.0 Predict 模式进度追踪
@@ -20,15 +21,8 @@
  */
 
 import { spawn } from 'child_process'
-import {
-  createWriteStream,
-  existsSync,
-  mkdirSync,
-  openSync,
-  readSync,
-  closeSync,
-  statSync,
-} from 'fs'
+import { createWriteStream } from 'fs'
+import fs from 'fs/promises'
 import path from 'path'
 
 import { MAX_COMPLETED_PROCESSES, RING_BUFFER_SIZE, RUNTIME_SAMPLE_INTERVAL_MS, TAIL_READ_BYTES } from './constants'
@@ -98,21 +92,19 @@ export class TrainingProcessManager {
   /**
    * 启动一个后台训练进程
    */
-  startProcess(options: {
+  async startProcess(options: {
     cmd: string
     args: string[]
     cwd: string
     logDir: string
     env?: Record<string, string>
     metadata?: TrainingProcessInfo['metadata']
-  }): TrainingProcessInfo {
+  }): Promise<TrainingProcessInfo> {
     const { cmd, args, cwd, logDir, env, metadata } = options
 
     const id = `train-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 
-    if (!existsSync(logDir)) {
-      mkdirSync(logDir, { recursive: true })
-    }
+    await fs.mkdir(logDir, { recursive: true })
 
     const logFile = path.join(logDir, `${id}.log`)
     const errorLogFile = path.join(logDir, `${id}.error.log`)
@@ -186,14 +178,16 @@ Start Time: ${new Date().toISOString()}
 
     managed.runtimeSampleTimer = setInterval(() => {
       if (managed.info.status === 'running') {
-        sampleRuntimeStats(managed)
+        sampleRuntimeStats(managed).catch(() => {
+          // ignore sampling errors
+        })
       }
     }, RUNTIME_SAMPLE_INTERVAL_MS)
 
     if (childProcess.stdout) {
       childProcess.stdout.on('data', (data: Buffer) => {
         const text = data.toString()
-        writeLog(managed, 'log', text)
+        writeLog(managed, 'log', text).catch(() => {})
         managed.stdoutBuffer += text
         parseEventMarkers(managed, 'stdout')
       })
@@ -202,8 +196,8 @@ Start Time: ${new Date().toISOString()}
     if (childProcess.stderr) {
       childProcess.stderr.on('data', (data: Buffer) => {
         const text = data.toString()
-        writeLog(managed, 'log', text)
-        writeLog(managed, 'error', text)
+        writeLog(managed, 'log', text).catch(() => {})
+        writeLog(managed, 'error', text).catch(() => {})
 
         const lines = text.split('\n').filter((l) => l.trim())
         managed.stderrRingBuffer.push(...lines)
@@ -258,7 +252,7 @@ End Time: ${new Date().toISOString()}
 Duration: ${((managed.info.endTime - managed.info.startTime) / 1000).toFixed(1)}s
 ================================================================================
 `
-      writeLog(managed, 'log', endFooter)
+      writeLog(managed, 'log', endFooter).catch(() => {})
       this.evictOldProcesses()
 
       logStream.end()
@@ -283,8 +277,8 @@ Duration: ${((managed.info.endTime - managed.info.startTime) / 1000).toFixed(1)}
           errorMessage: err.message,
         }),
       )
-      writeLog(managed, 'error', `Process error: ${err.message}\n`)
-      writeLog(managed, 'log', `[ERROR] Process error: ${err.message}\n`)
+      writeLog(managed, 'error', `Process error: ${err.message}\n`).catch(() => {})
+      writeLog(managed, 'log', `[ERROR] Process error: ${err.message}\n`).catch(() => {})
       this.evictOldProcesses()
       logStream.end()
       errorLogStream.end()
@@ -337,34 +331,37 @@ Duration: ${((managed.info.endTime - managed.info.startTime) / 1000).toFixed(1)}
    * - tail 模式：从文件尾部读取最后 N 行
    * - offset 模式：从指定字节偏移量开始增量读取
    */
-  readLogs(
+  async readLogs(
     id: string,
     options: { tail?: number; offset?: number },
-  ): { content: string; size: number; offset: number } | undefined {
+  ): Promise<{ content: string; size: number; offset: number } | undefined> {
     const managed = this.processes.get(id)
     if (!managed) return undefined
 
     const { logFile } = managed.info
 
     try {
-      if (!existsSync(logFile)) {
+      let stat: Awaited<ReturnType<typeof fs.stat>>
+      try {
+        stat = await fs.stat(logFile)
+      } catch {
         return { content: '', size: 0, offset: 0 }
       }
 
-      const size = statSync(logFile).size
+      const size = stat.size
 
       if (options.tail) {
         const readBytes = Math.min(size, TAIL_READ_BYTES)
         const tailOffset = Math.max(0, size - readBytes)
         const buffer = Buffer.alloc(readBytes)
-        const fd = openSync(logFile, 'r')
+        const fh = await fs.open(logFile, 'r')
         try {
-          readSync(fd, buffer, 0, readBytes, tailOffset)
+          await fh.read(buffer, 0, readBytes, tailOffset)
         } finally {
-          closeSync(fd)
+          await fh.close()
         }
         const lines = buffer.toString('utf-8').split('\n')
-        if (tailOffset > 0) lines.shift() // 丢弃可能不完整的首行
+        if (tailOffset > 0) lines.shift()
         return { content: lines.slice(-options.tail).join('\n'), size, offset: size }
       }
 
@@ -375,11 +372,11 @@ Duration: ${((managed.info.endTime - managed.info.startTime) / 1000).toFixed(1)}
         }
         const readBytes = size - safeOffset
         const buffer = Buffer.alloc(readBytes)
-        const fd = openSync(logFile, 'r')
+        const fh = await fs.open(logFile, 'r')
         try {
-          readSync(fd, buffer, 0, readBytes, safeOffset)
+          await fh.read(buffer, 0, readBytes, safeOffset)
         } finally {
-          closeSync(fd)
+          await fh.close()
         }
         return { content: buffer.toString('utf-8'), size, offset: size }
       }

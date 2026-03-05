@@ -130,7 +130,7 @@ export const oceanSrTrainStatusTool = defineTool({
       }
 
       // 返回完整状态信息（与 status 查询一致）
-      return buildStatusResponse(process_id, result.processInfo)
+      return await buildStatusResponse(process_id, result.processInfo)
     }
 
     // watch 模式：等待关键通知（训练开始/报错/结束）
@@ -199,7 +199,7 @@ export const oceanSrTrainStatusTool = defineTool({
 
     // 获取日志
     if (action === 'logs') {
-      const logsResult = trainingProcessManager.readLogs(process_id, {
+      const logsResult = await trainingProcessManager.readLogs(process_id, {
         tail: offset === undefined ? tail : undefined,
         offset,
       })
@@ -229,14 +229,14 @@ export const oceanSrTrainStatusTool = defineTool({
     }
 
     // 默认：查询状态
-    return buildStatusResponse(process_id, processInfo)
+    return await buildStatusResponse(process_id, processInfo)
   },
 })
 
 /**
  * 构建状态查询响应（status 和 wait 共用）
  */
-function buildStatusResponse(
+async function buildStatusResponse(
   process_id: string,
   processInfo: ReturnType<typeof trainingProcessManager.getProcess> & object,
 ) {
@@ -277,7 +277,7 @@ function buildStatusResponse(
       response.suggestions = processInfo.errorSummary.suggestions
     } else {
       // fallback：读取 error.log 最后 30 行
-      const errorLogs = trainingProcessManager.readLogs(process_id, { tail: 30 })
+      const errorLogs = await trainingProcessManager.readLogs(process_id, { tail: 30 })
       if (errorLogs) {
         response.error_log_tail = errorLogs.content
       }

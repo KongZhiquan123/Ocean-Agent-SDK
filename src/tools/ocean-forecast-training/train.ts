@@ -28,8 +28,6 @@ import {
   type ModelInfo,
 } from './workflow-state'
 
-const SESSION_FILENAME = '.ocean_forecast_train_session.json' as const
-
 async function validateDataset(
   datasetRoot: string,
   pythonPath: string,
@@ -303,7 +301,7 @@ export const oceanForecastTrainTool = defineTool({
 
   async exec(args, ctx) {
     // 训练工具需要 torch，优先查找安装了 torch 的 Python
-    const pythonPath = findPythonWithModule('torch') || findFirstPythonPath()
+    const pythonPath = (await findPythonWithModule('torch')) || (await findFirstPythonPath())
     if (!pythonPath) {
       throw new Error('未找到可用的 Python 解释器（需要安装 torch）')
     }
@@ -311,6 +309,7 @@ export const oceanForecastTrainTool = defineTool({
     const trainingDir = path.resolve(process.cwd(), 'scripts/ocean-forecast-training')
 
     // ===== 1. 构建工作流参数（合并 session 缓存，防止可选参数跨调用丢失） =====
+    const SESSION_FILENAME = '.ocean_forecast_train_session.json' as const
     const workflowArgs = { ...args }
     const sessionParams = args.log_dir ? await loadSessionParams<ForecastWorkflowParams>(args.log_dir, SESSION_FILENAME, ctx) : null
     const workflow = new ForecastTrainingWorkflow(workflowArgs, sessionParams ?? undefined)
@@ -474,7 +473,7 @@ export const oceanForecastTrainTool = defineTool({
       const cmdEnv = { CUDA_VISIBLE_DEVICES: cudaDevice }
 
       // 启动后台进程
-      const processInfo = trainingProcessManager.startProcess({
+      const processInfo = await trainingProcessManager.startProcess({
         cmd: cmdPath,
         args: cmdArgs,
         cwd: workspaceDir,
@@ -504,7 +503,7 @@ export const oceanForecastTrainTool = defineTool({
           error: '预测推理在启动阶段崩溃（数据加载/模型加载失败）',
           process_id: processInfo.id,
           error_summary: failedInfo?.errorSummary ?? null,
-          error_log_tail: trainingProcessManager.readLogs(processInfo.id, { tail: 50 })?.content,
+          error_log_tail: (await trainingProcessManager.readLogs(processInfo.id, { tail: 50 }))?.content,
           suggestions: failedInfo?.errorSummary?.suggestions ?? [],
         }
       }
@@ -786,7 +785,7 @@ export const oceanForecastTrainTool = defineTool({
     }
 
     // ===== 3e. 启动后台训练进程 =====
-    const processInfo = trainingProcessManager.startProcess({
+    const processInfo = await trainingProcessManager.startProcess({
       cmd: cmdPath,
       args: cmdArgs,
       cwd: workspaceDir,
@@ -816,7 +815,7 @@ export const oceanForecastTrainTool = defineTool({
         error: '训练在启动阶段崩溃（数据加载/模型构建失败）',
         process_id: processInfo.id,
         error_summary: failedInfo?.errorSummary ?? null,
-        error_log_tail: trainingProcessManager.readLogs(processInfo.id, { tail: 50 })?.content,
+        error_log_tail: (await trainingProcessManager.readLogs(processInfo.id, { tail: 50 }))?.content,
         suggestions: failedInfo?.errorSummary?.suggestions ?? [],
       }
     }

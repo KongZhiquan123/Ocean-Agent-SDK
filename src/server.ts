@@ -30,7 +30,7 @@ import {
 } from './agent-manager'
 import { conversationManager } from './conversation-manager'
 import { trainingProcessManager } from './utils/training-process-manager'
-import fs from 'fs/promises'
+import { mkdir } from 'fs/promises'
 import path from 'path'
 import { REQUEST_TIMEOUT_MS } from './utils/constants'
 // ========================================
@@ -152,8 +152,8 @@ function requireAuth(req: Request, res: Response, next: NextFunction): void {
 // @modified 2026-02-02 leizheng: 添加会话统计信息
 // ========================================
 
-app.get('/health', (req: Request, res: Response) => {
-  const stats = conversationManager.getStats()
+app.get('/health', async (req: Request, res: Response) => {
+  const stats = await conversationManager.getStats()
   res.json({
     status: 'ok',
     service: 'kode-agent-service',
@@ -209,8 +209,8 @@ app.post('/api/chat/stream', rateLimitMiddleware, requireAuth, async (req: Reque
 
   // 如果输出目录和工作目录不存在，创建它
   try {
-    await fs.mkdir(outputsPath, { recursive: true })
-    await fs.mkdir(workingDir, { recursive: true })
+    await mkdir(outputsPath, { recursive: true })
+    await mkdir(workingDir, { recursive: true })
   } catch (err) {
     console.error(`[server] [req ${reqId}] 创建目录失败:`, err)
     sendError(res, 500, 'INTERNAL_ERROR', 'Failed to create working or outputs directory')
@@ -221,7 +221,7 @@ app.post('/api/chat/stream', rateLimitMiddleware, requireAuth, async (req: Reque
   try {
     const allowedPaths = [outputsPath, workingDir, '/data', path.dirname(notebookPath), path.resolve(process.cwd(), config.skillsDir)]
     // 尝试加载已有会话
-    if (inputAgentId && conversationManager.hasSession(inputAgentId)) {
+    if (inputAgentId && await conversationManager.hasSession(inputAgentId)) {
       agent = await conversationManager.getAgent(inputAgentId)
       if (agent) {
         setupAgentHandlers(agent, reqId)
@@ -236,7 +236,7 @@ app.post('/api/chat/stream', rateLimitMiddleware, requireAuth, async (req: Reque
       setupAgentHandlers(agent, reqId)
 
       // 注册到会话管理器
-      conversationManager.registerSession(agent)
+      await conversationManager.registerSession(agent)
       isNewSession = true
       console.log(`[server] [req ${reqId}] 创建新会话: ${agent.agentId}`)
     }
@@ -385,7 +385,7 @@ async function gracefulShutdown(signal: string): Promise<void> {
   })
 
   // 2. 清理会话管理器
-  conversationManager.shutdown()
+  await conversationManager.shutdown()
 
   // 3. 等待训练进程关闭
   try {

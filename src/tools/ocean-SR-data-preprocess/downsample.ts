@@ -104,7 +104,7 @@ export const oceanSrPreprocessDownsampleTool = defineTool({
     } = args
 
     // 1. 检查 Python 环境
-    const pythonPath = findFirstPythonPath()
+    const pythonPath = await findFirstPythonPath()
     if (!pythonPath) {
       throw new Error('未找到可用的Python解释器')
     }

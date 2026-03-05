@@ -86,7 +86,7 @@ export const oceanForecastPreprocessVisualizeTool = defineTool({
       out_dir
     } = args
 
-    const pythonPath = findFirstPythonPath()
+    const pythonPath = await findFirstPythonPath()
     if (!pythonPath) {
       throw new Error('未找到可用的Python解释器')
     }

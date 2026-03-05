@@ -115,7 +115,7 @@ export const oceanForecastTrainStatusTool = defineTool({
           suggestion: '进程可能已被清理或 ID 不正确',
         }
       }
-      return buildStatusResponse(process_id, result.processInfo)
+      return await buildStatusResponse(process_id, result.processInfo)
     }
 
     // watch mode
@@ -206,7 +206,7 @@ export const oceanForecastTrainStatusTool = defineTool({
 
     // Logs
     if (action === 'logs') {
-      const logsResult = trainingProcessManager.readLogs(process_id, {
+      const logsResult = await trainingProcessManager.readLogs(process_id, {
         tail: offset === undefined ? tail : undefined,
         offset,
       })
@@ -259,11 +259,11 @@ export const oceanForecastTrainStatusTool = defineTool({
     }
 
     // Default: status query
-    return buildStatusResponse(process_id, processInfo)
+    return await buildStatusResponse(process_id, processInfo)
   },
 })
 
-function buildStatusResponse(
+async function buildStatusResponse(
   process_id: string,
   processInfo: ReturnType<typeof trainingProcessManager.getProcess> & object,
 ) {
@@ -300,7 +300,7 @@ function buildStatusResponse(
       response.error_summary = processInfo.errorSummary
       response.suggestions = processInfo.errorSummary.suggestions
     } else {
-      const errorLogs = trainingProcessManager.readLogs(process_id, { tail: 30 })
+      const errorLogs = await trainingProcessManager.readLogs(process_id, { tail: 30 })
       if (errorLogs) {
         response.error_log_tail = errorLogs.content
       }

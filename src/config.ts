@@ -40,7 +40,6 @@ import {
 } from '@shareai-lab/kode-sdk'
 
 import tools from './tools'
-import { findFirstPythonPath } from './utils/python-manager'
 
 // ========================================
 // 环境变量配置
@@ -160,8 +159,7 @@ function createTemplateRegistry() {
 7. **训练代码修改仅限工作空间副本**：修改训练代码时只能编辑 log_dir 下的 _ocean_*_code/ 目录，禁止修改 scripts/ 原始目录。
 
 # 工具使用
-
-- Python 环境：${findFirstPythonPath() ?? '系统无可用的 Python 环境'}
+${process.env.PYTHON3 ? ` - 优先使用${process.env.PYTHON3}作为 Python 解释器，确保环境一致性` : ''}
 - 避免危险命令（rm -rf /、sudo 等）
 
 # Skills 系统（重要）

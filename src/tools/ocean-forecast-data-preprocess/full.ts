@@ -34,9 +34,6 @@ import { generateForecastPreprocessCells, saveOrAppendNotebook } from './noteboo
 import { shellEscapeDouble } from '@/utils/shell'
 import { loadSessionParams, saveSessionParams } from '@/utils/training-utils'
 
-/** 预处理会话参数缓存文件名 */
-const SESSION_FILENAME = '.ocean_forecast_preprocess_session.json' as const
-
 /**
  * 对 forecast_preprocess.py 返回的原始结果进行精简，
  * 避免超量 warnings / validation errors 导致传给 Agent 的 token 爆炸。
@@ -273,6 +270,8 @@ export const oceanForecastPreprocessFullTool = defineTool({
   },
 
   async exec(args, ctx) {
+    /** 预处理会话参数缓存文件名 */
+    const SESSION_FILENAME = '.ocean_forecast_preprocess_session.json' as const
     // ===== 合并 session 缓存，防止可选参数跨调用丢失 =====
     const sessionParams = args.output_base
       ? await loadSessionParams<WorkflowParams>(args.output_base, SESSION_FILENAME, ctx)
@@ -437,7 +436,7 @@ export const oceanForecastPreprocessFullTool = defineTool({
     const effectiveAllowNan = allow_nan || (finalMaskVars && finalMaskVars.length > 0)
 
     // ========== Step B: 执行 forecast_preprocess.py ==========
-    const pythonPath = findFirstPythonPath()
+    const pythonPath = await findFirstPythonPath()
     if (!pythonPath) {
       throw new Error('未找到可用的Python解释器，请安装Python或配置PYTHON/PYENV')
     }
@@ -517,7 +516,7 @@ export const oceanForecastPreprocessFullTool = defineTool({
         ? path.resolve(metadataNotebookPath)
         : path.resolve(ctx.sandbox.workDir, `${path.basename(ctx.sandbox.workDir)}.ipynb`)
 
-      const notebookPythonPath = findFirstPythonPath() || 'python3'
+      const notebookPythonPath = (await findFirstPythonPath()) || 'python3'
 
       const cells = generateForecastPreprocessCells({
         outputBase: output_base,

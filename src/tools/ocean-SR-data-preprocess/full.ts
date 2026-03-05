@@ -88,9 +88,6 @@ import { generatePreprocessCells, saveOrAppendNotebook } from './notebook'
 import { findFirstPythonPath } from '@/utils/python-manager'
 import { loadSessionParams, saveSessionParams } from '@/utils/training-utils'
 
-/** 超分预处理会话参数缓存文件名 */
-const SESSION_FILENAME = '.ocean_sr_preprocess_session.json' as const
-
 const DEFAULT_WORKERS = Math.max(1, Math.min(8, os.cpus().length || 1))
 
 export const oceanSrPreprocessFullTool = defineTool({
@@ -357,6 +354,8 @@ export const oceanSrPreprocessFullTool = defineTool({
   },
 
   async exec(args, ctx) {
+    /** 超分预处理会话参数缓存文件名 */
+    const SESSION_FILENAME = '.ocean_sr_preprocess_session.json' as const
     // ===== 合并 session 缓存，防止可选参数跨调用丢失 =====
     const sessionParams = args.output_base
       ? await loadSessionParams<WorkflowParams>(args.output_base, SESSION_FILENAME, ctx)
@@ -701,7 +700,7 @@ export const oceanSrPreprocessFullTool = defineTool({
         ? path.resolve(metadataNotebookPath)
         : path.resolve(ctx.sandbox.workDir, `${path.basename(ctx.sandbox.workDir)}.ipynb`)
 
-      const notebookPythonPath = findFirstPythonPath() || 'python3'
+      const notebookPythonPath = (await findFirstPythonPath()) || 'python3'
 
       const cells = generatePreprocessCells({
         outputBase: output_base,

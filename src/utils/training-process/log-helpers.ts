@@ -4,13 +4,15 @@
  * @description 训练进程管理器 —— 日志写入与滚动辅助函数
  * @author kongzhiquan
  * @date 2026-03-04
- * @version 1.0.0
+ * @version 1.1.0
  *
  * @changelog
+ *   - 2026-03-05 kongzhiquan: v1.1.0 阻塞 I/O 改为异步（fs/promises）
  *   - 2026-03-04 kongzhiquan: v1.0.0 从 training-process-manager.ts 拆分
  */
 
-import { createWriteStream, existsSync, renameSync, statSync, unlinkSync, WriteStream } from 'fs'
+import { createWriteStream, WriteStream } from 'fs'
+import { access, rename, stat, unlink } from 'fs/promises'
 import { MAX_LOG_BYTES, MAX_LOG_ROTATIONS } from './constants'
 import { ManagedProcess } from './types'
 
@@ -31,30 +33,47 @@ export function attachStreamErrorHandler(stream: WriteStream, id: string, kind: 
   })
 }
 
-export function rotateLogIfNeeded(managed: ManagedProcess, kind: 'log' | 'error'): void {
+async function fileExists(filePath: string): Promise<boolean> {
+  try {
+    await access(filePath)
+    return true
+  } catch {
+    return false
+  }
+}
+
+export async function rotateLogIfNeeded(managed: ManagedProcess, kind: 'log' | 'error'): Promise<void> {
   if (MAX_LOG_ROTATIONS <= 0 || MAX_LOG_BYTES <= 0) return
   const logFile = kind === 'log' ? managed.info.logFile : managed.info.errorLogFile
   const rotatingKey = kind === 'log' ? 'rotatingLog' : 'rotatingErrorLog'
   if (managed[rotatingKey]) return
 
   try {
-    if (!existsSync(logFile)) return
-    const size = statSync(logFile).size
-    if (size < MAX_LOG_BYTES) return
+    let fileSize: number
+    try {
+      const stats = await stat(logFile)
+      fileSize = stats.size
+    } catch {
+      return // 文件不存在
+    }
 
+    if (fileSize < MAX_LOG_BYTES) return
+
+    // await 后需再次检查，防止并发调用同时通过大小检查
+    if (managed[rotatingKey]) return
     managed[rotatingKey] = true
 
     const stream = kind === 'log' ? managed.logStream : managed.errorLogStream
-    stream.end()
+    await new Promise<void>((resolve) => stream.end(resolve))
 
     for (let i = MAX_LOG_ROTATIONS; i >= 1; i--) {
       const src = i === 1 ? logFile : `${logFile}.${i - 1}`
       const dest = `${logFile}.${i}`
-      if (i === MAX_LOG_ROTATIONS && existsSync(dest)) {
-        unlinkSync(dest)
+      if (i === MAX_LOG_ROTATIONS && (await fileExists(dest))) {
+        await unlink(dest)
       }
-      if (existsSync(src)) {
-        renameSync(src, dest)
+      if (await fileExists(src)) {
+        await rename(src, dest)
       }
     }
 
@@ -73,8 +92,8 @@ export function rotateLogIfNeeded(managed: ManagedProcess, kind: 'log' | 'error'
   }
 }
 
-export function writeLog(managed: ManagedProcess, kind: 'log' | 'error', data: string): void {
-  rotateLogIfNeeded(managed, kind)
+export async function writeLog(managed: ManagedProcess, kind: 'log' | 'error', data: string): Promise<void> {
+  await rotateLogIfNeeded(managed, kind)
   const stream = kind === 'log' ? managed.logStream : managed.errorLogStream
   safeWrite(stream, data)
 }

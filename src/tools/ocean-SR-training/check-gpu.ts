@@ -29,7 +29,7 @@ export const oceanSrGpuCheckTool = defineTool({
   },
 
   async exec(_args, ctx) {
-    const pythonPath = findPythonWithModule('torch') || findFirstPythonPath()
+    const pythonPath = (await findPythonWithModule('torch')) || (await findFirstPythonPath())
     if (!pythonPath) {
       throw new Error('未找到可用的 Python 解释器（需要安装 torch）')
     }

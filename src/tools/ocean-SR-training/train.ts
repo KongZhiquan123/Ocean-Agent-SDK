@@ -100,8 +100,6 @@ import { shellEscapeDouble, shellSafeJson, extractTaggedJson } from '@/utils/she
 import { isPortFree, findFreePort } from '@/utils/port'
 import { loadSessionParams, saveSessionParams, formatRecommendationMessage } from '@/utils/training-utils'
 
-const SESSION_FILENAME = '.ocean_sr_train_session.json' as const
-
 // FFT/频域/复数变换相关模型：默认关闭 AMP，允许用户显式 override（强提示）
 const FFT_AMP_SENSITIVE_MODELS = new Set([
   'FNO2d',
@@ -717,7 +715,7 @@ export const oceanSrTrainStartTool = defineTool({
 
   async exec(args, ctx) {
     // 训练工具需要 torch，优先查找安装了 torch 的 Python
-    const pythonPath = findPythonWithModule('torch') || findFirstPythonPath()
+    const pythonPath = (await findPythonWithModule('torch')) || (await findFirstPythonPath())
     if (!pythonPath) {
       throw new Error('未找到可用的 Python 解释器（需要安装 torch）')
     }
@@ -738,6 +736,7 @@ export const oceanSrTrainStartTool = defineTool({
     }
 
     // ===== 1. 构建工作流参数（合并 session 缓存，防止可选参数跨调用丢失） =====
+    const SESSION_FILENAME = '.ocean_sr_train_session.json' as const
     // use_amp 若非用户显式传入，则从 args 中移除，避免自动设置值覆盖 session 中用户的选择
     const workflowArgs = { ...args }
     if (!userSpecifiedUseAmp) {
@@ -954,7 +953,7 @@ export const oceanSrTrainStartTool = defineTool({
       const cmdEnv = { CUDA_VISIBLE_DEVICES: cudaDevice }
 
       // 启动后台进程
-      const processInfo = trainingProcessManager.startProcess({
+      const processInfo = await trainingProcessManager.startProcess({
         cmd: cmdPath,
         args: cmdArgs,
         cwd: workspaceDir,
@@ -984,7 +983,7 @@ export const oceanSrTrainStartTool = defineTool({
           error: '预测推理在启动阶段崩溃（数据加载/模型加载失败）',
           process_id: processInfo.id,
           error_summary: failedInfo?.errorSummary ?? null,
-          error_log_tail: trainingProcessManager.readLogs(processInfo.id, { tail: 50 })?.content,
+          error_log_tail: (await trainingProcessManager.readLogs(processInfo.id, { tail: 50 }))?.content,
           suggestions: failedInfo?.errorSummary?.suggestions ?? [],
         }
       }
@@ -1351,7 +1350,7 @@ export const oceanSrTrainStartTool = defineTool({
     }
 
     // ===== 3e. 启动后台训练进程 =====
-    const processInfo = trainingProcessManager.startProcess({
+    const processInfo = await trainingProcessManager.startProcess({
       cmd: cmdPath,
       args: cmdArgs,
       cwd: workspaceDir,
@@ -1381,7 +1380,7 @@ export const oceanSrTrainStartTool = defineTool({
         error: '训练在启动阶段崩溃（数据加载/模型构建失败）',
         process_id: processInfo.id,
         error_summary: failedInfo?.errorSummary ?? null,
-        error_log_tail: trainingProcessManager.readLogs(processInfo.id, { tail: 50 })?.content,
+        error_log_tail: (await trainingProcessManager.readLogs(processInfo.id, { tail: 50 }))?.content,
         suggestions: failedInfo?.errorSummary?.suggestions ?? [],
       }
     }

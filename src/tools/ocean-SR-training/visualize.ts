@@ -80,7 +80,7 @@ export const oceanSrTrainVisualizeTool = defineTool({
     const { log_dir, mode = 'train' } = args
 
     // 1. 检查 Python 环境（需要 matplotlib）
-    const pythonPath = findPythonWithModule('matplotlib') || findFirstPythonPath()
+    const pythonPath = (await findPythonWithModule('matplotlib')) || (await findFirstPythonPath())
     if (!pythonPath) {
       throw new Error('未找到可用的 Python 解释器（需要安装 matplotlib）')
     }

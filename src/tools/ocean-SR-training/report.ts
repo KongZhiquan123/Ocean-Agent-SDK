@@ -63,7 +63,7 @@ export const oceanSrTrainReportTool = defineTool({
     const { log_dir, output_path } = args
 
     // 1. 检查 Python 环境
-    const pythonPath = findPythonWithModule('yaml') || findFirstPythonPath()
+    const pythonPath = (await findPythonWithModule('yaml')) || (await findFirstPythonPath())
     if (!pythonPath) {
       throw new Error('未找到可用的 Python 解释器（需要安装 pyyaml）')
     }

@@ -53,7 +53,7 @@ export const oceanForecastReportTool = defineTool({
   async exec(args, ctx) {
     const { log_dir, output_path } = args
 
-    const pythonPath = findPythonWithModule('yaml') || findFirstPythonPath()
+    const pythonPath = (await findPythonWithModule('yaml')) || (await findFirstPythonPath())
     if (!pythonPath) {
       throw new Error('未找到可用的 Python 解释器（需要安装 pyyaml）')
     }

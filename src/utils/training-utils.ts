@@ -9,7 +9,7 @@
  * @changelog
  *   - 2026-03-04 kongzhiquan: 初始版本，从 ocean-SR-training/train.ts 和 ocean-forecast-training/train.ts 提取公共逻辑
  */
-import fs from 'fs/promises'
+import {readFile, mkdir, writeFile} from 'fs/promises'
 import path from 'node:path'
 import type { EnhancedToolContext } from '@shareai-lab/kode-sdk'
 
@@ -35,7 +35,7 @@ export async function loadSessionParams<T>(
       throw new Error('Target directory is not inside sandbox')
     }
     const sessionPath = path.join(targetDir, filename)
-    const content = await fs.readFile(sessionPath, 'utf-8')
+    const content = await readFile(sessionPath, 'utf-8')
     const parsed = JSON.parse(content)
     return (parsed?.params as T) ?? null
   } catch {
@@ -62,9 +62,9 @@ export async function saveSessionParams<T>(
     if (!ctx.sandbox.fs.isInside(targetDir)) {
       throw new Error('Target directory is not inside sandbox')
     }
-    await fs.mkdir(targetDir, { recursive: true })
+    await mkdir(targetDir, { recursive: true })
     const sessionPath = path.join(targetDir, filename)
-    await fs.writeFile(sessionPath, JSON.stringify({ savedAt: Date.now(), params }))
+    await writeFile(sessionPath, JSON.stringify({ savedAt: Date.now(), params }))
   } catch {
     // 写入失败不影响主流程
   }

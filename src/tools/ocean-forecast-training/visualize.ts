@@ -60,7 +60,7 @@ export const oceanForecastVisualizeTool = defineTool({
   async exec(args, ctx) {
     const { log_dir, mode = 'train' } = args
 
-    const pythonPath = findPythonWithModule('matplotlib') || findFirstPythonPath()
+    const pythonPath = (await findPythonWithModule('matplotlib')) || (await findFirstPythonPath())
     if (!pythonPath) {
       throw new Error('未找到可用的 Python 解释器（需要安装 matplotlib）')
     }
