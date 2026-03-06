@@ -9,7 +9,7 @@
  * @changelog
  *   - 2026-03-04 kongzhiquan: 初始版本，从 ocean-SR-training/train.ts 和 ocean-forecast-training/train.ts 提取公共逻辑
  */
-import {readFile, mkdir, writeFile} from 'fs/promises'
+import { readFile, mkdir, writeFile } from 'fs/promises'
 import path from 'node:path'
 import type { EnhancedToolContext } from '@shareai-lab/kode-sdk'
 

@@ -2,7 +2,7 @@
 """
 @file generate_training_plots.py
 @description Generate training visualization plots for ocean forecast models.
-             Visual style aligned with ocean_SR_training_masked/training_plot_lib/.
+             Visual style aligned with ocean-SR-training-masked/training_plot_lib/.
 @author Leizheng
 @date 2026-02-26
 @version 2.1.0
@@ -41,7 +41,7 @@ except ImportError:
     sys.exit(1)
 
 # =========================================================================
-# Style system  (mirrors ocean_SR_training_masked/training_plot_lib/style.py)
+# Style system  (mirrors ocean-SR-training-masked/training_plot_lib/style.py)
 # =========================================================================
 
 def _detect_cjk_font() -> Optional[str]:

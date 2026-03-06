@@ -34,7 +34,7 @@ export const oceanSrModelListTool = defineTool({
       throw new Error('未找到可用的 Python 解释器（需要安装 torch）')
     }
 
-    const scriptPath = path.resolve(process.cwd(), 'scripts/ocean_SR_training_masked/list_models.py')
+    const scriptPath = path.resolve(process.cwd(), 'scripts/ocean-SR-training-masked/list_models.py')
     const result = await ctx.sandbox.exec(
       `"${pythonPath}" "${scriptPath}"`,
       { timeoutMs: 30000 }

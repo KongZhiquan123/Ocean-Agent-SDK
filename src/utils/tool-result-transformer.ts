@@ -4,9 +4,19 @@
  * @description 工具结果格式转换器，根据工具名称裁剪 result，只保留后端需要的信息
  * @author kongzhiquan
  * @date 2026-02-10
- * @version 1.0.0
+ * @version 1.2.0
  *
  * @changelog
+ *   - 2026-03-05 kongzhiquan: v1.2.0 新增训练工具专用转换器
+ *     - ocean_sr_train_start / ocean_forecast_train_start 共用 transformSrTrainStart
+ *     - 正确映射 awaiting_* / token_invalid → awaiting_confirmation
+ *     - 正确映射 started → success（附带模型/模式信息）
+ *     - 正确映射 error → failed
+ *     - 从 SIMPLE_TOOL_LABELS 移除 ocean_sr_train_start，避免 awaiting 状态被误判为 success
+ *   - 2026-03-05 kongzhiquan: v1.1.0 修复 transformSrPreprocessFull 与 transformForecastPreprocessFull 状态判断
+ *     - 优先检查顶层 overall_status，正确处理 pass/error/awaiting 状态
+ *     - 统一处理所有 awaiting_* 状态（不只是 awaiting_confirmation）
+ *     - 区分步骤"已完成"与"正在执行"，改善用词准确性
  *   - 2026-02-10 kongzhiquan: v1.0.0 初始版本
  *     - 新增 transformToolResult 集中格式转换器
  *     - 对 ocean_sr_preprocess_full 工具结果做裁剪，只保留当前步骤进度信息
@@ -15,7 +25,9 @@
 import type { ToolCallSnapshot } from "@shareai-lab/kode-sdk"
 import { SIMPLE_TOOL_LABELS } from "./constants"
 
-const PREPROCESS_FULL_STEP_LABELS: Record<string, string> = {
+const TOOL_MESSAGE_MAX_LENGTH = 200 as const
+
+const SR_PREPROCESS_FULL_STEP_LABELS: Record<string, string> = {
   step_a: '数据检查',
   step_b: '张量验证',
   step_c: 'HR 数据转换',
@@ -28,6 +40,25 @@ const FORECAST_PREPROCESS_FULL_STEP_LABELS: Record<string, string> = {
   step_a: '数据检查',
   step_b: '数据转换',
   step_c: '可视化',
+}
+
+// 预处理工具确认参数时可能的状态
+const PREPROCESS_AWAITING_LABELS: Record<string, string> = {
+  awaiting_variable_selection: '正在等待研究变量选择',
+  awaiting_static_selection: '正在等待静态/掩码变量选择',
+  awaiting_region_selection: '正在等待用户确认区域裁剪',
+  awaiting_parameters:  '正在等待用户确认处理参数',
+  awaiting_execution: '正在等待用户最终确认执行',
+  token_invalid: 'Token 校验失败，需要重新确认'
+}
+
+// 训练工具确认参数时可能的状态
+const TRAIN_AWAITING_LABELS: Record<string, string> = {
+  awaiting_data_confirmation: '正在等待数据目录确认',
+  awaiting_model_selection: '正在等待模型选择',
+  awaiting_parameters: '正在等待训练参数设置',
+  awaiting_execution: '正在等待执行确认',
+  token_invalid: 'Token 校验失败，需要重新确认',
 }
 
 /**
@@ -47,32 +78,48 @@ export function transformToolResult(toolCall: ToolCallSnapshot): TransformedTool
     // 开发环境下输出原始结果以便调试
     return result
   }
-  if (toolName === 'ocean_sr_preprocess_full') {
-    return transformPreprocessFull(result)
+
+  let transformed = result
+
+  const toolTransformers = {
+    ocean_sr_train_start: (r) => transformTrainStart(r, '超分训练'),
+    ocean_forecast_train_start: (r) => transformTrainStart(r, '预报训练'),
+    ocean_sr_preprocess_full: transformSrPreprocessFull,
+    ocean_forecast_preprocess_full: transformForecastPreprocessFull,
+    skills: transformSkillResult
   }
-  if (toolName === 'ocean_forecast_preprocess_full') {
-    return transformForecastPreprocessFull(result)
+
+  const transformer = toolTransformers[toolName]
+  if (transformer) {
+    transformed = transformer(result)
+  } else if (toolName.startsWith('fs_')) {
+    transformed = transformFileOperationResult(toolCall)
+  } else if (toolName.startsWith('bash_')) {
+    transformed = transformBashResult(result)
+  } else {
+    const label = SIMPLE_TOOL_LABELS[toolName]
+    if (label) {
+      transformed = transformSimpleStatus(result, label)
+    }
   }
-  const label = SIMPLE_TOOL_LABELS[toolName]
-  if (label) {
-    return transformSimpleStatus(result, label)
+
+  return truncateResultMessage(transformed)
+}
+
+function truncateResultMessage<T extends { message?: unknown }>(result: T): T {
+  if (!result || typeof result !== 'object') return result
+  if (typeof result.message !== 'string') return result
+  if (result.message.length <= TOOL_MESSAGE_MAX_LENGTH) return result
+  return {
+    ...result,
+    message: `${result.message.slice(0, TOOL_MESSAGE_MAX_LENGTH)}（内容已截断）`,
   }
-  if (toolName.startsWith('bash_')) {
-    return transformBashResult(result)
-  }
-  if (toolName.startsWith('fs_')) {
-    return transformFileOperationResult(toolCall)
-  }
-  if (toolName === 'skills') {
-    return transformSkillResult(result)
-  }
-  return result
 }
 
 function transformBashResult(result: any): { status: 'success' | 'failed'; message: string } {
   if (!result) return { status: 'failed', message: 'Bash 执行失败，未返回结果' }
   const ok = Boolean(result.code === 0)
-  const message = `Bash 执行结果: ${result.output.slice(0, 200)}${result.output.length > 200 ? '（输出已截断）' : ''}`
+  const message = `Bash 执行结果: ${result.output}`
   return { status: ok ? 'success' : 'failed', message }
 }
 
@@ -83,46 +130,108 @@ function transformSkillResult(result: any): { status: 'success' | 'failed'; mess
   return { status: ok ? 'success' : 'failed', message }
 }
 
-function transformPreprocessFull(result: any): { status: 'success' | 'failed' | 'awaiting_confirmation'; message: string } {
-  if (!result) return { status: 'failed', message: '预处理流程执行失败' }
+function transformSrPreprocessFull(result: any): { status: 'success' | 'failed' | 'awaiting_confirmation'; message: string } {
+  if (!result) return { status: 'failed', message: '超分预处理流程执行失败' }
 
-  // 按执行顺序倒序查找最新的非空 step
-  const stepKeys = ['step_e', 'step_d', 'step_c2', 'step_c', 'step_b', 'step_a']
+  const overallStatus: string = result.overall_status || ''
+
+  // 优先处理顶层 overall_status
+  if (overallStatus === 'pass') {
+    return { status: 'success', message: result.message || '超分预处理流程已全部完成' }
+  }
+  if (overallStatus === 'error') {
+    return { status: 'failed', message: result.message || '超分预处理流程执行失败' }
+  }
+  // 处理 awaiting 状态
+  const awaitingLabel = PREPROCESS_AWAITING_LABELS[overallStatus]
+  if (awaitingLabel) {
+    return { status: 'awaiting_confirmation', message: awaitingLabel }
+  }
+
+  // 顶层状态不明确时，按执行顺序倒序查找最新的非空、非跳过 step
+  const stepKeys = ['step_e', 'step_d', 'step_c2', 'step_c', 'step_b', 'step_a'] as const
+  const success_status = ['success', 'ok', 'completed', 'pass'] as const
+
   for (const key of stepKeys) {
-    if (result[key]) {
-      const label = PREPROCESS_FULL_STEP_LABELS[key]
-      const success_status = ['success', 'ok', 'completed', 'pass']
-      const ok = success_status.includes(result[key].status) || success_status.includes(result[key].overall_status)
-      const op = result[key].status === 'skipped' ? '跳过' : '正在执行'
-      if (result[key].status === 'awaiting_confirmation') {
-        return { status: 'awaiting_confirmation', message: `处于步骤${label}，正在等待用户确认相关信息...` }
-      }
-      return { status: ok ? 'success' : 'failed', message: `${op}${label}步骤...` }
+    const step = result[key]
+    if (!step || step.status === 'skipped') continue
+    const label = SR_PREPROCESS_FULL_STEP_LABELS[key]
+    const ok = success_status.includes(step.status)
+    return {
+      status: ok ? 'success' : 'failed',
+      message: ok ? `超分预处理流程${label}步骤已完成` : `超分预处理流程${label}步骤失败`
     }
   }
 
-  return { status: 'failed', message: result.message || '预处理流程正在执行未知状态' }
+  return { status: 'failed', message: result.message || '超分预处理流程正在执行未知状态' }
 }
 
 function transformForecastPreprocessFull(result: any): { status: 'success' | 'failed' | 'awaiting_confirmation'; message: string } {
-  if (!result) return { status: 'failed', message: '预处理流程执行失败' }
+  if (!result) return { status: 'failed', message: '预报预处理流程执行失败' }
 
-  // 按执行顺序倒序查找最新的非空 step
-  const stepKeys = ['step_c', 'step_b', 'step_a']
+  const overallStatus: string = result.overall_status || ''
+
+  // 优先处理顶层 overall_status
+  if (overallStatus === 'pass') {
+    return { status: 'success', message: result.message || '预报预处理流程已全部完成' }
+  }
+  if (overallStatus === 'error') {
+    return { status: 'failed', message: result.message || '预报预处理流程执行失败' }
+  }
+  // 处理 awaiting 状态
+  const awaitingLabel = PREPROCESS_AWAITING_LABELS[overallStatus]
+  if (awaitingLabel) {
+    return { status: 'awaiting_confirmation', message: awaitingLabel }
+  }
+
+  // 顶层状态不明确时，按执行顺序倒序查找最新的非空、非跳过 step
+  const stepKeys = ['step_c', 'step_b', 'step_a'] as const
+  const success_status = ['success', 'ok', 'completed', 'pass'] as const
+
   for (const key of stepKeys) {
-    if (result[key]) {
-      const label = FORECAST_PREPROCESS_FULL_STEP_LABELS[key]
-      const success_status = ['success', 'ok', 'completed', 'pass']
-      const ok = success_status.includes(result[key].status) || success_status.includes(result[key].overall_status)
-      const op = result[key].status === 'skipped' ? '跳过' : '正在执行'
-      if (result[key].status === 'awaiting_confirmation') {
-        return { status: 'awaiting_confirmation', message: `处于步骤${label}，正在等待用户确认相关信息...` }
-      }
-      return { status: ok ? 'success' : 'failed', message: `${op}${label}步骤...` }
+    const step = result[key]
+    if (!step || step.status === 'skipped') continue
+    const label = FORECAST_PREPROCESS_FULL_STEP_LABELS[key]
+    const ok = success_status.includes(step.status)
+    return {
+      status: ok ? 'success' : 'failed',
+      message: ok ? `预报预处理流程${label}步骤已完成` : `预报预处理流程${label}步骤失败`
     }
   }
 
-  return { status: 'failed', message: result.message || '预处理流程正在执行未知状态' }
+  return { status: 'failed', message: result.message || '预报预处理流程正在执行未知状态' }
+}
+
+function transformTrainStart(result: any, toolLabel: string): { status: 'success' | 'failed' | 'awaiting_confirmation'; message: string } {
+  if (!result) return { status: 'failed', message: `${toolLabel}工具执行失败，未返回结果` }
+
+  const status: string = result.status ?? ''
+
+  // 训练/预测进程已成功启动
+  if (status === 'started') {
+    const mode: string = result.mode === 'predict' ? '预测推理' : '训练'
+    const model: string = result.model ? `（${result.model}）` : ''
+    return { status: 'success', message: `${toolLabel} ${mode}进程已启动${model}` }
+  }
+
+  // 各阶段等待确认
+  const awaitingLabel = TRAIN_AWAITING_LABELS[status]
+  if (awaitingLabel) {
+    return { status: 'awaiting_confirmation', message: awaitingLabel }
+  }
+
+  // 错误状态
+  if (status === 'error') {
+    const errMsg: string = result.error ?? result.message ?? `${toolLabel}执行失败`
+    return { status: 'failed', message: String(errMsg) }
+  }
+
+  // 兜底：有 error 字段视为失败
+  if (result.error) {
+    return { status: 'failed', message: String(result.error) }
+  }
+
+  return { status: 'failed', message: result.message ?? `${toolLabel}返回未知状态` }
 }
 
 function transformSimpleStatus(result: any, label: string): { status: 'success' | 'failed'; message: string } {

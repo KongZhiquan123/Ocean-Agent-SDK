@@ -7,7 +7,7 @@
 
 用法:
     python prepare_workspace.py \
-        --source_dir /path/to/ocean_SR_training_masked \
+        --source_dir /path/to/ocean-SR-training-masked \
         --target_dir /path/to/workspace \
         --model_name SwinIR \
         --data_name OceanNPY

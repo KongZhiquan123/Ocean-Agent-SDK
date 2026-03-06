@@ -18,7 +18,7 @@
 import { Agent } from '@shareai-lab/kode-sdk'
 import { getDependencies } from './config'
 import { access, readdir, rm } from 'fs/promises'
-import * as path from 'path'
+import path from 'path'
 import { REQUEST_TIMEOUT_MS } from './utils/constants'
 
 // ========================================

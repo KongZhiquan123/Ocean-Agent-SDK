@@ -180,7 +180,7 @@ def probe_memory(
             # Fallback: try the SR version's estimate_memory.py
             sr_mem_script = os.path.join(
                 os.path.dirname(SCRIPT_DIR),
-                'ocean_SR_training_masked', 'estimate_memory.py',
+                'ocean-SR-training-masked', 'estimate_memory.py',
             )
             if os.path.isfile(sr_mem_script):
                 mem_script = sr_mem_script

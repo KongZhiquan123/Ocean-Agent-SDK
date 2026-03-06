@@ -15,7 +15,8 @@ Ocean-Agent-SDK/
 ├── package.json           # 项目依赖与脚本
 ├── tsconfig.json          # TypeScript 编译配置
 ├── README.md              # 项目说明
-└── CLAUDE.md              # Claude 模型使用说明
+├── CLAUDE.md              # Claude 模型使用说明
+└── requirements.txt       # Python 依赖列表
 ```
 
 ## 快速开始
@@ -24,7 +25,6 @@ Ocean-Agent-SDK/
 
 ```bash
 npm install
-cd ./scripts/ocean_SR_training_masked
 pip install -r requirements.txt
 ```
 

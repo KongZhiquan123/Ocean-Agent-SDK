@@ -71,7 +71,7 @@ export const oceanSrTrainReportTool = defineTool({
     // 2. 准备路径
     const scriptPath = path.resolve(
       process.cwd(),
-      'scripts/ocean_SR_training_masked/generate_training_report.py'
+      'scripts/ocean-SR-training-masked/generate_training_report.py'
     )
     const reportPath = output_path || path.join(log_dir, 'training_report.md')
 

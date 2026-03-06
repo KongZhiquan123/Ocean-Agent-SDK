@@ -71,7 +71,7 @@
  *   - 2026-02-07 Leizheng: v2.3.0 按模型选择性复制代码到用户输出目录执行，保持 SDK 源码不被修改
  *   - 2026-02-07 Leizheng: v2.2.0 使用 findPythonWithModule('torch') 自动查找带 PyTorch 的 Python
  *   - 2026-02-06 Leizheng: v2.1.0 指向 masked 版本训练框架
- *     - trainingDir 改为 scripts/ocean_SR_training_masked
+ *     - trainingDir 改为 scripts/ocean-SR-training-masked
  *   - 2026-02-06 Leizheng: v2.0.0 集成训练工作流状态机
  *     - 4 阶段确认: 数据 → 模型 → 参数(GPU) → 执行
  *     - 自动检测 dyn_vars / scale / shape
@@ -720,7 +720,7 @@ export const oceanSrTrainStartTool = defineTool({
       throw new Error('未找到可用的 Python 解释器（需要安装 torch）')
     }
 
-    const trainingDir = path.resolve(process.cwd(), 'scripts/ocean_SR_training_masked')
+    const trainingDir = path.resolve(process.cwd(), 'scripts/ocean-SR-training-masked')
 
     const userSpecifiedUseAmp = Object.prototype.hasOwnProperty.call(args, 'use_amp')
     const ampDefaultOff = isAmpDefaultOffModel(args.model_name as string | undefined)

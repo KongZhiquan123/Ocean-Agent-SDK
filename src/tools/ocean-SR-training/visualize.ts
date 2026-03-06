@@ -98,7 +98,7 @@ export const oceanSrTrainVisualizeTool = defineTool({
       }
       const scriptPath = path.resolve(
         process.cwd(),
-        'scripts/ocean_SR_training_masked/generate_predict_plots.py'
+        'scripts/ocean-SR-training-masked/generate_predict_plots.py'
       )
       const datasetRoot = path.resolve(ctx.sandbox.workDir, args.dataset_root)
       const dynVarsStr = (args.dyn_vars as string[]).join(',')
@@ -108,7 +108,7 @@ export const oceanSrTrainVisualizeTool = defineTool({
       // train 模式：调用 generate_training_plots.py
       const scriptPath = path.resolve(
         process.cwd(),
-        'scripts/ocean_SR_training_masked/generate_training_plots.py'
+        'scripts/ocean-SR-training-masked/generate_training_plots.py'
       )
       cmd = `"${shellEscapeDouble(pythonPath)}" "${shellEscapeDouble(scriptPath)}" --log_dir "${shellEscapeDouble(log_dir)}"`
     }
