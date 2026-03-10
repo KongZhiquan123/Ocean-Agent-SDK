@@ -1,13 +1,18 @@
 ---
 name: ocean-forecast-data-preprocess
 description: 海洋预测数据预处理技能 - NC 格式时序数据转换为 NPY 格式，用于深度学习预测模型训练
-version: 1.3.0
+version: 1.4.0
 author: Leizheng
-last_modified: 2026-02-26
+last_modified: 2026-03-10
 ---
 
 <!--
 Changelog:
+  - 2026-03-10 Leizheng: v1.4.0
+    - 新增按经纬度裁剪功能（crop_lon_range/crop_lat_range）
+    - 支持 1D 规则网格和 2D 曲线网格坐标系统
+    - 自动从 NC 文件加载经纬度坐标并计算像素索引
+    - 新增空间裁剪说明章节
   - 2026-02-26 Leizheng: v1.3.0
     - 新增 ocean_forecast_preprocess_stats 工具（per-variable 统计量）
     - 更新可视化描述：新增分布直方图 _distribution.png
@@ -99,14 +104,42 @@ Changelog:
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `h_slice` | - | H 方向裁剪，如 `"0:512"` |
-| `w_slice` | - | W 方向裁剪，如 `"0:1024"` |
+| `h_slice` | - | H 方向裁剪（像素索引），如 `"0:512"` |
+| `w_slice` | - | W 方向裁剪（像素索引），如 `"0:1024"` |
+| `crop_lon_range` | - | 经度裁剪范围，如 `[120, 130]`（自动转换为像素索引） |
+| `crop_lat_range` | - | 纬度裁剪范围，如 `[30, 40]`（自动转换为像素索引） |
 | `use_date_filename` | `true` | 用日期命名文件 |
 | `date_format` | `auto` | `auto`/`YYYYMMDD`/`YYYYMMDDHH`/`YYYYMMDDHHmm` |
 | `time_var` | 自动检测 | 时间变量名（自动检测 time/ocean_time 等） |
 | `chunk_size` | `200` | 批处理文件数（控制内存） |
 | `max_files` | 无限制 | 最多处理文件数（调试用） |
 | `skip_visualize` | `false` | 跳过可视化步骤 |
+
+### 空间裁剪说明
+
+**两种裁剪方式**：
+
+1. **按像素索引裁剪**（`h_slice` / `w_slice`）
+   - 直接指定像素范围，如 `"100:400"`
+   - 需要事先知道数据的空间维度
+
+2. **按经纬度裁剪**（`crop_lon_range` / `crop_lat_range`）✨ 推荐
+   - 指定地理坐标范围，如 `[120, 130]` / `[30, 40]`
+   - 自动从 NC 文件加载经纬度坐标并计算像素索引
+   - 支持 1D 规则网格和 2D 曲线网格（如 ROMS）
+   - **要求**：必须同时指定 `lon_var` 和 `lat_var` 参数
+
+**优先级**：如果同时提供经纬度范围和像素索引，**经纬度范围优先**（会覆盖像素索引）。
+
+**示例**：
+```json
+{
+  "crop_lon_range": [120.0, 130.0],
+  "crop_lat_range": [30.0, 40.0],
+  "lon_var": "lon_rho",
+  "lat_var": "lat_rho"
+}
+```
 
 ---
 

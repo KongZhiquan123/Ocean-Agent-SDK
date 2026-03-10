@@ -10,9 +10,14 @@
 @author Leizheng
 @contributers kongzhiquan
 @date 2026-02-25
-@version 1.1.1
+@version 1.2.0
 
 @changelog
+  - 2026-03-10 Leizheng: v1.2.0 新增按经纬度裁剪功能
+    - 新增 crop_lon_range/crop_lat_range 参数（如 [120, 130] / [30, 40]）
+    - 新增 _compute_region_crop_indices() 函数，支持 1D/2D 坐标系统
+    - 自动从 NC 文件或网格文件加载经纬度坐标并计算像素索引
+    - 经纬度裁剪优先级高于 h_slice/w_slice（会覆盖）
   - 2026-02-26 kongzhiquan: v1.1.1 修复post_validation和time_info未被保存到manifest文件的问题
   - 2026-02-26 Leizheng: v1.1.0 新增网格文件支持
     - 静态变量提取新增三级搜索：数据文件 → 用户指定网格文件 → 自动检测网格文件
@@ -46,6 +51,8 @@
     "test_ratio": 0.15,
     "h_slice": null,
     "w_slice": null,
+    "crop_lon_range": null,
+    "crop_lat_range": null,
     "dyn_file_pattern": "*.nc",
     "chunk_size": 200,
     "use_date_filename": true,
@@ -125,6 +132,60 @@ def _parse_slice(slice_str: Optional[str]) -> Optional[slice]:
         except ValueError:
             pass
     raise ValueError(f"无效的切片格式: '{slice_str}'，期望格式为 'start:end'，如 '0:680'")
+
+
+def _compute_region_crop_indices(
+    lon_arr: np.ndarray,
+    lat_arr: np.ndarray,
+    crop_lon_range: Tuple[float, float],
+    crop_lat_range: Tuple[float, float]
+) -> Tuple[int, int, int, int]:
+    """
+    根据经纬度范围计算裁剪索引
+
+    返回: (h_start, h_end, w_start, w_end)
+    """
+    lon_min, lon_max = crop_lon_range
+    lat_min, lat_max = crop_lat_range
+
+    if lon_arr.ndim == 1 and lat_arr.ndim == 1:
+        # 1D 坐标（规则网格）
+        lon_mask = (lon_arr >= lon_min) & (lon_arr <= lon_max)
+        lat_mask = (lat_arr >= lat_min) & (lat_arr <= lat_max)
+
+        lon_indices = np.where(lon_mask)[0]
+        lat_indices = np.where(lat_mask)[0]
+
+        if len(lon_indices) == 0:
+            raise ValueError(f"经度范围 [{lon_min}, {lon_max}] 内没有数据点。数据经度范围: [{lon_arr.min():.4f}, {lon_arr.max():.4f}]")
+        if len(lat_indices) == 0:
+            raise ValueError(f"纬度范围 [{lat_min}, {lat_max}] 内没有数据点。数据纬度范围: [{lat_arr.min():.4f}, {lat_arr.max():.4f}]")
+
+        w_start, w_end = lon_indices[0], lon_indices[-1] + 1
+        h_start, h_end = lat_indices[0], lat_indices[-1] + 1
+
+    elif lon_arr.ndim == 2 and lat_arr.ndim == 2:
+        # 2D 坐标（曲线网格，如 ROMS）
+        combined_mask = (
+            (lon_arr >= lon_min) & (lon_arr <= lon_max) &
+            (lat_arr >= lat_min) & (lat_arr <= lat_max)
+        )
+
+        if not combined_mask.any():
+            raise ValueError(
+                f"指定的经纬度范围内没有数据点。\n"
+                f"经度范围: [{lon_min}, {lon_max}]，数据范围: [{lon_arr.min():.4f}, {lon_arr.max():.4f}]\n"
+                f"纬度范围: [{lat_min}, {lat_max}]，数据范围: [{lat_arr.min():.4f}, {lat_arr.max():.4f}]"
+            )
+
+        rows, cols = np.where(combined_mask)
+        h_start, h_end = rows.min(), rows.max() + 1
+        w_start, w_end = cols.min(), cols.max() + 1
+
+    else:
+        raise ValueError(f"不支持的坐标维度组合: lon={lon_arr.ndim}D, lat={lat_arr.ndim}D")
+
+    return h_start, h_end, w_start, w_end
 
 
 def _find_time_var(ds: 'xr.Dataset', hint: Optional[str] = None) -> Optional[str]:
@@ -725,6 +786,8 @@ def forecast_preprocess(config: Dict[str, Any]) -> Dict[str, Any]:
     test_ratio       = config.get("test_ratio", 0.15)
     h_slice_str      = config.get("h_slice")
     w_slice_str      = config.get("w_slice")
+    crop_lon_range   = config.get("crop_lon_range")  # [min, max]
+    crop_lat_range   = config.get("crop_lat_range")  # [min, max]
     dyn_file_pattern = config.get("dyn_file_pattern", "*.nc")
     chunk_size       = config.get("chunk_size", 200)
     use_date_filename= config.get("use_date_filename", True)
@@ -783,6 +846,54 @@ def forecast_preprocess(config: Dict[str, Any]) -> Dict[str, Any]:
 
     if not nc_files:
         result["status"] = "error"
+        result["errors"].append(f"未找到匹配的 NC 文件: {search_pattern}")
+        return result
+
+    # ---- 3. 经纬度裁剪处理 ----
+    if crop_lon_range and crop_lat_range:
+        if not lon_var or not lat_var:
+            result["status"] = "error"
+            result["errors"].append("使用经纬度裁剪时必须指定 lon_var 和 lat_var")
+            return result
+
+        try:
+            # 从第一个NC文件或网格文件加载经纬度坐标
+            coord_source = grid_file if grid_file and os.path.exists(grid_file) else nc_files[0]
+            with xr.open_dataset(coord_source, decode_times=False) as ds:
+                if lon_var not in ds.variables:
+                    result["status"] = "error"
+                    result["errors"].append(f"经度变量 '{lon_var}' 不存在于文件中")
+                    return result
+                if lat_var not in ds.variables:
+                    result["status"] = "error"
+                    result["errors"].append(f"纬度变量 '{lat_var}' 不存在于文件中")
+                    return result
+
+                lon_arr = ds[lon_var].values
+                lat_arr = ds[lat_var].values
+
+            # 计算裁剪索引
+            h_start, h_end, w_start, w_end = _compute_region_crop_indices(
+                lon_arr, lat_arr,
+                tuple(crop_lon_range),
+                tuple(crop_lat_range)
+            )
+
+            # 转换为 slice 对象（覆盖用户提供的像素索引）
+            h_slice = slice(h_start, h_end)
+            w_slice = slice(w_start, w_end)
+
+            result["warnings"].append(
+                f"经纬度裁剪: lon=[{crop_lon_range[0]}, {crop_lon_range[1]}], "
+                f"lat=[{crop_lat_range[0]}, {crop_lat_range[1]}] → "
+                f"像素索引 H=[{h_start}:{h_end}], W=[{w_start}:{w_end}]"
+            )
+        except Exception as e:
+            result["status"] = "error"
+            result["errors"].append(f"经纬度裁剪失败: {e}")
+            return result
+
+    # ---- 4. 检测时间变量 ----
         result["errors"].append(
             f"未找到 NC 文件: 目录={nc_folder}, 模式={dyn_file_pattern}"
         )
