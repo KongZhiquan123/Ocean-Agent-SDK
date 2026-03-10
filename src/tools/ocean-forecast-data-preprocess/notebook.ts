@@ -7,9 +7,10 @@
  *
  * @author kongzhiquan
  * @date 2026-02-26
- * @version 1.0.0
+ * @version 1.1.0
  *
  * @changelog
+ *   - 2026-03-10 kongzhiquan: v1.1.0 添加经纬度裁剪参数 crop_lon_range/crop_lat_range
  *   - 2026-02-26 kongzhiquan: v1.0.0 初始版本
  *     - 参考 ocean-SR-data-preprocess/notebook.ts 架构
  *     - 适配预报数据预处理流程（无下采样、无 hr/lr 层级）
@@ -36,6 +37,8 @@ export interface ForecastNotebookParams {
   testRatio: number
   hSlice?: string
   wSlice?: string
+  cropLonRange?: number[]
+  cropLatRange?: number[]
   allowNan: boolean
   dynFilePattern: string
   useDateFilename: boolean
@@ -106,6 +109,8 @@ function generateSetupCell(params: ForecastNotebookParams): NotebookCell {
     `TEST_RATIO = ${toPyRepr(params.testRatio)}`,
     `H_SLICE = ${toPyRepr(params.hSlice)}`,
     `W_SLICE = ${toPyRepr(params.wSlice)}`,
+    `CROP_LON_RANGE = ${toPyRepr(params.cropLonRange)}`,
+    `CROP_LAT_RANGE = ${toPyRepr(params.cropLatRange)}`,
     `ALLOW_NAN = ${toPyRepr(params.allowNan)}`,
     `DYN_FILE_PATTERN = ${toPyRepr(params.dynFilePattern)}`,
     `CHUNK_SIZE = ${toPyRepr(params.chunkSize)}`,
@@ -202,6 +207,8 @@ function generateStepBCells(): NotebookCell[] {
       `    "test_ratio": TEST_RATIO,\n` +
       `    "h_slice": H_SLICE,\n` +
       `    "w_slice": W_SLICE,\n` +
+      `    "crop_lon_range": CROP_LON_RANGE,\n` +
+      `    "crop_lat_range": CROP_LAT_RANGE,\n` +
       `    "dyn_file_pattern": DYN_FILE_PATTERN,\n` +
       `    "chunk_size": CHUNK_SIZE,\n` +
       `    "use_date_filename": USE_DATE_FILENAME,\n` +

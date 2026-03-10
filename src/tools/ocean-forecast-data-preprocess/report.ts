@@ -47,6 +47,8 @@ const UserConfirmationSchema = z.object({
     test_ratio: z.number().min(0).max(1),
     h_slice: z.string().optional(),
     w_slice: z.string().optional(),
+    crop_lon_range: z.array(z.number()).optional(),
+    crop_lat_range: z.array(z.number()).optional(),
     confirmed_at: z.string().optional()
   }),
 
@@ -187,6 +189,8 @@ function generateMarkdownReport(
   lines.push(`- 训练集比例：${(s3.train_ratio * 100).toFixed(0)}%`)
   lines.push(`- 验证集比例：${(s3.valid_ratio * 100).toFixed(0)}%`)
   lines.push(`- 测试集比例：${(s3.test_ratio * 100).toFixed(0)}%`)
+  if (s3.crop_lon_range) lines.push(`- 经度裁剪范围：\`${s3.crop_lon_range.join(', ')}\``)
+  if (s3.crop_lat_range) lines.push(`- 纬度裁剪范围：\`${s3.crop_lat_range.join(', ')}\``)
   if (s3.h_slice) lines.push(`- H 裁剪：\`${s3.h_slice}\``)
   if (s3.w_slice) lines.push(`- W 裁剪：\`${s3.w_slice}\``)
   if (s3.confirmed_at) lines.push(`- 确认时间：${s3.confirmed_at}`)

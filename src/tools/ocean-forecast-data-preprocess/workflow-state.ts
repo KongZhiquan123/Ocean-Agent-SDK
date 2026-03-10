@@ -7,9 +7,10 @@
  *
  * @author Leizheng
  * @date 2026-02-25
- * @version 1.0.0
+ * @version 1.1.0
  *
  * @changelog
+ *   - 2026-03-10 kongzhiquan: v1.1.0 将 crop_lon_range/crop_lat_range 纳入 WorkflowParams、Token 生成和阶段提示
  *   - 2026-02-25 Leizheng: v1.0.0 初始版本
  *     - 4 阶段：变量选择 → 静态/掩码变量 → 处理参数 → 执行确认
  *     - 移除超分专用参数（scale、downsample_method、lr_nc_folder 等）
@@ -62,6 +63,8 @@ export interface WorkflowParams {
   test_ratio?: number
   h_slice?: string
   w_slice?: string
+  crop_lon_range?: number[]
+  crop_lat_range?: number[]
 
   // 阶段4: 最终确认
   user_confirmed?: boolean
@@ -108,7 +111,9 @@ export class ForecastWorkflow {
       valid_ratio: params.valid_ratio,
       test_ratio: params.test_ratio,
       h_slice: params.h_slice,
-      w_slice: params.w_slice
+      w_slice: params.w_slice,
+      crop_lon_range: params.crop_lon_range?.join(','),
+      crop_lat_range: params.crop_lat_range?.join(',')
     }
     const dataStr = JSON.stringify(tokenData) + ForecastWorkflow.TOKEN_SALT
     return crypto.createHash('sha256').update(dataStr).digest('hex').substring(0, 16)
@@ -409,6 +414,8 @@ ${(inspectResult?.suspected_masks || []).map((v: string) => `  - ${v}`).join('\n
    - 当前尺寸: ${H} × ${W}
    - h_slice: H 方向裁剪，如 "0:512"
    - w_slice: W 方向裁剪，如 "0:512"
+   - crop_lon_range: 经度裁剪范围，如 [110, 130]
+   - crop_lat_range: 纬度裁剪范围，如 [20, 40]
 
 ================================================================================
 
@@ -459,9 +466,8 @@ ${(inspectResult?.suspected_masks || []).map((v: string) => `  - ${v}`).join('\n
 
 【空间裁剪】
 - 原始尺寸: ${originalH} × ${originalW}
-${params.h_slice || params.w_slice
-    ? `- H 裁剪: ${params.h_slice || '不裁剪'}
-- W 裁剪: ${params.w_slice || '不裁剪'}`
+${params.h_slice || params.w_slice || params.crop_lon_range || params.crop_lat_range
+    ? `${params.h_slice ? `- H 裁剪: ${params.h_slice}\n` : ''}${params.w_slice ? `- W 裁剪: ${params.w_slice}\n` : ''}${params.crop_lon_range ? `- 经度范围: [${params.crop_lon_range.join(', ')}]\n` : ''}${params.crop_lat_range ? `- 纬度范围: [${params.crop_lat_range.join(', ')}]` : ''}`.trimEnd()
     : '- 不裁剪'}
 
 【数据集划分】
@@ -490,7 +496,9 @@ ${params.h_slice || params.w_slice
           valid_ratio: params.valid_ratio,
           test_ratio: params.test_ratio,
           h_slice: params.h_slice,
-          w_slice: params.w_slice
+          w_slice: params.w_slice,
+          crop_lon_range: params.crop_lon_range,
+          crop_lat_range: params.crop_lat_range
         }
       }
     }

@@ -13,17 +13,10 @@
 @version 1.2.0
 
 @changelog
+  - 2026-03-10 kongzhiquan: v1.2.1 修复缩进问题
   - 2026-03-10 Leizheng: v1.2.0 新增按经纬度裁剪功能
-    - 新增 crop_lon_range/crop_lat_range 参数（如 [120, 130] / [30, 40]）
-    - 新增 _compute_region_crop_indices() 函数，支持 1D/2D 坐标系统
-    - 自动从 NC 文件或网格文件加载经纬度坐标并计算像素索引
-    - 经纬度裁剪优先级高于 h_slice/w_slice（会覆盖）
   - 2026-02-26 kongzhiquan: v1.1.1 修复post_validation和time_info未被保存到manifest文件的问题
   - 2026-02-26 Leizheng: v1.1.0 新增网格文件支持
-    - 静态变量提取新增三级搜索：数据文件 → 用户指定网格文件 → 自动检测网格文件
-    - 新增 grid_file 配置参数
-    - 自动检测 nc_folder 父目录中的独立 NC 文件作为网格文件
-    - 同时检查 ds.variables（含 data_vars + coords）确保不遗漏坐标变量
   - 2026-02-25 Leizheng: v1.0.0 初始版本
     - NC 文件按内部时间变量严格排序（支持 decode_times=True/False 两种模式）
     - 支持多时间步/文件 和 单时间步/文件 两种 NC 文件组织形式
@@ -893,12 +886,6 @@ def forecast_preprocess(config: Dict[str, Any]) -> Dict[str, Any]:
             result["errors"].append(f"经纬度裁剪失败: {e}")
             return result
 
-    # ---- 4. 检测时间变量 ----
-        result["errors"].append(
-            f"未找到 NC 文件: 目录={nc_folder}, 模式={dyn_file_pattern}"
-        )
-        return result
-
     if max_files and max_files > 0:
         nc_files = nc_files[:max_files]
 
@@ -1307,6 +1294,8 @@ def forecast_preprocess(config: Dict[str, Any]) -> Dict[str, Any]:
         "stat_vars": stat_vars,
         "mask_vars": mask_vars,
         "spatial_shape": spatial_shape,
+        "crop_lon_range": crop_lon_range,
+        "crop_lat_range": crop_lat_range,
         "h_slice": h_slice_str,
         "w_slice": w_slice_str,
         "split_ratios": {

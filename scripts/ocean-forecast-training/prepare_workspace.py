@@ -127,7 +127,7 @@ def main():
         'generate_config.py', 'generate_training_report.py',
         'generate_training_plots.py', 'generate_predict_plots.py',
         'validate_dataset.py', 'check_gpu.py', 'list_models.py',
-        'recommend_hyperparams.py',
+        'recommend_hyperparams.py', 'estimate_memory.py',
     ]
     for f in core_files:
         s = os.path.join(src, f)

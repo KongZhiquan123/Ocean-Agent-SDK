@@ -4,9 +4,10 @@
  * @description 快速测试：生成训练/预处理/预报预处理 Notebook 并写入本地文件
  * @author kongzhiquan
  * @date 2026-02-26
- * @version 1.1.0
+ * @version 1.1.1
  *
  * @changelog
+ *   - 2026-03-10 kongzhiquan: v1.1.1 预报预处理测试用例添加 cropLonRange/cropLatRange 参数
  *   - 2026-02-26 kongzhiquan: v1.1.0 新增预报数据预处理 Notebook 测试
  *   - 2026-02-25 kongzhiquan: v1.0.0 初始版本
  *
@@ -124,6 +125,8 @@ forecastNotebook.cells = generateForecastPreprocessCells({
   testRatio: 0.15,
   hSlice: '0:512',
   wSlice: '0:1024',
+  cropLonRange: [100, 130],
+  cropLatRange: [10, 40],
   allowNan: true,
   dynFilePattern: 'ocean_avg_*.nc',
   chunkSize: 200,

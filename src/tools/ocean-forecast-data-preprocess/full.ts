@@ -7,9 +7,10 @@
  * @author Leizheng
  * @contributors kongzhiquan
  * @date 2026-02-25
- * @version 1.3.0
+ * @version 1.4.0
  *
  * @changelog
+ *   - 2026-03-10 kongzhiquan: v1.4.0 将 crop_lon_range/crop_lat_range 纳入 Workflow, forecastConfig 和 notebook 参数，确保预处理流程和生成的 Notebook 都支持地理裁剪功能
  *   - 2026-03-04 kongzhiquan: v1.3.0 合并 session 缓存，防止可选参数跨调用丢失
  *   - 2026-03-02 kongzhiquan: v1.2.1 在调用侧对 Step B 结果精简，避免超量 token 消耗
  *   - 2026-02-26 kongzhiquan: v1.2.0 添加notebook生成逻辑，执行完 Step B 后生成包含预处理代码和结果的 Jupyter Notebook，方便用户复现和调整预处理流程
@@ -218,6 +219,18 @@ export const oceanForecastPreprocessFullTool = defineTool({
       description: '【必须由用户指定】测试集比例，如 0.15',
       required: false
     },
+    crop_lon_range: {
+      type: 'array',
+      items: { type: 'number' },
+      description: '经度裁剪范围 [min_lon, max_lon]（可选）',
+      required: false
+    },
+    crop_lat_range: {
+      type: 'array',
+      items: { type: 'number' },
+      description: '纬度裁剪范围 [min_lat, max_lat]（可选）',
+      required: false
+    },
     h_slice: {
       type: 'string',
       description: 'H 方向裁剪切片，如 "0:512"（可选）',
@@ -302,6 +315,8 @@ export const oceanForecastPreprocessFullTool = defineTool({
       train_ratio,
       valid_ratio,
       test_ratio,
+      crop_lon_range,
+      crop_lat_range,
       h_slice,
       w_slice,
       chunk_size = 200,
@@ -360,6 +375,8 @@ export const oceanForecastPreprocessFullTool = defineTool({
       train_ratio: train_ratio as number | undefined,
       valid_ratio: valid_ratio as number | undefined,
       test_ratio: test_ratio as number | undefined,
+      crop_lon_range: crop_lon_range as number[] | undefined,
+      crop_lat_range: crop_lat_range as number[] | undefined,
       h_slice: h_slice as string | undefined,
       w_slice: w_slice as string | undefined,
       user_confirmed: user_confirmed as boolean,
@@ -459,6 +476,8 @@ export const oceanForecastPreprocessFullTool = defineTool({
       train_ratio,
       valid_ratio,
       test_ratio,
+      crop_lon_range: crop_lon_range || null,
+      crop_lat_range: crop_lat_range || null,
       h_slice: h_slice || null,
       w_slice: w_slice || null,
       dyn_file_pattern: actualFilePattern,
@@ -532,6 +551,8 @@ export const oceanForecastPreprocessFullTool = defineTool({
         testRatio: test_ratio as number,
         hSlice: h_slice as string | undefined,
         wSlice: w_slice as string | undefined,
+        cropLonRange: crop_lon_range as number[] | undefined,
+        cropLatRange: crop_lat_range as number[] | undefined,
         allowNan: effectiveAllowNan,
         dynFilePattern: actualFilePattern,
         useDateFilename: use_date_filename,
