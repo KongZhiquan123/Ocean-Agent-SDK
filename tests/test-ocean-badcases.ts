@@ -18,8 +18,8 @@
  */
 
 import 'dotenv/config'
-import * as fs from 'fs'
-import * as path from 'path'
+import fs from 'fs'
+import path from 'path'
 
 const API_URL = process.env.KODE_API_URL || 'http://localhost:8787'
 const API_KEY = process.env.KODE_API_SECRET || 'secret-key'

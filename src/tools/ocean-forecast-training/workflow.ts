@@ -7,9 +7,10 @@
  * @author Leizheng
  * @contributors kongzhiquan
  * @date 2026-02-26
- * @version 2.1.0
+ * @version 2.1.2
  *
  * @changelog
+ *   - 2026-03-12 kongzhiquan: v2.1.1 所有提示词改为中文
  *   - 2026-03-12 kongzhiquan: v2.1.0 新增 missing_token 分支
  *     - resolveStage 中 user_confirmed=true 时先校验 confirmation_token 是否缺失
  *     - buildTokenInvalidPrompt 支持 missing_token / token_mismatch 两种提示
@@ -43,7 +44,7 @@ const TOKEN_SALT = 'ocean-forecast-training-v2'
 // Types
 // ============================================================
 
-export type ForecastTrainingStateType =
+export type ForecastTrainingWorkflowState =
   | 'awaiting_data_confirmation'
   | 'awaiting_model_selection'
   | 'awaiting_parameters'
@@ -100,7 +101,7 @@ export interface ForecastTrainingWorkflowParams {
 }
 
 export interface ForecastTrainingStagePromptResult {
-  status: ForecastTrainingStateType
+  status: ForecastTrainingWorkflowState
   message: string
   canExecute: boolean
   data?: any
@@ -204,16 +205,6 @@ function hasAllRequiredParams(p: ForecastTrainingWorkflowParams): boolean {
   return hasDataParams(p) && hasModelParam(p) && hasTrainingParams(p)
 }
 
-function getMissingTrainingParams(p: ForecastTrainingWorkflowParams): string[] {
-  const missing: string[] = []
-  if (!p.dyn_vars || p.dyn_vars.length === 0) missing.push('dyn_vars')
-  if (p.epochs === undefined || p.epochs <= 0) missing.push('epochs')
-  if (p.lr === undefined || p.lr <= 0) missing.push('lr')
-  if (p.batch_size === undefined || p.batch_size <= 0) missing.push('batch_size')
-  if (!p.device_ids || p.device_ids.length === 0) missing.push('device_ids')
-  return missing
-}
-
 // ============================================================
 // Token generation / validation
 // ============================================================
@@ -265,22 +256,22 @@ function buildDataConfirmationPrompt(
     return {
       status: 'awaiting_data_confirmation',
       message: `================================================================================
-                    Please confirm data directory and output directory
+            ⚠️ 请确认数据目录和输出目录
 ================================================================================
 
-**Please provide the following information:**
+**请提供以下信息：**
 
-1. **dataset_root**: Preprocessed data root directory (ocean-forecast-data-preprocess output)
-   - Should contain hr/ subdirectory with .npy time-step files
-   - Optionally contains static/ subdirectory
+1️⃣ **dataset_root**：预处理后的数据根目录（ocean-forecast-data-preprocess 的输出）
+   - 应包含 hr/ 子目录，存放 .npy 格式的时间步文件
+   - 可选包含 static/ 子目录
 
-2. **log_dir**: Training log output directory
-   - Training logs, model weights, and config files will be saved here
+2️⃣ **log_dir**：训练日志输出目录
+   - 训练日志、模型权重和配置文件将保存于此
 
 ================================================================================
 
-Agent note: **Do NOT auto-guess data directories!**
-Must wait for user to explicitly specify before proceeding.`,
+⚠️ Agent 注意：**禁止自动猜测数据目录！**
+必须等待用户明确指定后再继续。`,
       canExecute: false,
       data: { missing: ['dataset_root', 'log_dir'] },
     }
@@ -291,25 +282,24 @@ Must wait for user to explicitly specify before proceeding.`,
     return {
       status: 'awaiting_data_confirmation',
       message: `================================================================================
-                    Data directory validation failed
+            ❌ 数据目录验证失败
 ================================================================================
 
-【Data Directory】${datasetInfo.dataset_root}
+【数据目录】${datasetInfo.dataset_root}
 
-【Errors】
-${datasetInfo.errors.map((e) => `  - ${e}`).join('\n')}
+【错误】
+${datasetInfo.errors.map((e) => `  ❌ ${e}`).join('\n')}
 
-${datasetInfo.warnings.length > 0 ? `【Warnings】\n${datasetInfo.warnings.map((w) => `  - ${w}`).join('\n')}` : ''}
-
-================================================================================
-
-**Please check if the data directory is correct. You may need to run
-data preprocessing first (ocean-forecast-data-preprocess).**
+${datasetInfo.warnings.length > 0 ? `【警告】\n${datasetInfo.warnings.map((w) => `  ⚠️ ${w}`).join('\n')}` : ''}
 
 ================================================================================
 
-Agent note: Data validation failed, cannot proceed.
-Inform the user of errors and wait for a new path.`,
+**请检查数据目录是否正确。可能需要先运行数据预处理（ocean-forecast-data-preprocess）。**
+
+================================================================================
+
+⚠️ Agent 注意：数据验证失败，无法继续。
+请将错误信息告知用户，并等待用户提供新路径。`,
       canExecute: false,
       data: {
         dataset_root: datasetInfo.dataset_root,
@@ -320,44 +310,44 @@ Inform the user of errors and wait for a new path.`,
   }
 
   const splitLines = Object.entries(datasetInfo.splits)
-    .map(([split, count]) => `  - ${split}: ${count} samples`)
+    .map(([split, count]) => `  - ${split}: ${count} 个样本`)
     .join('\n')
 
   const timeRangeStr = datasetInfo.time_range
     ? `${datasetInfo.time_range.start} ~ ${datasetInfo.time_range.end}`
-    : 'Not detected'
+    : '未检测到'
 
   return {
     status: 'awaiting_data_confirmation',
-    message: `Data directory validated successfully!
+    message: `数据目录验证通过！
 
 ================================================================================
-                    Dataset Information
+            📊 数据集信息
 ================================================================================
 
-【Basic Info】
-- Data directory: ${datasetInfo.dataset_root}
-- Log directory: ${params.log_dir}
+【基本信息】
+- 数据目录：${datasetInfo.dataset_root}
+- 日志目录：${params.log_dir}
 
-【Detected Variables】
-- Dynamic variables: ${datasetInfo.dyn_vars.join(', ')}
-- Static variables: ${datasetInfo.has_static ? datasetInfo.static_vars.join(', ') : 'None'}
+【检测到的变量】
+- 动态变量：${datasetInfo.dyn_vars.join(', ')}
+- 静态变量：${datasetInfo.has_static ? datasetInfo.static_vars.join(', ') : '无'}
 
-【Spatial Shape】
-- Shape (H x W): ${datasetInfo.spatial_shape ? datasetInfo.spatial_shape.join(' x ') : 'Not detected'}
+【空间尺寸】
+- 形状（H x W）：${datasetInfo.spatial_shape ? datasetInfo.spatial_shape.join(' x ') : '未检测到'}
 
-【Temporal Info】
-- Total timesteps: ${datasetInfo.total_timesteps}
-- Time range: ${timeRangeStr}
+【时间信息】
+- 总时间步数：${datasetInfo.total_timesteps}
+- 时间范围：${timeRangeStr}
 
-【Dataset Splits】
+【数据集划分】
 ${splitLines}
 
-${datasetInfo.warnings.length > 0 ? `【Warnings】\n${datasetInfo.warnings.map((w) => `  - ${w}`).join('\n')}\n` : ''}
+${datasetInfo.warnings.length > 0 ? `【警告】\n${datasetInfo.warnings.map((w) => `  ⚠️ ${w}`).join('\n')}\n` : ''}
 ================================================================================
 
-Data validation passed, please proceed with model selection.
-Agent may proceed to Stage 2 (model selection).`,
+数据验证通过，请继续进行模型选择。
+Agent 可以进入下一阶段（阶段2：模型选择）。`,
     canExecute: false,
     data: {
       dataset_root: datasetInfo.dataset_root,
@@ -378,7 +368,7 @@ function buildModelSelectionPrompt(
   modelList?: ForecastModelInfo[]
 ): ForecastTrainingStagePromptResult {
   let modelListStr =
-    '(Model list failed to load, please call ocean_forecast_list_models to view)'
+    '（模型列表加载失败，请调用 ocean_forecast_list_models 查看）'
   if (modelList && modelList.length > 0) {
     const supportedModels = modelList.filter((m) => m.supported !== false)
     const unsupportedModels = modelList.filter((m) => m.supported === false)
@@ -410,44 +400,49 @@ function buildModelSelectionPrompt(
     if (unsupportedModels.length > 0) {
       modelListStr = [
         modelListStr,
-        '【Not integrated / experimental】',
+        '【未集成 / 实验性】',
         formatGroup(unsupportedModels),
         '',
-        'These models are not yet integrated into the training pipeline.',
+        '这些模型尚未集成到训练流水线中。',
       ].join('\n')
     }
   }
 
   return {
     status: 'awaiting_model_selection',
-    message: `Data confirmed:
-- Data directory: ${params.dataset_root}
-- Log directory: ${params.log_dir}
+    message: `数据确认完成：
+- 数据目录：${params.dataset_root}
+- 日志目录：${params.log_dir}
 ${
   datasetInfo
-    ? `- Detected variables: ${datasetInfo.dyn_vars.join(', ')}
-- Spatial shape: ${datasetInfo.spatial_shape?.join(' x ') ?? 'Unknown'}
-- Timesteps: ${datasetInfo.total_timesteps}`
+    ? `- 检测到的变量：${datasetInfo.dyn_vars.join(', ')}
+- 空间尺寸：${datasetInfo.spatial_shape?.join(' x ') ?? '未知'}
+- 时间步数：${datasetInfo.total_timesteps}`
     : ''
 }
 
 ================================================================================
-                    Please select a training model
+                    ⚠️ 请选择训练模型
 ================================================================================
 
 ${modelListStr}
 
 ================================================================================
 
-**Please answer the following:**
+**请回答以下问题：**
 
-- **Which model to use for training?**
-  Select a model name from the list above.
+🔹 **选择哪个模型进行训练？**
+  请从上面的模型列表中选择一个模型名称。
+
+  💡 推荐：
+  - 初次尝试推荐 SwinTransformerV2（平衡性能和效果）
+  - 时间建模可先试 OneForecast / FNO2d
+  - 显存敏感场景可优先考虑轻量模型
 
 ================================================================================
 
-Agent note: **Do NOT auto-select a model!**
-Must wait for user to explicitly specify before proceeding.`,
+⚠️ Agent 注意：**禁止自动选择模型！**
+必须等待用户明确指定后再继续。`,
     canExecute: false,
     data: {
       dataset_root: params.dataset_root,
@@ -464,15 +459,15 @@ function buildParametersPrompt(
   datasetInfo?: ForecastDatasetInfo,
   gpuInfo?: ForecastGpuInfo
 ): ForecastTrainingStagePromptResult {
-  let gpuStr = 'GPU info not available'
+  let gpuStr = 'GPU 信息不可用'
   if (gpuInfo) {
     if (!gpuInfo.cuda_available) {
-      gpuStr = 'No GPU detected! Training requires GPU support.'
+      gpuStr = '⚠️ 未检测到可用 GPU！训练需要 GPU 支持。'
     } else {
       gpuStr = gpuInfo.gpus
         .map(
           (g) =>
-            `  - GPU ${g.id}: ${g.name} (total ${g.total_memory_gb}GB / free ${g.free_memory_gb}GB / used ${g.used_memory_gb}GB)`
+            `  - GPU ${g.id}: ${g.name} (总显存 ${g.total_memory_gb}GB / 空闲 ${g.free_memory_gb}GB / 已用 ${g.used_memory_gb}GB)`
         )
         .join('\n')
     }
@@ -506,76 +501,76 @@ function buildParametersPrompt(
 
   return {
     status: 'awaiting_parameters',
-    message: `Model selected: ${params.model_name}
+    message: `模型已选择：${params.model_name}
 
 ================================================================================
-                    Please confirm training parameters
+            ⚠️ 请确认训练参数
 ================================================================================
 
-【Data Parameters】(auto-detected from data directory, please confirm)
-- dyn_vars: ${detectedVars.length > 0 ? detectedVars.join(', ') : '? Not detected, please specify manually'}${params.dyn_vars ? ` -> Current: ${params.dyn_vars.join(', ')}` : ''}
+【数据参数】（自动从数据目录检测，请确认）
+- dyn_vars: ${detectedVars.length > 0 ? detectedVars.join(', ') : '❓ 未检测到，请手动指定'}${params.dyn_vars ? ` ✅ 当前: ${params.dyn_vars.join(', ')}` : ''}
 
-【Forecast-specific Parameters】
-- in_t: ${currentInT} (number of input timesteps)
-- out_t: ${currentOutT} (number of output/prediction timesteps)
-- stride: ${currentStride} (sliding window stride for sample generation)
+【预测专用参数】
+- in_t: ${currentInT} （输入时间步数）
+- out_t: ${currentOutT} （输出/预测时间步数）
+- stride: ${currentStride} （样本生成的滑动窗口步长）
 
-【Core Training Parameters】
-- epochs: ${currentEpochs} (training epochs)
-- lr: ${currentLr} (learning rate)
-- batch_size: ${currentBatchSize} (training batch size)
-- eval_batch_size: ${currentEvalBatchSize} (evaluation batch size)
-- patience: ${currentPatience} (early stopping patience)
-- eval_freq: ${currentEvalFreq} (evaluation frequency, every N epochs)
+【核心训练参数】
+- epochs: ${currentEpochs} （训练轮数）
+- lr: ${currentLr} （学习率）
+- batch_size: ${currentBatchSize} （训练批大小）
+- eval_batch_size: ${currentEvalBatchSize} （评估批大小）
+- patience: ${currentPatience} （早停耐心值）
+- eval_freq: ${currentEvalFreq} （评估频率，每 N 轮评估一次）
 
-【Optimizer Parameters】
-- optimizer: ${currentOptimizer} (options: AdamW, Adam, SGD)
+【优化器参数】
+- optimizer: ${currentOptimizer} （可选：AdamW、Adam、SGD）
 - weight_decay: ${currentWeightDecay}
-- scheduler: ${currentScheduler} (options: StepLR, MultiStepLR, OneCycleLR)
+- scheduler: ${currentScheduler} （可选：StepLR、MultiStepLR、OneCycleLR）
 - scheduler_step_size: ${currentSchedulerStepSize}
 - scheduler_gamma: ${currentSchedulerGamma}
 
-【Normalization Parameters】
+【归一化参数】
 - normalize: ${currentNormalize}
-- normalizer_type: ${currentNormalizerType} (options: PGN, GN)
+- normalizer_type: ${currentNormalizerType} （可选：PGN、GN）
 
-【GPU Configuration】
+【GPU 配置】
 ${gpuStr}
 
-- device_ids: [${currentDeviceIds.join(', ')}] (GPUs to use)
-- distribute: ${currentDistribute} (multi-GPU training)
-- distribute_mode: ${currentDistributeMode} (mode: DP / DDP)
-- master_port: ${currentDistribute && currentDistributeMode === 'DDP' ? (params.master_port ?? 'auto') : 'N/A'} (DDP communication port)
+- device_ids: [${currentDeviceIds.join(', ')}] （使用的 GPU）
+- distribute: ${currentDistribute} （多 GPU 训练）
+- distribute_mode: ${currentDistributeMode} （模式：DP / DDP）
+- master_port: ${currentDistribute && currentDistributeMode === 'DDP' ? (params.master_port ?? '自动') : 'N/A'} （DDP 通信端口）
 
-${currentDistribute && currentDeviceIds.length <= 1 ? 'Warning: device_ids has only 1 GPU, cannot use DDP/DP, will fallback to single GPU.' : ''}
+${currentDistribute && currentDeviceIds.length <= 1 ? '⚠️ device_ids 只有 1 张 GPU 时无法使用 DDP/DP，将自动降级为单卡。' : ''}
 
-${gpuInfo && gpuInfo.gpu_count > 1 ? `Tip: ${gpuInfo.gpu_count} GPUs detected, consider using multi-GPU DDP training for speedup.` : ''}
+${gpuInfo && gpuInfo.gpu_count > 1 ? `💡 检测到 ${gpuInfo.gpu_count} 张 GPU，建议使用多卡 DDP 训练以加速。` : ''}
 
-【Other Parameters】
-- seed: ${currentSeed} (random seed)
-- wandb: ${params.wandb ?? false} (enable WandB logging)
-${params.ckpt_path ? `- ckpt_path: ${params.ckpt_path} (resume from checkpoint)` : ''}
+【其他参数】
+- seed: ${currentSeed} （随机种子）
+- wandb: ${params.wandb ?? false} （启用 WandB 日志）
+${params.ckpt_path ? `- ckpt_path: ${params.ckpt_path} （从检查点恢复）` : ''}
 
-【OOM Protection Parameters】
-- use_amp: ${currentUseAmp} (AMP mixed precision, ~40-50% VRAM reduction; FFT models default off)
-- gradient_checkpointing: ${currentGradientCheckpointing} (gradient checkpointing, ~60% activation memory reduction)
+【OOM 保护参数】
+- use_amp: ${currentUseAmp} （AMP 混合精度，约降低 40-50% 显存；FFT 模型默认关闭）
+- gradient_checkpointing: ${currentGradientCheckpointing} （梯度检查点，约减少 60% 激活内存）
 
-Tip: If running out of VRAM, try use_amp=true. FFT models may have cuFFT size issues.
-     The system will auto-estimate VRAM and reduce batch_size if needed before training.
-
-================================================================================
-
-**Please confirm or modify the above parameters.**
-- All parameters have defaults; if acceptable, reply "confirm"
-- To modify, specify the parameter name and new value
-- **Must confirm**: dyn_vars, device_ids
+💡 显存不足时可尝试 use_amp=true。FFT 模型可能存在 cuFFT size 问题。
+      系统将在训练前自动估算显存，并在需要时自动降低 batch_size。
 
 ================================================================================
 
-Agent note:
-- If dyn_vars was auto-detected, present to user and ask for confirmation
-- device_ids must be confirmed by the user
-- **Do NOT auto-decide training parameters!** Wait for user confirmation.`,
+**请确认或修改以上参数。**
+- 所有参数均有默认值，如无异议请回复"确认"
+- 如需修改，请指定参数名称和新值
+- **必须确认**：dyn_vars、device_ids
+
+================================================================================
+
+⚠️ Agent 注意：
+- 如果 dyn_vars 是自动检测的，请向用户展示并请求确认
+- device_ids 必须由用户确认
+- **禁止自动决定训练参数！**必须等待用户确认后再继续。`,
     canExecute: false,
     data: {
       model_name: params.model_name,
@@ -627,90 +622,89 @@ function buildExecutionPrompt(
   const distributeMode = params.distribute_mode ?? 'DDP'
   let gpuModeStr: string
   if (deviceIds.length === 1) {
-    gpuModeStr = `Single GPU (GPU ${deviceIds[0]})`
+    gpuModeStr = `单 GPU（GPU ${deviceIds[0]}）`
   } else if (distribute && distributeMode === 'DDP') {
-    gpuModeStr = `Multi-GPU DDP (GPU ${deviceIds.join(', ')})`
+    gpuModeStr = `多 GPU DDP（GPU ${deviceIds.join(', ')}）`
   } else {
-    gpuModeStr = `Multi-GPU DP (GPU ${deviceIds.join(', ')})`
+    gpuModeStr = `多 GPU DP（GPU ${deviceIds.join(', ')}）`
   }
 
   let gpuNames = ''
   if (gpuInfo) {
     const selectedGpus = gpuInfo.gpus.filter((g) => deviceIds.includes(g.id))
     gpuNames = selectedGpus
-      .map((g) => `${g.name} (${g.free_memory_gb}GB free)`)
+      .map((g) => `${g.name}（空闲 ${g.free_memory_gb}GB）`)
       .join(', ')
   }
 
   return {
     status: 'awaiting_execution',
-    message: `All parameters confirmed. Please review and confirm execution:
+    message: `所有参数已确认，请检查后确认执行：
 
 ================================================================================
-                         Training Parameter Summary
+               📋 训练参数汇总
 ================================================================================
 
-【Data Info】
-- Data directory: ${params.dataset_root}
-- Log directory: ${params.log_dir}
-- Dynamic variables: ${params.dyn_vars?.join(', ')}
+【数据信息】
+- 数据目录：${params.dataset_root}
+- 日志目录：${params.log_dir}
+- 动态变量：${params.dyn_vars?.join(', ')}
 ${
   datasetInfo
-    ? `- Spatial shape: ${datasetInfo.spatial_shape?.join(' x ') ?? '?'}
-- Total timesteps: ${datasetInfo.total_timesteps}
-- Time range: ${datasetInfo.time_range ? `${datasetInfo.time_range.start} ~ ${datasetInfo.time_range.end}` : '?'}`
+    ? `- 空间尺寸：${datasetInfo.spatial_shape?.join(' x ') ?? '?'}
+- 总时间步数：${datasetInfo.total_timesteps}
+- 时间范围：${datasetInfo.time_range ? `${datasetInfo.time_range.start} ~ ${datasetInfo.time_range.end}` : '?'}`
     : ''
 }
 
-【Model Configuration】
-- Model: ${params.model_name}
-- Mode: ${params.mode ?? 'train'}
+【模型配置】
+- 模型：${params.model_name}
+- 模式：${params.mode ?? 'train'}
 
-【Forecast Parameters】
-- Input timesteps (in_t): ${params.in_t}
-- Output timesteps (out_t): ${params.out_t}
-- Stride: ${params.stride}
+【预测参数】
+- 输入时间步数（in_t）：${params.in_t}
+- 输出时间步数（out_t）：${params.out_t}
+- 步长（stride）：${params.stride}
 
-【Training Parameters】
-- Epochs: ${params.epochs}
-- Learning rate: ${params.lr}
-- Batch size: ${params.batch_size}
-- Eval batch size: ${params.eval_batch_size ?? 4}
-- Early stopping patience: ${params.patience ?? 10}
-- Eval frequency: every ${params.eval_freq ?? 5} epochs
+【训练参数】
+- 训练轮数（epochs）：${params.epochs}
+- 学习率（lr）：${params.lr}
+- 训练批大小（batch_size）：${params.batch_size}
+- 评估批大小（eval_batch_size）：${params.eval_batch_size ?? 4}
+- 早停耐心值（patience）：${params.patience ?? 10}
+- 评估频率：每 ${params.eval_freq ?? 5} 轮
 
-【Optimizer】
-- Optimizer: ${params.optimizer ?? 'AdamW'}
-- Weight decay: ${params.weight_decay ?? 0.001}
-- Scheduler: ${params.scheduler ?? 'StepLR'}
+【优化器】
+- 优化器：${params.optimizer ?? 'AdamW'}
+- 权重衰减：${params.weight_decay ?? 0.001}
+- 调度器：${params.scheduler ?? 'StepLR'}
 
-【GPU Configuration】
-- Mode: ${gpuModeStr}
-${gpuNames ? `- GPU: ${gpuNames}` : ''}
-${distribute && distributeMode === 'DDP' ? `- master_port: ${params.master_port ?? 'auto'}` : ''}
+【GPU 配置】
+- 模式：${gpuModeStr}
+${gpuNames ? `- GPU：${gpuNames}` : ''}
+${distribute && distributeMode === 'DDP' ? `- master_port：${params.master_port ?? '自动'}` : ''}
 
-【Other】
-- Normalization: ${params.normalize ?? true} (${params.normalizer_type ?? 'PGN'})
-- Random seed: ${params.seed ?? 42}
-- WandB: ${params.wandb ?? false}
-${params.ckpt_path ? `- Checkpoint resume: ${params.ckpt_path}` : ''}
+【其他】
+- 归一化：${params.normalize ?? true}（${params.normalizer_type ?? 'PGN'}）
+- 随机种子：${params.seed ?? 42}
+- WandB：${params.wandb ?? false}
+${params.ckpt_path ? `- 从检查点恢复：${params.ckpt_path}` : ''}
 
-【OOM Protection】
-- AMP mixed precision: ${effectiveUseAmp}
-- Gradient checkpointing: ${effectiveGradientCheckpointing}
-- VRAM estimation: auto (auto-reduce batch_size if estimated > 85%)
-
-================================================================================
-
-Please confirm the above parameters are correct, then reply "confirm execution".
-
-To modify any parameter, tell me what you want to change.
+【OOM 保护】
+- AMP 混合精度：${effectiveUseAmp}
+- 梯度检查点：${effectiveGradientCheckpointing}
+- 显存估算：自动（估算超过 85% 时自动降低 batch_size）
 
 ================================================================================
 
-Execution Confirmation Token: ${confirmationToken}
-(Agent must present the above summary to the user for confirmation,
-and include this token with user_confirmed=true in the next invocation.)`,
+⚠️ **请确认以上参数无误后，回复"确认执行"**
+
+如需修改任何参数，请告知具体修改内容。
+
+================================================================================
+
+🔐 **执行确认 Token**：${confirmationToken}
+（Agent 必须将上述汇总展示给用户确认，并在下次调用时附带此 token 和 user_confirmed=true。）`,
     canExecute: false,
     data: {
       confirmation_token: confirmationToken,
@@ -756,16 +750,16 @@ function buildTokenInvalidPrompt(
     return {
       status: 'token_invalid',
       message: `================================================================================
-                    Token validation failed - missing confirmation token
+            ⚠️ Token 校验失败 — 缺少确认令牌
 ================================================================================
 
-Detected step-skipping behavior:
-user_confirmed=true was provided, but confirmation_token is missing.
+检测到跳步行为：
+提供了 user_confirmed=true，但 confirmation_token 缺失。
 
-Required flow:
-1. Call tool without user_confirmed to enter awaiting_execution stage
-2. Get confirmation_token from the stage result
-3. After user confirms, call again with user_confirmed=true and confirmation_token
+必须按以下流程执行：
+1. 不携带 user_confirmed 调用工具，进入 awaiting_execution 阶段
+2. 从阶段结果中获取 confirmation_token
+3. 用户确认后，携带 user_confirmed=true 和 confirmation_token 再次调用
 
 ================================================================================`,
       canExecute: false,
@@ -779,13 +773,13 @@ Required flow:
   return {
     status: 'token_invalid',
     message: `================================================================================
-                    Token validation failed - parameters modified
+            ⚠️ Token 校验失败 — 参数已被修改
 ================================================================================
 
-Parameters were modified after user confirmation (possibly Agent auto-adjusted
-device_ids, batch_size, etc.), causing the token to become invalid.
+用户确认后参数被修改（可能是 Agent 自动调整了 device_ids、batch_size 等），
+导致 Token 失效。
 
-【Current Parameter Snapshot】
+【当前参数快照】
 - dataset_root: ${params.dataset_root}
 - log_dir: ${params.log_dir}
 - model_name: ${params.model_name}
@@ -798,13 +792,12 @@ device_ids, batch_size, etc.), causing the token to become invalid.
 - batch_size: ${params.batch_size}
 - device_ids: [${params.device_ids?.join(', ')}]
 - distribute: ${params.distribute}
-- use_amp: ${resolveUseAmp(params)} (not included in token signature)
+- use_amp: ${resolveUseAmp(params)}（不计入 Token 签名）
 - gradient_checkpointing: ${params.gradient_checkpointing}
 
 ================================================================================
 
-Please re-present the above parameters to the user, obtain confirmation,
-and re-invoke with the new token.
+请将上述参数重新展示给用户，获取确认后携带新 Token 再次调用。
 
 ================================================================================`,
     canExecute: false,

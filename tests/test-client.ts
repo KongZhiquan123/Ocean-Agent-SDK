@@ -51,7 +51,7 @@
  */
 
 import 'dotenv/config'
-import * as readline from 'readline'
+import readline from 'readline'
 
 const API_PORT = process.env.KODE_API_PORT || '8787'
 const API_URL = process.env.KODE_API_URL || `http://localhost:${API_PORT}`

@@ -17,7 +17,7 @@ import { oceanForecastTrainStatusTool } from './train-status'
 import { oceanForecastReportTool } from './report'
 import { oceanForecastVisualizeTool } from './visualize'
 
-export type { ForecastTrainingStateType } from './workflow'
+export type { ForecastTrainingWorkflowState } from './workflow'
 
 export const oceanForecastTrainingTools = [
   oceanForecastCheckGpuTool,

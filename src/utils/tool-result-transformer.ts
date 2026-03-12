@@ -23,10 +23,10 @@
  *     - 未注册的工具名原样透传
  */
 import type { ToolCallSnapshot } from "@shareai-lab/kode-sdk"
-import type { ForecastPreprocessStateType } from "@/tools/ocean-forecast-data-preprocess"
-import type { SrPreprocessStateType } from "@/tools/ocean-SR-data-preprocess"
-import type { ForecastTrainingStateType } from "@/tools/ocean-forecast-training"
-import type { SrTrainingStateType } from "@/tools/ocean-SR-training"
+import type { ForecastPreprocessWorkflowState } from "@/tools/ocean-forecast-data-preprocess"
+import type { SrPreprocessWorkflowState } from "@/tools/ocean-SR-data-preprocess"
+import type { ForecastTrainingWorkflowState } from "@/tools/ocean-forecast-training"
+import type { SrTrainingWorkflowState } from "@/tools/ocean-SR-training"
 import { SIMPLE_TOOL_LABELS } from "./constants"
 
 const TOOL_MESSAGE_MAX_LENGTH = 200 as const
@@ -47,7 +47,7 @@ const FORECAST_PREPROCESS_FULL_STEP_LABELS: Record<string, string> = {
 }
 
 // 预处理工具确认参数时可能的状态
-const PREPROCESS_AWAITING_LABELS: Record<SrPreprocessStateType | ForecastPreprocessStateType, string> = {
+const PREPROCESS_AWAITING_LABELS: Record<SrPreprocessWorkflowState | ForecastPreprocessWorkflowState, string> = {
   awaiting_variable_selection: '正在等待研究变量选择',
   awaiting_static_selection: '正在等待静态/掩码变量选择',
   awaiting_region_selection: '正在等待用户确认区域裁剪',
@@ -57,7 +57,7 @@ const PREPROCESS_AWAITING_LABELS: Record<SrPreprocessStateType | ForecastPreproc
 }
 
 // 训练工具确认参数时可能的状态
-const TRAIN_AWAITING_LABELS: Record<ForecastTrainingStateType | SrTrainingStateType, string> = {
+const TRAIN_AWAITING_LABELS: Record<ForecastTrainingWorkflowState | SrTrainingWorkflowState, string> = {
   awaiting_data_confirmation: '正在等待数据目录确认',
   awaiting_model_selection: '正在等待模型选择',
   awaiting_parameters: '正在等待训练参数设置',

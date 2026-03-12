@@ -36,7 +36,7 @@ import path from 'node:path'
 import { findFirstPythonPath } from '@/utils/python-manager'
 import { oceanInspectDataTool } from '../ocean-SR-data-preprocess/inspect'
 import { oceanForecastPreprocessVisualizeTool } from './visualize'
-import { resolveStage, type ForecastPreprocessParams } from './workflow'
+import { resolveStage, type ForecastPreprocessWorkflowParams } from './workflow'
 import { generateForecastPreprocessCells, saveOrAppendNotebook } from './notebook'
 import { shellEscapeDouble } from '@/utils/shell'
 import { loadSessionParams, saveSessionParams } from '@/utils/training-utils'
@@ -293,7 +293,7 @@ export const oceanForecastPreprocessFullTool = defineTool({
     const SESSION_FILENAME = '.ocean_forecast_preprocess_session.json' as const
     // ===== 合并 session 缓存，防止可选参数跨调用丢失 =====
     const sessionParams = args.output_base
-      ? await loadSessionParams<ForecastPreprocessParams>(args.output_base, SESSION_FILENAME, ctx)
+      ? await loadSessionParams<ForecastPreprocessWorkflowParams>(args.output_base, SESSION_FILENAME, ctx)
       : null
     const effectiveArgs = sessionParams
       ? {
@@ -371,7 +371,7 @@ export const oceanForecastPreprocessFullTool = defineTool({
 
     // ========== 阶段判断 ==========
     const stageResult = resolveStage(
-      { ...effectiveArgs, nc_folder: actualNcFolder } as ForecastPreprocessParams,
+      { ...effectiveArgs, nc_folder: actualNcFolder } as ForecastPreprocessWorkflowParams,
       stepAResult,
     )
 

@@ -89,7 +89,7 @@ import { oceanValidateTensorTool } from './validate'
 import { oceanSrPreprocessConvertNpyTool } from './convert'
 import { oceanSrPreprocessDownsampleTool } from './downsample'
 import { oceanSrPreprocessVisualizeTool } from './visualize'
-import { resolveStage, type SrPreprocessParams } from './workflow'
+import { resolveStage, type SrPreprocessWorkflowParams } from './workflow'
 import { generatePreprocessCells, saveOrAppendNotebook } from './notebook'
 import { findFirstPythonPath } from '@/utils/python-manager'
 import { loadSessionParams, saveSessionParams } from '@/utils/training-utils'
@@ -364,7 +364,7 @@ export const oceanSrPreprocessFullTool = defineTool({
     const SESSION_FILENAME = '.ocean_sr_preprocess_session.json' as const
     // ===== 合并 session 缓存，防止可选参数跨调用丢失 =====
     const sessionParams = args.output_base
-      ? await loadSessionParams<SrPreprocessParams>(args.output_base, SESSION_FILENAME, ctx)
+      ? await loadSessionParams<SrPreprocessWorkflowParams>(args.output_base, SESSION_FILENAME, ctx)
       : null
     const effectiveArgs = sessionParams
       ? {
@@ -463,7 +463,7 @@ export const oceanSrPreprocessFullTool = defineTool({
 
     // ========== 阶段判断 ==========
     const stageResult = resolveStage(
-      { ...effectiveArgs, nc_folder: actualNcFolder } as SrPreprocessParams,
+      { ...effectiveArgs, nc_folder: actualNcFolder } as SrPreprocessWorkflowParams,
       stepAResult
     )
 

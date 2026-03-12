@@ -5,10 +5,12 @@
  *              Token 机制：SHA-256 签名覆盖关键参数字段，参数变更后 token 自动失效。
  *
  * @author kongzhiquan
+ * @contributors Leizheng
  * @date 2026-03-12
- * @version 2.1.0
+ * @version 2.1.1
  *
  * @changelog
+ *   - 2026-03-12 kongzhiquan: v2.1.1 将 hasStageX/buildStageX 重命名为语义化函数名
  *   - 2026-03-12 kongzhiquan: v2.1.0 Token 从 UUID 改为 SHA-256 签名
  *     - 签名覆盖 dyn_vars, stat_vars, mask_vars, train/valid/test_ratio,
  *       h_slice, w_slice, crop_lon_range, crop_lat_range
@@ -31,7 +33,7 @@ const TOKEN_SALT = 'ocean-forecast-preprocess-v1'
 // Types
 // ============================================================
 
-export interface ForecastPreprocessParams {
+export interface ForecastPreprocessWorkflowParams {
   nc_folder: string
   output_base: string
   dyn_vars?: string[]
@@ -49,15 +51,15 @@ export interface ForecastPreprocessParams {
   [key: string]: any
 }
 
-export type ForecastPreprocessStateType =
+export type ForecastPreprocessWorkflowState =
   | 'awaiting_variable_selection'
   | 'awaiting_static_selection'
   | 'awaiting_parameters'
   | 'awaiting_execution'
   | 'token_invalid'
 
-export interface ForecastPreprocessStageResult {
-  status: ForecastPreprocessStateType
+export interface ForecastPreprocessStagePromptResult {
+  status: ForecastPreprocessWorkflowState
   message: string
   canExecute: boolean
   data?: Record<string, unknown>
@@ -67,15 +69,15 @@ export interface ForecastPreprocessStageResult {
 // Stage check predicates
 // ============================================================
 
-function hasStage1(p: ForecastPreprocessParams): boolean {
+function hasDynamicVarsSelected(p: ForecastPreprocessWorkflowParams): boolean {
   return !!p.dyn_vars?.length
 }
 
-function hasStage2(p: ForecastPreprocessParams): boolean {
+function hasStaticAndMaskVarsSelected(p: ForecastPreprocessWorkflowParams): boolean {
   return p.stat_vars !== undefined && p.mask_vars !== undefined
 }
 
-function hasStage3(p: ForecastPreprocessParams): boolean {
+function hasSplitRatiosConfigured(p: ForecastPreprocessWorkflowParams): boolean {
   return (
     p.train_ratio !== undefined &&
     p.valid_ratio !== undefined &&
@@ -83,8 +85,12 @@ function hasStage3(p: ForecastPreprocessParams): boolean {
   )
 }
 
-function hasAllStages(p: ForecastPreprocessParams): boolean {
-  return hasStage1(p) && hasStage2(p) && hasStage3(p)
+function hasAllRequiredParams(p: ForecastPreprocessWorkflowParams): boolean {
+  return (
+    hasDynamicVarsSelected(p) &&
+    hasStaticAndMaskVarsSelected(p) &&
+    hasSplitRatiosConfigured(p)
+  )
 }
 
 // ============================================================
@@ -95,7 +101,7 @@ function hasAllStages(p: ForecastPreprocessParams): boolean {
  * 生成 SHA-256 确认 Token。
  * 签名覆盖所有用户确认的关键参数，任何变更都会使 token 失效。
  */
-export function generateConfirmationToken(params: ForecastPreprocessParams): string {
+export function generateConfirmationToken(params: ForecastPreprocessWorkflowParams): string {
   const tokenData = {
     nc_folder: params.nc_folder,
     output_base: params.output_base,
@@ -114,7 +120,7 @@ export function generateConfirmationToken(params: ForecastPreprocessParams): str
   return crypto.createHash('sha256').update(dataStr).digest('hex').substring(0, 16)
 }
 
-function validateConfirmationToken(params: ForecastPreprocessParams): boolean {
+function validateConfirmationToken(params: ForecastPreprocessWorkflowParams): boolean {
   if (!params.confirmation_token) return false
   return params.confirmation_token === generateConfirmationToken(params)
 }
@@ -123,7 +129,7 @@ function validateConfirmationToken(params: ForecastPreprocessParams): boolean {
 // Prompt builders
 // ============================================================
 
-function buildStage1Prompt(inspectResult: any, params: ForecastPreprocessParams): ForecastPreprocessStageResult {
+function buildVariableSelectionPrompt(inspectResult: any, params: ForecastPreprocessWorkflowParams): ForecastPreprocessStagePromptResult {
   const dynCandidates: string[] = inspectResult?.dynamic_vars_candidates || []
   const variables = inspectResult?.variables || {}
 
@@ -177,7 +183,7 @@ ${(inspectResult?.suspected_masks || []).map((v: string) => `  - ${v}`).join('\n
   }
 }
 
-function buildStage2Prompt(inspectResult: any, params: ForecastPreprocessParams): ForecastPreprocessStageResult {
+function buildStaticAndMaskSelectionPrompt(inspectResult: any, params: ForecastPreprocessWorkflowParams): ForecastPreprocessStagePromptResult {
   return {
     status: 'awaiting_static_selection',
     message: `研究变量已确认：${params.dyn_vars?.join(', ')}
@@ -217,7 +223,7 @@ ${(inspectResult?.suspected_masks || []).map((v: string) => `  - ${v}`).join('\n
   }
 }
 
-function buildStage3Prompt(inspectResult: any, params: ForecastPreprocessParams): ForecastPreprocessStageResult {
+function buildProcessingParametersPrompt(inspectResult: any, params: ForecastPreprocessWorkflowParams): ForecastPreprocessStagePromptResult {
   const firstVar = params.dyn_vars?.[0]
   const varInfo = inspectResult?.variables?.[firstVar]
   const dataShape = varInfo?.shape || []
@@ -270,11 +276,11 @@ function buildStage3Prompt(inspectResult: any, params: ForecastPreprocessParams)
   }
 }
 
-function buildStage4Prompt(
+function buildExecutionConfirmationPrompt(
   inspectResult: any,
-  params: ForecastPreprocessParams,
+  params: ForecastPreprocessWorkflowParams,
   token: string
-): ForecastPreprocessStageResult {
+): ForecastPreprocessStagePromptResult {
   const firstVar = params.dyn_vars?.[0]
   const varInfo = inspectResult?.variables?.[firstVar]
   const dataShape = varInfo?.shape || []
@@ -351,9 +357,9 @@ ${cropLines}
 }
 
 function buildTokenInvalidPrompt(
-  params: ForecastPreprocessParams,
+  params: ForecastPreprocessWorkflowParams,
   mode: 'missing_token' | 'token_mismatch'
-): ForecastPreprocessStageResult {
+): ForecastPreprocessStagePromptResult {
   if (mode === 'missing_token') {
     return {
       status: 'token_invalid',
@@ -416,11 +422,11 @@ function buildTokenInvalidPrompt(
  * @returns ForecastPreprocessStageResult（仍在某阶段）或 null（所有阶段通过，继续执行）
  */
 export function resolveStage(
-  params: ForecastPreprocessParams,
+  params: ForecastPreprocessWorkflowParams,
   inspectResult: any,
-): ForecastPreprocessStageResult | null {
+): ForecastPreprocessStagePromptResult | null {
   // 所有阶段完成 + user_confirmed=true：验证 token
-  if (params.user_confirmed === true && hasAllStages(params)) {
+  if (params.user_confirmed === true && hasAllRequiredParams(params)) {
     if (!params.confirmation_token) {
       return buildTokenInvalidPrompt(params, 'missing_token')
     }
@@ -433,11 +439,11 @@ export function resolveStage(
     return null
   }
 
-  if (!hasStage1(params)) return buildStage1Prompt(inspectResult, params)
-  if (!hasStage2(params)) return buildStage2Prompt(inspectResult, params)
-  if (!hasStage3(params)) return buildStage3Prompt(inspectResult, params)
+  if (!hasDynamicVarsSelected(params)) return buildVariableSelectionPrompt(inspectResult, params)
+  if (!hasStaticAndMaskVarsSelected(params)) return buildStaticAndMaskSelectionPrompt(inspectResult, params)
+  if (!hasSplitRatiosConfigured(params)) return buildProcessingParametersPrompt(inspectResult, params)
 
   // Stage 4：所有参数就绪，生成 SHA-256 token 并等待用户确认
   const token = generateConfirmationToken(params)
-  return buildStage4Prompt(inspectResult, params, token)
+  return buildExecutionConfirmationPrompt(inspectResult, params, token)
 }

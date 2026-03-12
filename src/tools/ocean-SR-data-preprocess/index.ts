@@ -36,7 +36,7 @@ import { oceanSrPreprocessVisualizeTool } from './visualize'
 import { oceanSrPreprocessMetricsTool } from './metrics-tool'
 import { oceanSrPreprocessReportTool } from './report'
 
-export type { SrPreprocessStateType } from './workflow'
+export type { SrPreprocessWorkflowState } from './workflow'
 
 export const oceanSrPreprocessTools = [
   oceanInspectDataTool,

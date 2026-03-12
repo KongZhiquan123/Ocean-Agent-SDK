@@ -73,7 +73,7 @@ const TOKEN_SALT = 'ocean-SR-training-v2'
 // Types
 // ============================================================
 
-export type SrTrainingStateType =
+export type SrTrainingWorkflowState =
   | 'awaiting_data_confirmation'
   | 'awaiting_model_selection'
   | 'awaiting_parameters'
@@ -127,7 +127,7 @@ export interface SrTrainingWorkflowParams {
 }
 
 export interface SrTrainingStagePromptResult {
-  status: SrTrainingStateType
+  status: SrTrainingWorkflowState
   message: string
   canExecute: boolean
   data?: any
@@ -296,17 +296,6 @@ function hasTrainingParams(p: SrTrainingWorkflowParams): boolean {
 
 function hasAllRequiredParams(p: SrTrainingWorkflowParams): boolean {
   return hasDataParams(p) && hasModelParam(p) && hasTrainingParams(p)
-}
-
-function getMissingTrainingParams(p: SrTrainingWorkflowParams): string[] {
-  const missing: string[] = []
-  if (!p.dyn_vars || p.dyn_vars.length === 0) missing.push('dyn_vars')
-  if (p.scale === undefined || p.scale <= 0) missing.push('scale')
-  if (p.epochs === undefined || p.epochs <= 0) missing.push('epochs')
-  if (p.lr === undefined || p.lr <= 0) missing.push('lr')
-  if (p.batch_size === undefined || p.batch_size <= 0) missing.push('batch_size')
-  if (!p.device_ids || p.device_ids.length === 0) missing.push('device_ids')
-  return missing
 }
 
 // ============================================================
