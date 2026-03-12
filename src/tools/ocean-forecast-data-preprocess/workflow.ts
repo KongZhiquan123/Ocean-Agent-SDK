@@ -2,20 +2,30 @@
  * @file workflow.ts
  * @description 预测数据预处理工作流 - 4 阶段分步确认逻辑
  *              函数式实现，替代原 workflow-state.ts 中的 ForecastWorkflow 类。
- *              Token 机制：Stage 4 生成 UUID，由 full.ts 写入 session JSON；下次调用验证。
+ *              Token 机制：SHA-256 签名覆盖关键参数字段，参数变更后 token 自动失效。
  *
  * @author kongzhiquan
  * @date 2026-03-12
- * @version 2.0.0
+ * @version 2.1.0
  *
  * @changelog
+ *   - 2026-03-12 kongzhiquan: v2.1.0 Token 从 UUID 改为 SHA-256 签名
+ *     - 签名覆盖 dyn_vars, stat_vars, mask_vars, train/valid/test_ratio,
+ *       h_slice, w_slice, crop_lon_range, crop_lat_range
+ *     - resolveStage() 不再需要 sessionToken 参数
+ *     - full.ts 不再需要存储/读取 _execution_token
  *   - 2026-03-12 kongzhiquan: v2.0.0 重构为函数式，移除 ForecastWorkflow 类
- *     - 删除 SHA-256 Token，改用 UUID（由 resolveStage 生成，full.ts 写入 session）
  *     - 暴露 resolveStage() 作为唯一控制流入口
  *     - 阶段判断和提示构建内聚在同一文件
  */
 
 import crypto from 'crypto'
+
+// ============================================================
+// Constants
+// ============================================================
+
+const TOKEN_SALT = 'ocean-forecast-preprocess-v1'
 
 // ============================================================
 // Types
@@ -39,15 +49,15 @@ export interface ForecastPreprocessParams {
   [key: string]: any
 }
 
-export type ForecastPreprocessStageStatus = 
-  | 'awaiting_variable_selection' 
-  | 'awaiting_static_selection' 
-  | 'awaiting_parameters' 
-  | 'awaiting_execution' 
+export type ForecastPreprocessStateType =
+  | 'awaiting_variable_selection'
+  | 'awaiting_static_selection'
+  | 'awaiting_parameters'
+  | 'awaiting_execution'
   | 'token_invalid'
 
 export interface ForecastPreprocessStageResult {
-  status: ForecastPreprocessStageStatus
+  status: ForecastPreprocessStateType
   message: string
   canExecute: boolean
   data?: Record<string, unknown>
@@ -75,6 +85,38 @@ function hasStage3(p: ForecastPreprocessParams): boolean {
 
 function hasAllStages(p: ForecastPreprocessParams): boolean {
   return hasStage1(p) && hasStage2(p) && hasStage3(p)
+}
+
+// ============================================================
+// Token generation / validation
+// ============================================================
+
+/**
+ * 生成 SHA-256 确认 Token。
+ * 签名覆盖所有用户确认的关键参数，任何变更都会使 token 失效。
+ */
+export function generateConfirmationToken(params: ForecastPreprocessParams): string {
+  const tokenData = {
+    nc_folder: params.nc_folder,
+    output_base: params.output_base,
+    dyn_vars: params.dyn_vars ? [...params.dyn_vars].sort().join(',') : '',
+    stat_vars: params.stat_vars ? [...params.stat_vars].sort().join(',') : '',
+    mask_vars: params.mask_vars ? [...params.mask_vars].sort().join(',') : '',
+    train_ratio: params.train_ratio,
+    valid_ratio: params.valid_ratio,
+    test_ratio: params.test_ratio,
+    h_slice: params.h_slice ?? null,
+    w_slice: params.w_slice ?? null,
+    crop_lon_range: params.crop_lon_range ? params.crop_lon_range.join(',') : '',
+    crop_lat_range: params.crop_lat_range ? params.crop_lat_range.join(',') : '',
+  }
+  const dataStr = JSON.stringify(tokenData) + TOKEN_SALT
+  return crypto.createHash('sha256').update(dataStr).digest('hex').substring(0, 16)
+}
+
+function validateConfirmationToken(params: ForecastPreprocessParams): boolean {
+  if (!params.confirmation_token) return false
+  return params.confirmation_token === generateConfirmationToken(params)
 }
 
 // ============================================================
@@ -308,6 +350,60 @@ ${cropLines}
   }
 }
 
+function buildTokenInvalidPrompt(
+  params: ForecastPreprocessParams,
+  mode: 'missing_token' | 'token_mismatch'
+): ForecastPreprocessStageResult {
+  if (mode === 'missing_token') {
+    return {
+      status: 'token_invalid',
+      message: `⚠️ 检测到跳步行为！
+
+您设置了 user_confirmed=true，但未提供 confirmation_token。
+
+必须：
+1. 先调用工具（不带 user_confirmed），进入 awaiting_execution 阶段
+2. 从返回结果中获取 confirmation_token
+3. 用户确认后，再次调用并携带 user_confirmed=true 和 confirmation_token`,
+      canExecute: false,
+      data: { error_type: 'token_invalid' }
+    }
+  }
+
+  return {
+    status: 'token_invalid',
+    message: `⚠️ Token 验证失败！
+
+提供的 confirmation_token 与当前参数不匹配。
+
+可能原因：
+1. Token 生成后参数被修改（如 dyn_vars, 比例, 裁剪范围等）
+2. Token 被错误地复制或截断
+
+【当前参数快照】
+- nc_folder: ${params.nc_folder}
+- output_base: ${params.output_base}
+- dyn_vars: ${params.dyn_vars?.join(', ')}
+- stat_vars: ${params.stat_vars?.join(', ') ?? '未设置'}
+- mask_vars: ${params.mask_vars?.join(', ') ?? '未设置'}
+- train_ratio: ${params.train_ratio}
+- valid_ratio: ${params.valid_ratio}
+- test_ratio: ${params.test_ratio}
+- h_slice: ${params.h_slice ?? '无'}
+- w_slice: ${params.w_slice ?? '无'}
+- crop_lon_range: ${params.crop_lon_range ? `[${params.crop_lon_range.join(', ')}]` : '无'}
+- crop_lat_range: ${params.crop_lat_range ? `[${params.crop_lat_range.join(', ')}]` : '无'}
+
+【解决方法】请重新调用工具（不带 user_confirmed），获取新的 confirmation_token。`,
+    canExecute: false,
+    data: {
+      error_type: 'token_invalid',
+      provided_token: params.confirmation_token,
+      expected_token: generateConfirmationToken(params),
+    }
+  }
+}
+
 // ============================================================
 // Main entry point
 // ============================================================
@@ -317,47 +413,20 @@ ${cropLines}
  *
  * @param params        当前有效参数（session 合并后的 effectiveArgs）
  * @param inspectResult Step A 的数据检查结果
- * @param sessionToken  上次 Stage 4 写入 session 的 UUID token
- * @returns ForecastStageResult（仍在某阶段）或 null（所有阶段通过，继续执行）
+ * @returns ForecastPreprocessStageResult（仍在某阶段）或 null（所有阶段通过，继续执行）
  */
 export function resolveStage(
   params: ForecastPreprocessParams,
   inspectResult: any,
-  sessionToken?: string
 ): ForecastPreprocessStageResult | null {
   // 所有阶段完成 + user_confirmed=true：验证 token
   if (params.user_confirmed === true && hasAllStages(params)) {
     if (!params.confirmation_token) {
-      return {
-        status: 'token_invalid',
-        message: `⚠️ 检测到跳步行为！
-
-您设置了 user_confirmed=true，但未提供 confirmation_token。
-
-必须：
-1. 先调用工具（不带 user_confirmed），进入 awaiting_execution 阶段
-2. 从返回结果中获取 confirmation_token
-3. 用户确认后，再次调用并携带 user_confirmed=true 和 confirmation_token`,
-        canExecute: false,
-        data: { error_type: 'token_invalid' }
-      }
+      return buildTokenInvalidPrompt(params, 'missing_token')
     }
 
-    if (params.confirmation_token !== sessionToken) {
-      return {
-        status: 'token_invalid',
-        message: `⚠️ Token 验证失败！
-
-提供的 confirmation_token 与 session 中记录的不匹配。
-
-可能原因：
-1. Token 来自之前的调用，但参数已修改
-2. Token 被错误地复制或截断
-
-【解决方法】请重新调用工具（不带 user_confirmed），获取新的 confirmation_token。`,
-        canExecute: false,
-        data: { error_type: 'token_invalid', provided_token: params.confirmation_token }
-      }
+    if (!validateConfirmationToken(params)) {
+      return buildTokenInvalidPrompt(params, 'token_mismatch')
     }
 
     // 所有检查通过，返回 null 表示可继续执行
@@ -368,7 +437,7 @@ export function resolveStage(
   if (!hasStage2(params)) return buildStage2Prompt(inspectResult, params)
   if (!hasStage3(params)) return buildStage3Prompt(inspectResult, params)
 
-  // Stage 4：所有参数就绪，生成 UUID token 并等待用户确认
-  const token = crypto.randomUUID()
+  // Stage 4：所有参数就绪，生成 SHA-256 token 并等待用户确认
+  const token = generateConfirmationToken(params)
   return buildStage4Prompt(inspectResult, params, token)
 }

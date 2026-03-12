@@ -7,9 +7,12 @@
  * @author Leizheng
  * @contributors kongzhiquan, Leizheng
  * @date 2026-02-09
- * @version 4.8.1
+ * @version 5.0.0
  *
  * @changelog
+ *   - 2026-03-12 kongzhiquan: v5.0.0 适配 workflow.ts 函数式重构
+ *     - 将 new TrainingWorkflow() 替换为 mergeParams() + resolveStage()
+ *     - TrainingState 常量替换为字符串字面量
  *   - 2026-02-26 kongzhiquan: v4.8.1 Notebook 路径改用后端传入的 notebookPath（从 agent metadata 读取）
  *   - 2026-02-25 kongzhiquan: v4.8.0 训练成功启动后生成可复现 Jupyter Notebook
  *     - 在 PASS 阶段 status=started 时调用 generateTrainCells + saveOrAppendNotebook
@@ -88,13 +91,13 @@ import { findPythonWithModule, findFirstPythonPath } from '@/utils/python-manage
 import { trainingProcessManager } from '@/utils/training-process-manager'
 import path from 'node:path'
 import {
-  TrainingWorkflow,
-  TrainingState,
-  type TrainingWorkflowParams,
-  type DatasetValidationInfo,
-  type GpuInfo,
-  type ModelInfo,
-} from './workflow-state'
+  mergeParams,
+  resolveStage,
+  type SrTrainingWorkflowParams,
+  type SrDatasetInfo,
+  type SrGpuInfo,
+  type SrModelInfo,
+} from './workflow'
 import { generateTrainCells, saveOrAppendNotebook } from './notebook'
 import { shellEscapeDouble, shellSafeJson, extractTaggedJson } from '@/utils/shell'
 import { isPortFree, findFreePort } from '@/utils/port'
@@ -142,7 +145,7 @@ function getModelDivisor(modelName?: string): number {
   return 1
 }
 
-function getMaxHrDim(datasetInfo?: DatasetValidationInfo): number | null {
+function getMaxHrDim(datasetInfo?: SrDatasetInfo): number | null {
   const hrDims = getSpatialDims(datasetInfo?.hr_shape)
   if (!hrDims) return null
   return Math.min(hrDims[0], hrDims[1])
@@ -152,7 +155,7 @@ function buildFftPatchRecommendations(params: {
   model_name?: string
   scale?: number
   patch_size?: number | null
-  datasetInfo?: DatasetValidationInfo
+  datasetInfo?: SrDatasetInfo
 }): {
   patch_sizes: number[]
   lr_sizes: number[]
@@ -257,7 +260,7 @@ function getSpatialDims(shape?: number[] | null): [number, number] | null {
 }
 
 function resolveFftInputDims(params: {
-  datasetInfo?: DatasetValidationInfo
+  datasetInfo?: SrDatasetInfo
   scale?: number
   patch_size?: number | null
 }): { height: number; width: number; source: string } | null {
@@ -303,7 +306,7 @@ function resolveFftInputDims(params: {
 function buildFftAmpIncompatibility(params: {
   model_name?: string
   use_amp?: boolean
-  datasetInfo?: DatasetValidationInfo
+  datasetInfo?: SrDatasetInfo
   scale?: number
   patch_size?: number | null
 }): {
@@ -377,7 +380,7 @@ ${recDetail}
 }
 
 function buildOomPreWarning(params: {
-  gpuInfo?: GpuInfo
+  gpuInfo?: SrGpuInfo
   device_ids?: number[]
 }): {
   message: string
@@ -437,7 +440,7 @@ async function validateDataset(
   pythonPath: string,
   trainingDir: string,
   ctx: { sandbox: { exec: (cmd: string, options?: { timeoutMs?: number }) => Promise<{ code: number; stdout: string; stderr: string }> } },
-): Promise<DatasetValidationInfo> {
+): Promise<SrDatasetInfo> {
   const validateScript = path.join(trainingDir, 'validate_dataset.py')
   const validateResult = await ctx.sandbox.exec(
     `"${shellEscapeDouble(pythonPath)}" "${shellEscapeDouble(validateScript)}" --dataset_root "${shellEscapeDouble(datasetRoot)}"`,
@@ -742,16 +745,16 @@ export const oceanSrTrainStartTool = defineTool({
     if (!userSpecifiedUseAmp) {
       delete workflowArgs.use_amp
     }
-    const sessionParams = args.log_dir ? await loadSessionParams<TrainingWorkflowParams>(args.log_dir, SESSION_FILENAME, ctx) : null
-    const workflow = new TrainingWorkflow(workflowArgs, sessionParams ?? undefined)
-    const stateCheck = workflow.determineCurrentState()
+    const sessionParams = args.log_dir ? await loadSessionParams<SrTrainingWorkflowParams>(args.log_dir, SESSION_FILENAME, ctx) : null
+    const mergedForWorkflow = mergeParams(workflowArgs, sessionParams ?? undefined)
+    const stageResult = resolveStage(mergedForWorkflow)
 
     // ===== 2. 如果未到 PASS 阶段，收集上下文信息并返回提示 =====
-    if (stateCheck.currentState !== TrainingState.PASS) {
+    if (stageResult !== null) {
       const context: {
-        datasetInfo?: DatasetValidationInfo
-        gpuInfo?: GpuInfo
-        modelList?: ModelInfo[]
+        datasetInfo?: SrDatasetInfo
+        gpuInfo?: SrGpuInfo
+        modelList?: SrModelInfo[]
       } = {}
 
       // 如果有 dataset_root，验证数据目录
@@ -759,8 +762,8 @@ export const oceanSrTrainStartTool = defineTool({
         context.datasetInfo = await validateDataset(args.dataset_root, pythonPath, trainingDir, ctx)
       }
 
-      // 阶段2+需要模型列表
-      if (stateCheck.currentState === TrainingState.AWAITING_MODEL_SELECTION) {
+      // 根据当前阶段收集额外上下文
+      if (stageResult.status === 'awaiting_model_selection') {
         const listScript = path.join(trainingDir, 'list_models.py')
         const listResult = await ctx.sandbox.exec(
           `"${shellEscapeDouble(pythonPath)}" "${shellEscapeDouble(listScript)}"`,
@@ -772,11 +775,10 @@ export const oceanSrTrainStartTool = defineTool({
         }
       }
 
-      // 阶段3+需要 GPU 信息
       if (
-        stateCheck.currentState === TrainingState.AWAITING_PARAMETERS ||
-        stateCheck.currentState === TrainingState.AWAITING_EXECUTION ||
-        stateCheck.currentState === TrainingState.TOKEN_INVALID
+        stageResult.status === 'awaiting_parameters' ||
+        stageResult.status === 'awaiting_execution' ||
+        stageResult.status === 'token_invalid'
       ) {
         const gpuScript = path.join(trainingDir, 'check_gpu.py')
         const gpuResult = await ctx.sandbox.exec(
@@ -788,7 +790,10 @@ export const oceanSrTrainStartTool = defineTool({
         }
       }
 
-      const prompt = workflow.getStagePrompt(context)
+      // 有上下文时重新调用 resolveStage 以获取含上下文的提示
+      const prompt = Object.keys(context).length > 0
+        ? resolveStage(mergedForWorkflow, context) ?? stageResult
+        : stageResult
       const fnoAmpWarning = buildFftAmpIncompatibility({
         model_name: args.model_name,
         use_amp: args.use_amp ?? true,
@@ -842,11 +847,11 @@ export const oceanSrTrainStartTool = defineTool({
         }
       }
       // AWAITING_EXECUTION 时持久化全量参数，供后续执行调用恢复可选参数（如 normalizer_type）
-      if (stateCheck.currentState === TrainingState.AWAITING_EXECUTION && args.log_dir) {
-        await saveSessionParams(args.log_dir, SESSION_FILENAME, workflow.getParams(), ctx)
+      if (prompt.status === 'awaiting_execution' && args.log_dir) {
+        await saveSessionParams(args.log_dir, SESSION_FILENAME, mergedForWorkflow, ctx)
       }
       // AWAITING_EXECUTION 时运行超参数推荐（实测显存 + 数据集分析）
-      if (stateCheck.currentState === TrainingState.AWAITING_EXECUTION) {
+      if (prompt.status === 'awaiting_execution') {
         const recResult = await runHyperparamRecommendation(args, pythonPath, trainingDir, ctx)
         if (recResult?.status === 'success') {
           const recMsg = formatRecommendationMessage(recResult, { datasetShapeKey: 'hr_shape', datasetShapeLabel: 'HR' })
@@ -917,7 +922,7 @@ export const oceanSrTrainStartTool = defineTool({
       const prepareInfo = JSON.parse(prepareResult.stdout)
 
       // 生成配置（predict 最小参数集，normalizer_type 从 mergedParams 获取以保留用户选择）
-      const predictMergedParams = workflow.getParams()
+      const predictMergedParams = mergedForWorkflow
       const generateScript = path.join(workspaceDir, 'generate_config.py')
       const configParams: Record<string, unknown> = {
         model_name, dataset_root, dyn_vars, scale, log_dir,
@@ -1033,7 +1038,7 @@ export const oceanSrTrainStartTool = defineTool({
     }
 
     // ===== 3.0 模型支持性检查（若模型未接入，提前阻断） =====
-    let modelSupportInfo: ModelInfo | undefined
+    let modelSupportInfo: SrModelInfo | undefined
     const listScript = path.join(trainingDir, 'list_models.py')
     const listResult = await ctx.sandbox.exec(
       `"${shellEscapeDouble(pythonPath)}" "${shellEscapeDouble(listScript)}"`,
@@ -1043,7 +1048,7 @@ export const oceanSrTrainStartTool = defineTool({
       try {
         const parsed = JSON.parse(listResult.stdout)
         if (Array.isArray(parsed.models)) {
-          modelSupportInfo = parsed.models.find((m: ModelInfo) => m.name === model_name)
+          modelSupportInfo = parsed.models.find((m: SrModelInfo) => m.name === model_name)
         }
       } catch {
         modelSupportInfo = undefined
@@ -1137,9 +1142,9 @@ export const oceanSrTrainStartTool = defineTool({
     const generateScript = path.join(workspaceDir, 'generate_config.py')
 
     // ===== 3b. 生成配置文件 =====
-    // 使用 workflow.getParams() 取合并后参数（用户传入值 > 默认值），
+    // 使用合并后参数（用户传入值 > 默认值），
     // 避免因 Agent 后续调用未携带某字段而丢失用户确认过的参数
-    const mergedParams = workflow.getParams()
+    const mergedParams = mergedForWorkflow
     // use_amp 回落：若 session 和当前调用均未明确指定，则使用模型自动计算值
     const effectiveUseAmp = mergedParams.use_amp ?? (ampDefaultOff ? false : true)
     const configParams: Record<string, unknown> = {

@@ -2,10 +2,13 @@
  * @file train.ts
  * @description Ocean forecast training tool - 4-stage confirmation workflow
  * @author Leizheng
+ * @contributors kongzhiquan
  * @date 2026-02-26
- * @version 1.1.0
+ * @version 1.2.0
  *
  * @changelog
+ *   - 2026-03-12 kongzhiquan: v1.2.0 适配 workflow-state.ts 函数式重构
+ *     - 将 new ForecastTrainingWorkflow() 替换为 mergeParams() + resolveStage()
  *   - 2026-02-26 Leizheng: v1.1.0 fix PASS phase reads device_ids from mergedParams instead of raw args
  *   - 2026-02-26 Leizheng: v1.0.0 initial version for ocean forecast training
  */
@@ -20,13 +23,13 @@ import { shellEscapeDouble, shellSafeJson, extractTaggedJson } from '@/utils/she
 import { isPortFree, findFreePort } from '@/utils/port'
 import { loadSessionParams, saveSessionParams, formatRecommendationMessage } from '@/utils/training-utils'
 import {
-  ForecastTrainingWorkflow,
-  ForecastTrainingState,
-  type ForecastWorkflowParams,
+  mergeParams,
+  resolveStage,
+  type ForecastTrainingWorkflowParams,
   type ForecastDatasetInfo,
-  type GpuInfo,
-  type ModelInfo,
-} from './workflow-state'
+  type ForecastGpuInfo,
+  type ForecastModelInfo,
+} from './workflow'
 
 async function validateDataset(
   datasetRoot: string,
@@ -311,16 +314,16 @@ export const oceanForecastTrainTool = defineTool({
     // ===== 1. 构建工作流参数（合并 session 缓存，防止可选参数跨调用丢失） =====
     const SESSION_FILENAME = '.ocean_forecast_train_session.json' as const
     const workflowArgs = { ...args }
-    const sessionParams = args.log_dir ? await loadSessionParams<ForecastWorkflowParams>(args.log_dir, SESSION_FILENAME, ctx) : null
-    const workflow = new ForecastTrainingWorkflow(workflowArgs, sessionParams ?? undefined)
-    const stateCheck = workflow.determineCurrentState()
+    const sessionParams = args.log_dir ? await loadSessionParams<ForecastTrainingWorkflowParams>(args.log_dir, SESSION_FILENAME, ctx) : null
+    const mergedForWorkflow = mergeParams(workflowArgs, sessionParams ?? undefined)
+    const stageResult = resolveStage(mergedForWorkflow)
 
     // ===== 2. 如果未到 PASS 阶段，收集上下文信息并返回提示 =====
-    if (stateCheck.currentState !== ForecastTrainingState.PASS) {
+    if (stageResult !== null) {
       const context: {
         datasetInfo?: ForecastDatasetInfo
-        gpuInfo?: GpuInfo
-        modelList?: ModelInfo[]
+        gpuInfo?: ForecastGpuInfo
+        modelList?: ForecastModelInfo[]
       } = {}
 
       // 如果有 dataset_root，验证数据目录
@@ -328,8 +331,8 @@ export const oceanForecastTrainTool = defineTool({
         context.datasetInfo = await validateDataset(args.dataset_root, pythonPath, trainingDir, ctx)
       }
 
-      // 阶段2+需要模型列表
-      if (stateCheck.currentState === ForecastTrainingState.AWAITING_MODEL_SELECTION) {
+      // 根据当前阶段收集额外上下文
+      if (stageResult.status === 'awaiting_model_selection') {
         const listScript = path.join(trainingDir, 'list_models.py')
         const listResult = await ctx.sandbox.exec(
           `"${shellEscapeDouble(pythonPath)}" "${shellEscapeDouble(listScript)}"`,
@@ -341,11 +344,10 @@ export const oceanForecastTrainTool = defineTool({
         }
       }
 
-      // 阶段3+需要 GPU 信息
       if (
-        stateCheck.currentState === ForecastTrainingState.AWAITING_PARAMETERS ||
-        stateCheck.currentState === ForecastTrainingState.AWAITING_EXECUTION ||
-        stateCheck.currentState === ForecastTrainingState.TOKEN_INVALID
+        stageResult.status === 'awaiting_parameters' ||
+        stageResult.status === 'awaiting_execution' ||
+        stageResult.status === 'token_invalid'
       ) {
         const gpuScript = path.join(trainingDir, 'check_gpu.py')
         const gpuResult = await ctx.sandbox.exec(
@@ -357,14 +359,17 @@ export const oceanForecastTrainTool = defineTool({
         }
       }
 
-      const prompt = workflow.getStagePrompt(context)
+      // 有上下文时重新调用 resolveStage 以获取含上下文的提示
+      const prompt = Object.keys(context).length > 0
+        ? resolveStage(mergedForWorkflow, context) ?? stageResult
+        : stageResult
 
       // AWAITING_EXECUTION 时持久化全量参数，供后续执行调用恢复可选参数（如 normalizer_type）
-      if (stateCheck.currentState === ForecastTrainingState.AWAITING_EXECUTION && args.log_dir) {
-        await saveSessionParams(args.log_dir, SESSION_FILENAME, workflow.getParams(), ctx)
+      if (prompt.status === 'awaiting_execution' && args.log_dir) {
+        await saveSessionParams(args.log_dir, SESSION_FILENAME, mergedForWorkflow, ctx)
       }
       // AWAITING_EXECUTION 时运行超参数推荐（实测显存 + 数据集分析）
-      if (stateCheck.currentState === ForecastTrainingState.AWAITING_EXECUTION) {
+      if (prompt.status === 'awaiting_execution') {
         const recResult = await runHyperparamRecommendation(args, pythonPath, trainingDir, ctx)
         if (recResult?.status === 'success') {
           const recMsg = formatRecommendationMessage(recResult, { datasetShapeKey: 'spatial_shape', datasetShapeLabel: '空间分辨率' })
@@ -386,9 +391,9 @@ export const oceanForecastTrainTool = defineTool({
     }
 
     // ===== 3. PASS 阶段：执行训练 =====
-    // Read from merged workflow params (session-confirmed values) to ensure
+    // Read from merged params (session-confirmed values) to ensure
     // user-confirmed device_ids etc. are not overwritten by raw args defaults.
-    const mergedForExec = workflow.getParams()
+    const mergedForExec = mergedForWorkflow
     const dataset_root = mergedForExec.dataset_root ?? args.dataset_root
     const log_dir = mergedForExec.log_dir ?? args.log_dir
     const model_name = mergedForExec.model_name ?? args.model_name
@@ -435,7 +440,7 @@ export const oceanForecastTrainTool = defineTool({
       const prepareInfo = JSON.parse(prepareResult.stdout)
 
       // 生成配置（predict 最小参数集）
-      const predictMergedParams = workflow.getParams()
+      const predictMergedParams = mergedForWorkflow
       const generateScript = path.join(workspaceDir, 'generate_config.py')
       const configParams: Record<string, unknown> = {
         model_name, dataset_root, dyn_vars, log_dir,
@@ -553,7 +558,7 @@ export const oceanForecastTrainTool = defineTool({
     }
 
     // ===== 3.0 模型支持性检查（若模型未接入，提前阻断） =====
-    let modelSupportInfo: ModelInfo | undefined
+    let modelSupportInfo: ForecastModelInfo | undefined
     const listScript = path.join(trainingDir, 'list_models.py')
     const listResult = await ctx.sandbox.exec(
       `"${shellEscapeDouble(pythonPath)}" "${shellEscapeDouble(listScript)}"`,
@@ -563,7 +568,7 @@ export const oceanForecastTrainTool = defineTool({
       try {
         const parsed = JSON.parse(listResult.stdout)
         if (Array.isArray(parsed.models)) {
-          modelSupportInfo = parsed.models.find((m: ModelInfo) => m.name === model_name)
+          modelSupportInfo = parsed.models.find((m: ForecastModelInfo) => m.name === model_name)
         }
       } catch {
         modelSupportInfo = undefined
@@ -637,7 +642,7 @@ export const oceanForecastTrainTool = defineTool({
     const generateScript = path.join(workspaceDir, 'generate_config.py')
 
     // ===== 3b. 生成配置文件 =====
-    const mergedParams = workflow.getParams()
+    const mergedParams = mergedForWorkflow
     const effectiveUseAmp = mergedParams.use_amp ?? true
     const configParams: Record<string, unknown> = {
       model_name,

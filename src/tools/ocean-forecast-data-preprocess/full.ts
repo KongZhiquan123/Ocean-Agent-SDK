@@ -7,9 +7,12 @@
  * @author Leizheng
  * @contributors kongzhiquan
  * @date 2026-02-25
- * @version 1.5.0
+ * @version 1.6.0
  *
  * @changelog
+ *   - 2026-03-12 kongzhiquan: v1.6.0 Token 从 UUID 改为 SHA-256
+ *     - 移除 _execution_token / sessionToken 逻辑
+ *     - resolveStage() 不再需要 sessionToken 参数
  *   - 2026-03-12 kongzhiquan: v1.5.0 状态机重构为函数式（workflow.ts），移除 ForecastWorkflow 类
  *     - 改用 resolveStage() 函数替代类实例调用
  *     - Token 从 SHA-256 改为 UUID，写入 session JSON
@@ -292,8 +295,6 @@ export const oceanForecastPreprocessFullTool = defineTool({
     const sessionParams = args.output_base
       ? await loadSessionParams<ForecastPreprocessParams>(args.output_base, SESSION_FILENAME, ctx)
       : null
-    // Stage 4 生成的 UUID token 存储在 session 的 _execution_token 字段
-    const sessionToken = sessionParams?._execution_token
     const effectiveArgs = sessionParams
       ? {
           ...sessionParams,
@@ -372,7 +373,6 @@ export const oceanForecastPreprocessFullTool = defineTool({
     const stageResult = resolveStage(
       { ...effectiveArgs, nc_folder: actualNcFolder } as ForecastPreprocessParams,
       stepAResult,
-      sessionToken
     )
 
     if (stageResult !== null) {
@@ -384,11 +384,9 @@ export const oceanForecastPreprocessFullTool = defineTool({
         suspected_masks: stepAResult.suspected_masks,
         suspected_coordinates: stepAResult.suspected_coordinates
       }
-      // awaiting_execution 时持久化全量参数 + UUID token，供下次调用恢复
-      if (stageResult.status === 'awaiting_execution') {
-        const token = stageResult.data?.confirmation_token as string
-        await saveSessionParams(output_base, SESSION_FILENAME,
-          { ...effectiveArgs, _execution_token: token }, ctx)
+      // awaiting_execution 时持久化全量参数，供下次调用恢复
+      if (stageResult.status === 'awaiting_execution' && output_base) {
+        await saveSessionParams(output_base, SESSION_FILENAME, effectiveArgs, ctx)
       }
       result.overall_status = stageResult.status
       result.message = stageResult.message

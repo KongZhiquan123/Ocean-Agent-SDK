@@ -21,6 +21,8 @@ import { oceanSrTrainStatusTool } from './train-status'
 import { oceanSrTrainReportTool } from './report'
 import { oceanSrTrainVisualizeTool } from './visualize'
 
+export type { SrTrainingStateType } from './workflow'
+
 export const oceanSrTrainingTools = [
   oceanSrGpuCheckTool,
   oceanSrModelListTool,

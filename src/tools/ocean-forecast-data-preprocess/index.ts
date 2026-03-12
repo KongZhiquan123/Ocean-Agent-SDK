@@ -24,12 +24,7 @@ import { oceanForecastPreprocessVisualizeTool } from './visualize'
 import { oceanForecastPreprocessReportTool } from './report'
 import { oceanForecastPreprocessStatsTool } from './stats'
 
-export {
-  resolveStage,
-  type ForecastPreprocessParams,
-  type ForecastPreprocessStageStatus,
-  type ForecastPreprocessStageResult
-} from './workflow'
+export type { ForecastPreprocessStateType } from './workflow'
 
 // ocean_inspect_data 是 SR/Forecast 共用工具，已通过 SR 模块（oceanPreprocessTools）注册到全局
 // 此处仅做具名导出，供模块消费者直接引用，不再二次注册
