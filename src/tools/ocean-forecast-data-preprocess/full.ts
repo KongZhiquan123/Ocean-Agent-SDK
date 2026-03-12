@@ -7,9 +7,12 @@
  * @author Leizheng
  * @contributors kongzhiquan
  * @date 2026-02-25
- * @version 1.4.0
+ * @version 1.5.0
  *
  * @changelog
+ *   - 2026-03-12 kongzhiquan: v1.5.0 状态机重构为函数式（workflow.ts），移除 ForecastWorkflow 类
+ *     - 改用 resolveStage() 函数替代类实例调用
+ *     - Token 从 SHA-256 改为 UUID，写入 session JSON
  *   - 2026-03-10 kongzhiquan: v1.4.0 将 crop_lon_range/crop_lat_range 纳入 Workflow, forecastConfig 和 notebook 参数，确保预处理流程和生成的 Notebook 都支持地理裁剪功能
  *   - 2026-03-04 kongzhiquan: v1.3.0 合并 session 缓存，防止可选参数跨调用丢失
  *   - 2026-03-02 kongzhiquan: v1.2.1 在调用侧对 Step B 结果精简，避免超量 token 消耗
@@ -30,7 +33,7 @@ import path from 'node:path'
 import { findFirstPythonPath } from '@/utils/python-manager'
 import { oceanInspectDataTool } from '../ocean-SR-data-preprocess/inspect'
 import { oceanForecastPreprocessVisualizeTool } from './visualize'
-import { ForecastWorkflow, WorkflowState, type WorkflowParams } from './workflow-state'
+import { resolveStage, type ForecastPreprocessParams } from './workflow'
 import { generateForecastPreprocessCells, saveOrAppendNotebook } from './notebook'
 import { shellEscapeDouble } from '@/utils/shell'
 import { loadSessionParams, saveSessionParams } from '@/utils/training-utils'
@@ -287,8 +290,10 @@ export const oceanForecastPreprocessFullTool = defineTool({
     const SESSION_FILENAME = '.ocean_forecast_preprocess_session.json' as const
     // ===== 合并 session 缓存，防止可选参数跨调用丢失 =====
     const sessionParams = args.output_base
-      ? await loadSessionParams<WorkflowParams>(args.output_base, SESSION_FILENAME, ctx)
+      ? await loadSessionParams<ForecastPreprocessParams>(args.output_base, SESSION_FILENAME, ctx)
       : null
+    // Stage 4 生成的 UUID token 存储在 session 的 _execution_token 字段
+    const sessionToken = sessionParams?._execution_token
     const effectiveArgs = sessionParams
       ? {
           ...sessionParams,
@@ -310,8 +315,6 @@ export const oceanForecastPreprocessFullTool = defineTool({
       lat_var,
       run_validation = true,
       allow_nan = false,
-      user_confirmed = false,
-      confirmation_token,
       train_ratio,
       valid_ratio,
       test_ratio,
@@ -365,28 +368,14 @@ export const oceanForecastPreprocessFullTool = defineTool({
     result.step_a = stepAResult
     const dynCandidates = stepAResult.dynamic_vars_candidates || []
 
-    // ========== 状态机判断 ==========
-    const workflow = new ForecastWorkflow({
-      nc_folder: actualNcFolder,
-      output_base,
-      dyn_vars: dyn_vars as string[] | undefined,
-      stat_vars: stat_vars as string[] | undefined,
-      mask_vars: mask_vars as string[] | undefined,
-      train_ratio: train_ratio as number | undefined,
-      valid_ratio: valid_ratio as number | undefined,
-      test_ratio: test_ratio as number | undefined,
-      crop_lon_range: crop_lon_range as number[] | undefined,
-      crop_lat_range: crop_lat_range as number[] | undefined,
-      h_slice: h_slice as string | undefined,
-      w_slice: w_slice as string | undefined,
-      user_confirmed: user_confirmed as boolean,
-      confirmation_token: confirmation_token as string | undefined
-    })
+    // ========== 阶段判断 ==========
+    const stageResult = resolveStage(
+      { ...effectiveArgs, nc_folder: actualNcFolder } as ForecastPreprocessParams,
+      stepAResult,
+      sessionToken
+    )
 
-    const stateCheck = workflow.determineCurrentState()
-
-    if (stateCheck.currentState !== WorkflowState.PASS) {
-      const prompt = workflow.getStagePrompt(stepAResult)
+    if (stageResult !== null) {
       result.step_a = {
         status: stepAResult.status,
         nc_folder: stepAResult.nc_folder,
@@ -395,12 +384,14 @@ export const oceanForecastPreprocessFullTool = defineTool({
         suspected_masks: stepAResult.suspected_masks,
         suspected_coordinates: stepAResult.suspected_coordinates
       }
-      // AWAITING_EXECUTION 时持久化全量参数，供后续执行调用恢复可选参数
-      if (stateCheck.currentState === WorkflowState.AWAITING_EXECUTION) {
-        await saveSessionParams(output_base, SESSION_FILENAME, effectiveArgs, ctx)
+      // awaiting_execution 时持久化全量参数 + UUID token，供下次调用恢复
+      if (stageResult.status === 'awaiting_execution') {
+        const token = stageResult.data?.confirmation_token as string
+        await saveSessionParams(output_base, SESSION_FILENAME,
+          { ...effectiveArgs, _execution_token: token }, ctx)
       }
-      result.overall_status = prompt.status
-      result.message = prompt.message
+      result.overall_status = stageResult.status
+      result.message = stageResult.message
       return result
     }
 

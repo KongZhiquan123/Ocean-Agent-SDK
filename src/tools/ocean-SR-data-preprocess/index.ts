@@ -5,9 +5,12 @@
  * @author leizheng
  * @contributors kongzhiquan
  * @date 2026-02-04
- * @version 3.0.3
+ * @version 3.1.0
  *
  * @changelog
+ *   - 2026-03-12 kongzhiquan: v3.1.0 状态机重构，更新模块导出
+ *     - workflow-state.ts 已由 workflow.ts 替代
+ *     - 导出改为 SrPreprocessParams、SrStageResult
  *   - 2026-02-05 kongzhiquan: v3.0.3 新增执行确认 Token 机制
  *     - workflow-state.ts 新增 confirmation_token 验证
  *     - 防止 Agent 跳过 awaiting_execution 阶段
@@ -33,15 +36,12 @@ import { oceanSrPreprocessVisualizeTool } from './visualize'
 import { oceanSrPreprocessMetricsTool } from './metrics-tool'
 import { oceanSrPreprocessReportTool } from './report'
 
-// 导出状态机相关类型和类
 export {
-  PreprocessWorkflow,
-  WorkflowState,
-  type WorkflowParams,
-  type WorkflowStateType,
-  type StageCheckResult,
-  type StagePromptResult
-} from './workflow-state'
+  resolveStage,
+  type SrPreprocessParams,
+  type SrPreprocessStageStatus,
+  type SrPreprocessStageResult
+} from './workflow'
 
 export const oceanSrPreprocessTools = [
   oceanInspectDataTool,

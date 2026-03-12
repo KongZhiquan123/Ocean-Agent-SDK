@@ -3,10 +3,14 @@
  * @description 海洋预报数据预处理工具集导出
  *
  * @author Leizheng
+ * @contributers kongzhiquan
  * @date 2026-02-25
- * @version 1.1.0
+ * @version 1.2.0
  *
  * @changelog
+ *   - 2026-03-12 kongzhiquan: v1.2.0 状态机重构，更新模块导出
+ *     - workflow-state.ts 已由 workflow.ts 替代
+ *     - 导出改为 ForecastPreprocessParams、ForecastStageResult
  *   - 2026-02-26 Leizheng: v1.1.0 补全模块入口
  *     - 新增 oceanInspectDataTool 具名导出（SR/Forecast 共用，通过 SR 模块注册，此处仅导出供引用）
  *     - 新增 oceanForecastStatsTool 工具注册与导出
@@ -21,13 +25,11 @@ import { oceanForecastPreprocessReportTool } from './report'
 import { oceanForecastPreprocessStatsTool } from './stats'
 
 export {
-  ForecastWorkflow,
-  WorkflowState,
-  type WorkflowParams,
-  type WorkflowStateType,
-  type StageCheckResult,
-  type StagePromptResult
-} from './workflow-state'
+  resolveStage,
+  type ForecastPreprocessParams,
+  type ForecastPreprocessStageStatus,
+  type ForecastPreprocessStageResult
+} from './workflow'
 
 // ocean_inspect_data 是 SR/Forecast 共用工具，已通过 SR 模块（oceanPreprocessTools）注册到全局
 // 此处仅做具名导出，供模块消费者直接引用，不再二次注册

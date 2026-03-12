@@ -23,6 +23,8 @@
  *     - 未注册的工具名原样透传
  */
 import type { ToolCallSnapshot } from "@shareai-lab/kode-sdk"
+import type { ForecastPreprocessStageStatus } from "@/tools/ocean-forecast-data-preprocess"
+import type { SrPreprocessStageStatus } from "@/tools/ocean-SR-data-preprocess"
 import { SIMPLE_TOOL_LABELS } from "./constants"
 
 const TOOL_MESSAGE_MAX_LENGTH = 200 as const
@@ -43,7 +45,7 @@ const FORECAST_PREPROCESS_FULL_STEP_LABELS: Record<string, string> = {
 }
 
 // 预处理工具确认参数时可能的状态
-const PREPROCESS_AWAITING_LABELS: Record<string, string> = {
+const PREPROCESS_AWAITING_LABELS: Record<ForecastPreprocessStageStatus | SrPreprocessStageStatus, string> = {
   awaiting_variable_selection: '正在等待研究变量选择',
   awaiting_static_selection: '正在等待静态/掩码变量选择',
   awaiting_region_selection: '正在等待用户确认区域裁剪',

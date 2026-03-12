@@ -15,10 +15,10 @@
  * 产物：test_outputs/test-train.ipynb, test_outputs/test-preprocess.ipynb, test_outputs/test-forecast-preprocess.ipynb
  */
 
-import { generateTrainCells } from './src/tools/ocean-SR-training/notebook'
-import { generatePreprocessCells } from './src/tools/ocean-SR-data-preprocess/notebook'
-import { generateForecastPreprocessCells } from './src/tools/ocean-forecast-data-preprocess/notebook'
-import { createEmptyNotebook } from './src/utils/notebook'
+import { generateTrainCells } from '@/tools/ocean-SR-training/notebook'
+import { generatePreprocessCells } from '@/tools/ocean-SR-data-preprocess/notebook'
+import { generateForecastPreprocessCells } from '@/tools/ocean-forecast-data-preprocess/notebook'
+import { createEmptyNotebook } from '@/utils/notebook'
 import fs from 'node:fs'
 import path from 'node:path'
 

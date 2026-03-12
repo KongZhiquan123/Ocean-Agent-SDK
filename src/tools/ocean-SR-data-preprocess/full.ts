@@ -6,9 +6,12 @@
  * @author leizheng
  * @contributors kongzhiquan, Leizheng
  * @date 2026-02-02
- * @version 3.8.0
+ * @version 3.9.0
  *
  * @changelog
+ *   - 2026-03-12 kongzhiquan: v3.9.0 状态机重构为函数式（workflow.ts），移除 PreprocessWorkflow 类
+ *     - 改用 resolveStage() 函数替代类实例调用
+ *     - Token 从 SHA-256 改为 UUID，写入 session JSON
  *   - 2026-03-04 kongzhiquan: v3.8.0 合并 session 缓存，防止可选参数跨调用丢失
  *   - 2026-02-26 kongzhiquan: v3.7.1 Notebook 路径改用后端传入的 notebookPath（从 agent metadata 读取）
  *   - 2026-02-25 kongzhiquan: v3.7.0 向 Step A/B 传入 output_base 参数
@@ -83,7 +86,7 @@ import { oceanValidateTensorTool } from './validate'
 import { oceanSrPreprocessConvertNpyTool } from './convert'
 import { oceanSrPreprocessDownsampleTool } from './downsample'
 import { oceanSrPreprocessVisualizeTool } from './visualize'
-import { PreprocessWorkflow, WorkflowState, type WorkflowParams } from './workflow-state'
+import { resolveStage, type SrPreprocessParams } from './workflow'
 import { generatePreprocessCells, saveOrAppendNotebook } from './notebook'
 import { findFirstPythonPath } from '@/utils/python-manager'
 import { loadSessionParams, saveSessionParams } from '@/utils/training-utils'
@@ -358,8 +361,10 @@ export const oceanSrPreprocessFullTool = defineTool({
     const SESSION_FILENAME = '.ocean_sr_preprocess_session.json' as const
     // ===== 合并 session 缓存，防止可选参数跨调用丢失 =====
     const sessionParams = args.output_base
-      ? await loadSessionParams<WorkflowParams>(args.output_base, SESSION_FILENAME, ctx)
+      ? await loadSessionParams<SrPreprocessParams>(args.output_base, SESSION_FILENAME, ctx)
       : null
+    // Stage 4 生成的 UUID token 存储在 session 的 _execution_token 字段
+    const sessionToken = sessionParams?._execution_token
     const effectiveArgs = sessionParams
       ? {
           ...sessionParams,
@@ -383,8 +388,6 @@ export const oceanSrPreprocessFullTool = defineTool({
       allow_nan = false,
       lon_range,
       lat_range,
-      user_confirmed = false,
-      confirmation_token,
       train_ratio,
       valid_ratio,
       test_ratio,
@@ -457,34 +460,14 @@ export const oceanSrPreprocessFullTool = defineTool({
     result.step_a = stepAResult
     const dynCandidates = stepAResult.dynamic_vars_candidates || []
 
-    // ========== 状态机判断 ==========
-    const workflow = new PreprocessWorkflow({
-      nc_folder: actualNcFolder,
-      output_base,
-      dyn_vars,
-      stat_vars,
-      mask_vars,
-      enable_region_crop,
-      crop_lon_range: crop_lon_range as [number, number] | undefined,
-      crop_lat_range: crop_lat_range as [number, number] | undefined,
-      crop_mode: crop_mode as 'one_step' | 'two_step' | undefined,
-      scale,
-      downsample_method,
-      train_ratio,
-      valid_ratio,
-      test_ratio,
-      h_slice,
-      w_slice,
-      lr_nc_folder,
-      user_confirmed,
-      confirmation_token
-    })
+    // ========== 阶段判断 ==========
+    const stageResult = resolveStage(
+      { ...effectiveArgs, nc_folder: actualNcFolder } as SrPreprocessParams,
+      stepAResult,
+      sessionToken
+    )
 
-    const stateCheck = workflow.determineCurrentState()
-
-    // 如果状态机判断未通过，返回相应的阶段提示
-    if (stateCheck.currentState !== WorkflowState.PASS) {
-      const prompt = workflow.getStagePrompt(stepAResult)
+    if (stageResult !== null) {
       result.step_a = {
         status: stepAResult.status,
         nc_folder: stepAResult.nc_folder,
@@ -493,13 +476,14 @@ export const oceanSrPreprocessFullTool = defineTool({
         suspected_masks: stepAResult.suspected_masks,
         suspected_coordinates: stepAResult.suspected_coordinates
       }
-      // AWAITING_EXECUTION 时持久化全量参数，供后续执行调用恢复可选参数
-      if (stateCheck.currentState === WorkflowState.AWAITING_EXECUTION) {
-        await saveSessionParams(output_base, SESSION_FILENAME, effectiveArgs, ctx)
+      // awaiting_execution 时持久化全量参数 + UUID token，供下次调用恢复
+      if (stageResult.status === 'awaiting_execution') {
+        const token = stageResult.data?.confirmation_token as string
+        await saveSessionParams(output_base, SESSION_FILENAME,
+          { ...effectiveArgs, _execution_token: token }, ctx)
       }
-      result.overall_status = prompt.status
-      result.message = prompt.message
-
+      result.overall_status = stageResult.status
+      result.message = stageResult.message
       return result
     }
 

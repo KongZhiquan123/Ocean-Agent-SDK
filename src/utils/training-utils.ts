@@ -25,11 +25,11 @@ import type { EnhancedToolContext } from '@shareai-lab/kode-sdk'
  * @param filename  会话缓存文件名（如 .ocean_sr_session.json）
  * @param ctx  工具执行上下文（需包含 ctx.sandbox.fs.read）
  */
-export async function loadSessionParams<T>(
+export async function loadSessionParams<T extends Record<string, unknown>>(
   targetDir: string,
   filename: string,
   ctx: EnhancedToolContext
-): Promise<T | null> {
+): Promise<(T & {_execution_token?: string}) | null> {
   try {
     if (!ctx.sandbox.fs.isInside(targetDir)) {
       throw new Error('Target directory is not inside sandbox')
@@ -37,7 +37,7 @@ export async function loadSessionParams<T>(
     const sessionPath = path.join(targetDir, filename)
     const content = await readFile(sessionPath, 'utf-8')
     const parsed = JSON.parse(content)
-    return (parsed?.params as T) ?? null
+    return (parsed?.params as (T & {_execution_token?: string})) ?? null
   } catch {
     return null
   }
