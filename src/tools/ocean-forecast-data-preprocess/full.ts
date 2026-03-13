@@ -1,15 +1,18 @@
 /**
  * @file full.ts
  * @description 完整的海洋预测数据预处理流程工具
- *              串联 Step A（数据检查）→ Step B（NC→NPY 转换）→ Step C（可视化）
+ *              串联 Step A（数据检查）→ Step B（张量验证）→ Step C（NC→NPY 转换）→ Step D（可视化）
  *              无下采样步骤，数据按时间严格排序
  *
  * @author Leizheng
  * @contributors kongzhiquan
  * @date 2026-02-25
- * @version 1.6.0
+ * @version 1.7.1
  *
  * @changelog
+ *   - 2026-03-13 kongzhiquan: v1.7.0 新增 Step B 张量验证
+ *     - 复用 oceanValidateTensorTool，在数据转换前执行约定校验
+ *     - 保持 step_b（数据转换）与 step_c（可视化）返回结构兼容
  *   - 2026-03-12 kongzhiquan: v1.6.0 Token 从 UUID 改为 SHA-256
  *     - 移除 _execution_token / sessionToken 逻辑
  *     - resolveStage() 不再需要 sessionToken 参数
@@ -35,6 +38,7 @@ import { defineTool } from '@shareai-lab/kode-sdk'
 import path from 'node:path'
 import { findFirstPythonPath } from '@/utils/python-manager'
 import { oceanInspectDataTool } from '../ocean-SR-data-preprocess/inspect'
+import { oceanValidateTensorTool } from './validate'
 import { oceanForecastPreprocessVisualizeTool } from './visualize'
 import { resolveStage, type ForecastPreprocessWorkflowParams } from './workflow'
 import { generateForecastPreprocessCells, saveOrAppendNotebook } from './notebook'
@@ -46,7 +50,7 @@ import { loadSessionParams, saveSessionParams } from '@/utils/training-utils'
  * 避免超量 warnings / validation errors 导致传给 Agent 的 token 爆炸。
  * 完整原始结果已由 Python 侧写入 preprocess_manifest.json，此处只保留摘要。
  */
-function summarizeStepBResult(raw: any): any {
+function summarizePreprocessResult(raw: any): any {
   const MAX_WARNINGS = 5 as const
   const MAX_ERRORS = 3 as const
   const MAX_RULE_ERRORS = 3 as const
@@ -99,7 +103,7 @@ function summarizeStepBResult(raw: any): any {
 
 export const oceanForecastPreprocessFullTool = defineTool({
   name: 'ocean_forecast_preprocess_full',
-  description: `运行完整的海洋预测数据预处理流程 (A → B → C)
+  description: `运行完整的海洋预测数据预处理流程 (A → B → C → D)
 
 将 NC 格式的海洋数值模式输出转换为 NPY 格式，用于深度学习预测模型训练。
 
@@ -111,8 +115,9 @@ export const oceanForecastPreprocessFullTool = defineTool({
 
 **自动执行步骤**：
 1. Step A: 数据检查（检测变量类型，等待用户确认）
-2. Step B: NC → NPY 转换（时间排序 + 切分 + 保存）
-3. Step C: 可视化检查（可选，生成样本帧和时序图）
+2. Step B: 张量约定验证
+3. Step C: NC → NPY 转换（时间排序 + 切分 + 保存）
+4. Step D: 可视化检查（可选，生成样本帧和时序图）
 
 **确认流程（4 阶段，防止 Agent 跳步）**：
 - 阶段 1: 选择预测变量（dyn_vars）
@@ -352,6 +357,7 @@ export const oceanForecastPreprocessFullTool = defineTool({
       step_a: null as any,
       step_b: null as any,
       step_c: null as any,
+      step_d: null as any,
       overall_status: 'pending' as string,
       message: '',
       mode: 'forecast'
@@ -403,6 +409,8 @@ export const oceanForecastPreprocessFullTool = defineTool({
       await ctx.sandbox.exec(`cp -r "${forecastScriptsDir}/." "${scriptsTargetDir}/"`)
       // 复制 inspect_data.py（Step A 复用自 SR 模块）
       await ctx.sandbox.exec(`cp "${srScriptsDir}/inspect_data.py" "${scriptsTargetDir}/"`)
+      // 复制 validate_tensor.py（Step B 验证工具）
+      await ctx.sandbox.exec(`cp "${srScriptsDir}/validate_tensor.py" "${scriptsTargetDir}/"`)
     } catch (e) {
       console.warn('复制预处理脚本失败:', e)
     }
@@ -438,10 +446,18 @@ export const oceanForecastPreprocessFullTool = defineTool({
     const finalLonVar = (lon_var as string | undefined) || detectedLonVar
     const finalLatVar = (lat_var as string | undefined) || detectedLatVar
 
+    // ========== Step B: 张量验证 ==========
+    const stepBResult = await oceanValidateTensorTool.exec({
+      research_vars: dyn_vars,
+      mask_vars: finalMaskVars,
+      output_base
+    }, ctx)
+    result.step_b = stepBResult
+
     // 有掩码变量时自动允许 NaN
     const effectiveAllowNan = allow_nan || (finalMaskVars && finalMaskVars.length > 0)
 
-    // ========== Step B: 执行 forecast_preprocess.py ==========
+    // ========== Step C: 执行 forecast_preprocess.py ==========
     const pythonPath = await findFirstPythonPath()
     if (!pythonPath) {
       throw new Error('未找到可用的Python解释器，请安装Python或配置PYTHON/PYENV')
@@ -496,25 +512,23 @@ export const oceanForecastPreprocessFullTool = defineTool({
       throw new Error(`forecast_preprocess.py 执行失败:\n${pyResult.stderr}`)
     }
 
-    const stepBJson = await ctx.sandbox.fs.read(outputPath)
-    const stepBResult = JSON.parse(stepBJson)
-    result.step_b = summarizeStepBResult(stepBResult)
+    const stepCJson = await ctx.sandbox.fs.read(outputPath)
+    const stepCResult = JSON.parse(stepCJson)
+    result.step_c = summarizePreprocessResult(stepCResult)
 
-    if (stepBResult.status === 'error') {
-      result.overall_status = 'error'
-      result.message = `Step B 失败: ${stepBResult.errors?.join('; ')}`
-      return result
+    if (stepCResult.status === 'error') {
+      throw new Error(`forecast_preprocess.py 执行失败: ${stepCResult.errors?.join('; ')}`)
     }
 
-    // ========== Step C: 可视化（可选） ==========
+    // ========== Step D: 可视化（可选） ==========
     if (!skip_visualize) {
-      const stepCResult = await oceanForecastPreprocessVisualizeTool.exec({
+      const stepDResult = await oceanForecastPreprocessVisualizeTool.exec({
         dataset_root: output_base,
         splits: ['train', 'valid', 'test']
       }, ctx)
-      result.step_c = stepCResult
+      result.step_d = stepDResult
     } else {
-      result.step_c = { status: 'skipped', reason: 'skip_visualize=true' }
+      result.step_d = { status: 'skipped', reason: 'skip_visualize=true' }
     }
 
     // ========== 生成 Jupyter Notebook ==========
@@ -561,7 +575,7 @@ export const oceanForecastPreprocessFullTool = defineTool({
 
     // ========== 最终状态 ==========
     result.overall_status = 'pass'
-    result.message = `预处理完成！${stepBResult.message || ''} 请调用 ocean_forecast_preprocess_report 工具生成预处理报告。`
+    result.message = `预处理完成！${stepCResult.message || ''} 请调用 ocean_forecast_preprocess_report 工具生成预处理报告。`
 
     return result
   }

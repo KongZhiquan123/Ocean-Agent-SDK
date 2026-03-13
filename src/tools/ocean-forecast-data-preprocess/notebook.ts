@@ -7,14 +7,17 @@
  *
  * @author kongzhiquan
  * @date 2026-02-26
- * @version 1.1.0
+ * @version 1.2.0
  *
  * @changelog
+ *   - 2026-03-13 kongzhiquan: v1.2.0 在 Notebook 中补充 Step B 张量验证
+ *     - 新增 validate_tensor.py 调用单元（inspect_result.json -> validate_result.json）
+ *     - 原转换/可视化步骤顺延为 Step C / Step D
  *   - 2026-03-10 kongzhiquan: v1.1.0 添加经纬度裁剪参数 crop_lon_range/crop_lat_range
  *   - 2026-02-26 kongzhiquan: v1.0.0 初始版本
  *     - 参考 ocean-SR-data-preprocess/notebook.ts 架构
  *     - 适配预报数据预处理流程（无下采样、无 hr/lr 层级）
- *     - Step A: 数据检查 → Step B: forecast_preprocess.py → Step C: 可视化
+ *     - Step A: 数据检查 → Step B: 张量验证 → Step C: forecast_preprocess.py → Step D: 可视化
  */
 
 import { toPyRepr, mdCell, codeCell } from '@/utils/notebook'
@@ -184,7 +187,51 @@ function generateStepACells(): NotebookCell[] {
 function generateStepBCells(): NotebookCell[] {
   return [
     mdCell(
-      `## Step B: NC → NPY 转换（预报模式）\n` +
+      `## Step B: 张量约定验证\n` +
+      `\n` +
+      `验证变量的张量形状是否符合约定：\n` +
+      `- 动态变量: \`[D, H, W]\` 或 \`[T, D, H, W]\`\n` +
+      `- 静态/掩码变量: \`[H, W]\``
+    ),
+    codeCell(
+      `validate_config = {\n` +
+      `    "inspect_result_path": os.path.join(TEMP_DIR, "inspect_result.json"),\n` +
+      `    "research_vars": DYN_VARS,\n` +
+      `    "mask_vars": MASK_VARS,\n` +
+      `}\n` +
+      `\n` +
+      `config_path = os.path.join(TEMP_DIR, "validate_config.json")\n` +
+      `output_path = os.path.join(TEMP_DIR, "validate_result.json")\n` +
+      `with open(config_path, "w", encoding="utf-8") as f:\n` +
+      `    json.dump(validate_config, f, ensure_ascii=False)\n` +
+      `\n` +
+      `result = subprocess.run(\n` +
+      `    [PYTHON_PATH, os.path.join(SCRIPT_DIR, "validate_tensor.py"),\n` +
+      `     "--config", config_path, "--output", output_path],\n` +
+      `    capture_output=True, text=True\n` +
+      `)\n` +
+      `if result.returncode == 0:\n` +
+      `    with open(output_path, "r", encoding="utf-8") as f:\n` +
+      `        validate_result = json.load(f)\n` +
+      `    print(f"验证状态: {validate_result.get('status')}")\n` +
+      `    print(f"消息: {validate_result.get('message')}")\n` +
+      `    if validate_result.get("warnings"):\n` +
+      `        for w in validate_result["warnings"]:\n` +
+      `            print(f"  警告: {w}")\n` +
+      `    if validate_result.get("errors"):\n` +
+      `        for e in validate_result["errors"]:\n` +
+      `            print(f"  错误: {e}")\n` +
+      `else:\n` +
+      `    print("Step B 失败:", result.stderr)\n` +
+      `    raise RuntimeError("张量验证失败")`
+    )
+  ]
+}
+
+function generateStepCCells(): NotebookCell[] {
+  return [
+    mdCell(
+      `## Step C: NC → NPY 转换（预报模式）\n` +
       `\n` +
       `将 NC 文件中的动态变量按时间严格升序转换为 NPY 格式，\n` +
       `并划分为训练集/验证集/测试集。\n` +
@@ -240,16 +287,16 @@ function generateStepBCells(): NotebookCell[] {
       `        for w in forecast_result["warnings"]:\n` +
       `            print(f"  警告: {w}")\n` +
       `else:\n` +
-      `    print("Step B 失败:", result.stderr)\n` +
+      `    print("Step C 失败:", result.stderr)\n` +
       `    raise RuntimeError("预报数据转换失败")`
     )
   ]
 }
 
-function generateStepCCells(): NotebookCell[] {
+function generateStepDCells(): NotebookCell[] {
   return [
     mdCell(
-      `## Step C: 可视化检查\n` +
+      `## Step D: 可视化检查\n` +
       `\n` +
       `生成样本帧空间分布图和时序统计图。\n` +
       `\n` +
@@ -270,7 +317,7 @@ function generateStepCCells(): NotebookCell[] {
       `    print("可视化完成")\n` +
       `    print(f"图片保存在: {vis_out_dir}")\n` +
       `else:\n` +
-      `    print("Step C 失败:", result.stderr)\n` +
+      `    print("Step D 失败:", result.stderr)\n` +
       `    raise RuntimeError("可视化失败")`
     )
   ]
@@ -315,12 +362,15 @@ export function generateForecastPreprocessCells(params: ForecastNotebookParams):
   // Step A: 数据检查
   cells.push(...generateStepACells())
 
-  // Step B: NC → NPY 转换（预报模式）
+  // Step B: 张量约定验证
   cells.push(...generateStepBCells())
 
-  // Step C: 可视化（未跳过）
+  // Step C: NC → NPY 转换（预报模式）
+  cells.push(...generateStepCCells())
+
+  // Step D: 可视化（未跳过）
   if (!params.skipVisualize) {
-    cells.push(...generateStepCCells())
+    cells.push(...generateStepDCells())
   }
 
   // 完成说明

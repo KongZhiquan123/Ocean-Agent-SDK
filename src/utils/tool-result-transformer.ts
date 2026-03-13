@@ -42,8 +42,9 @@ const SR_PREPROCESS_FULL_STEP_LABELS: Record<string, string> = {
 
 const FORECAST_PREPROCESS_FULL_STEP_LABELS: Record<string, string> = {
   step_a: '数据检查',
-  step_b: '数据转换',
-  step_c: '可视化',
+  step_b: '张量验证',
+  step_c: '数据转换',
+  step_d: '可视化',
 }
 
 // 预处理工具确认参数时可能的状态
@@ -189,7 +190,7 @@ function transformForecastPreprocessFull(result: any): { status: 'success' | 'fa
   }
 
   // 顶层状态不明确时，按执行顺序倒序查找最新的非空、非跳过 step
-  const stepKeys = ['step_c', 'step_b', 'step_a'] as const
+  const stepKeys = ['step_d', 'step_c', 'step_b', 'step_a'] as const
   const success_status = ['success', 'ok', 'completed', 'pass'] as const
 
   for (const key of stepKeys) {

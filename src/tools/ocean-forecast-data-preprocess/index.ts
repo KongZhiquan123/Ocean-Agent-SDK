@@ -26,9 +26,10 @@ import { oceanForecastPreprocessStatsTool } from './stats'
 
 export type { ForecastPreprocessWorkflowState } from './workflow'
 
-// ocean_inspect_data 是 SR/Forecast 共用工具，已通过 SR 模块（oceanPreprocessTools）注册到全局
+// ocean_inspect_data 和 ocean_validate_tensor 是 SR/Forecast 共用工具，已通过 SR 模块（oceanPreprocessTools）注册到全局
 // 此处仅做具名导出，供模块消费者直接引用，不再二次注册
 export { oceanInspectDataTool } from './inspect'
+export { oceanValidateTensorTool } from './validate'
 
 export const oceanForecastPreprocessTools = [
   oceanForecastPreprocessFullTool,
