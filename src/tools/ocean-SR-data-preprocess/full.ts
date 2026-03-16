@@ -476,10 +476,9 @@ export const oceanSrPreprocessFullTool = defineTool({
         suspected_masks: stepAResult.suspected_masks,
         suspected_coordinates: stepAResult.suspected_coordinates
       }
-      // awaiting_execution 时持久化全量参数，供下次调用恢复
-      if (stageResult.status === 'awaiting_execution' && output_base) {
-        await saveSessionParams(output_base, SESSION_FILENAME, effectiveArgs, ctx)
-      }
+
+      await saveSessionParams(output_base, SESSION_FILENAME, effectiveArgs, ctx)
+
       result.overall_status = stageResult.status
       result.message = stageResult.message
       return result
@@ -490,7 +489,7 @@ export const oceanSrPreprocessFullTool = defineTool({
       const scriptsSourceDir = path.resolve(process.cwd(), 'scripts/ocean-SR-data-preprocess')
       const scriptsTargetDir = path.resolve(output_base, '_ocean_SR_preprocess_code')
       await ctx.sandbox.exec(`mkdir -p "${scriptsTargetDir}/convert_lib"`)
-      await ctx.sandbox.exec(`cp -r "${scriptsSourceDir}/." "${scriptsTargetDir}/"`)
+      await ctx.sandbox.exec(`cp -ru "${scriptsSourceDir}/." "${scriptsTargetDir}/"`)
     } catch (e) {
       console.warn('复制预处理脚本失败:', e)
     }

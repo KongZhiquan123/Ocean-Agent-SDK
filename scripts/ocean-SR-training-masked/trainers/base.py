@@ -130,12 +130,9 @@ class BaseTrainer:
         self.optimizer = self.build_optimizer()
         self.scheduler = self.build_scheduler()
         
-
         if self.train_args.get('load_ckpt', False):
             self.load_ckpt(self.train_args['ckpt_path'])
         
-
-
         self.model = self.model.to(self.device)
         
         if self.dist:

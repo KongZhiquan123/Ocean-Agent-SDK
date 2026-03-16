@@ -219,7 +219,10 @@ app.post('/api/chat/stream', rateLimitMiddleware, requireAuth, async (req: Reque
   }
 
   try {
-    const allowedPaths = [outputsPath, workingDir, '/data', path.dirname(notebookPath), path.resolve(process.cwd(), config.skillsDir)]
+    const allowedPaths = [
+      outputsPath, workingDir, '/data', path.dirname(notebookPath), 
+      path.resolve(process.cwd(), config.skillsDir), path.resolve(process.cwd(), '/scripts')
+    ]
     // 尝试加载已有会话
     if (inputAgentId && await conversationManager.hasSession(inputAgentId)) {
       agent = await conversationManager.getAgent(inputAgentId)

@@ -64,12 +64,10 @@ export const oceanForecastTrainTool = defineTool({
     dataset_root: {
       type: 'string',
       description: '预处理数据根目录（ocean-forecast-data-preprocess 输出目录）',
-      required: false
     },
     log_dir: {
       type: 'string',
       description: '训练日志输出目录',
-      required: false
     },
     model_name: {
       type: 'string',
@@ -239,7 +237,7 @@ export const oceanForecastTrainTool = defineTool({
     // ===== 1. 构建工作流参数（合并 session 缓存，防止可选参数跨调用丢失） =====
     const SESSION_FILENAME = '.ocean_forecast_train_session.json' as const
     const workflowArgs = { ...args }
-    const sessionParams = args.log_dir ? await loadSessionParams<ForecastTrainingWorkflowParams>(args.log_dir, SESSION_FILENAME, ctx) : null
+    const sessionParams = await loadSessionParams<ForecastTrainingWorkflowParams>(args.log_dir, SESSION_FILENAME, ctx)
     const mergedForWorkflow = mergeParams(workflowArgs, sessionParams ?? undefined)
     const stageResult = resolveStage(mergedForWorkflow)
 
@@ -251,10 +249,7 @@ export const oceanForecastTrainTool = defineTool({
         modelList?: ForecastModelInfo[]
       } = {}
 
-      // 如果有 dataset_root，验证数据目录
-      if (args.dataset_root) {
-        context.datasetInfo = await validateDataset(args.dataset_root, pythonPath, trainingDir, ctx)
-      }
+      context.datasetInfo = await validateDataset(args.dataset_root, pythonPath, trainingDir, ctx)
 
       // 根据当前阶段收集额外上下文
       if (stageResult.status === 'awaiting_model_selection') {
@@ -289,10 +284,8 @@ export const oceanForecastTrainTool = defineTool({
         ? resolveStage(mergedForWorkflow, context) ?? stageResult
         : stageResult
 
-      // AWAITING_EXECUTION 时持久化全量参数，供后续执行调用恢复可选参数（如 normalizer_type）
-      if (prompt.status === 'awaiting_execution' && args.log_dir) {
-        await saveSessionParams(args.log_dir, SESSION_FILENAME, mergedForWorkflow, ctx)
-      }
+      await saveSessionParams(args.log_dir, SESSION_FILENAME, mergedForWorkflow, ctx)
+
       // AWAITING_EXECUTION 时运行超参数推荐（实测显存 + 数据集分析）
       if (prompt.status === 'awaiting_execution') {
         const recResult = await runHyperparamRecommendation(args, pythonPath, trainingDir, ctx)
@@ -329,23 +322,8 @@ export const oceanForecastTrainTool = defineTool({
     const distribute_mode = mergedForExec.distribute_mode ?? args.distribute_mode ?? 'DDP'
     const ckpt_path = mergedForExec.ckpt_path ?? args.ckpt_path
 
-    if (!log_dir) {
-      return {
-        status: 'error',
-        error: '未指定训练日志输出目录 (log_dir)',
-        suggestion: '请在参数中提供 log_dir'
-      }
-    }
-
     // ===== predict 快速通道：跳过训练专属步骤（OOM 等），直接准备 + 启动 =====
     if (mode === 'predict') {
-      if (!dataset_root) {
-        return { status: 'error', error: '需要 dataset_root', suggestion: '请提供预处理数据根目录' }
-      }
-      if (!model_name) {
-        return { status: 'error', error: '需要 model_name', suggestion: '请提供模型名称' }
-      }
-
       const normalizedDeviceIds = Array.isArray(device_ids) && device_ids.length > 0 ? device_ids : [0]
 
       // 准备工作空间

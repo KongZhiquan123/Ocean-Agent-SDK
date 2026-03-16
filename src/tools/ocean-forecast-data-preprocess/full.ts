@@ -390,10 +390,9 @@ export const oceanForecastPreprocessFullTool = defineTool({
         suspected_masks: stepAResult.suspected_masks,
         suspected_coordinates: stepAResult.suspected_coordinates
       }
-      // awaiting_execution 时持久化全量参数，供下次调用恢复
-      if (stageResult.status === 'awaiting_execution' && output_base) {
-        await saveSessionParams(output_base, SESSION_FILENAME, effectiveArgs, ctx)
-      }
+      
+      await saveSessionParams(output_base, SESSION_FILENAME, effectiveArgs, ctx)
+
       result.overall_status = stageResult.status
       result.message = stageResult.message
       return result
@@ -406,11 +405,11 @@ export const oceanForecastPreprocessFullTool = defineTool({
       const scriptsTargetDir = path.resolve(output_base, '_ocean_forecast_preprocess_code')
       await ctx.sandbox.exec(`mkdir -p "${scriptsTargetDir}"`)
       // 复制预报预处理脚本
-      await ctx.sandbox.exec(`cp -r "${forecastScriptsDir}/." "${scriptsTargetDir}/"`)
+      await ctx.sandbox.exec(`cp -ru "${forecastScriptsDir}/." "${scriptsTargetDir}/"`)
       // 复制 inspect_data.py（Step A 复用自 SR 模块）
-      await ctx.sandbox.exec(`cp "${srScriptsDir}/inspect_data.py" "${scriptsTargetDir}/"`)
+      await ctx.sandbox.exec(`cp -u "${srScriptsDir}/inspect_data.py" "${scriptsTargetDir}/"`)
       // 复制 validate_tensor.py（Step B 验证工具）
-      await ctx.sandbox.exec(`cp "${srScriptsDir}/validate_tensor.py" "${scriptsTargetDir}/"`)
+      await ctx.sandbox.exec(`cp -u "${srScriptsDir}/validate_tensor.py" "${scriptsTargetDir}/"`)
     } catch (e) {
       console.warn('复制预处理脚本失败:', e)
     }

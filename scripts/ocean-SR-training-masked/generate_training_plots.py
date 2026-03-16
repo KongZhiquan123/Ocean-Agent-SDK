@@ -31,6 +31,7 @@ import os
 import sys
 import json
 import argparse
+import re
 
 from training_plot_lib import (
     parse_structured_log,
@@ -58,9 +59,10 @@ def main():
     os.makedirs(output_dir, exist_ok=True)
 
     log_data = {}
-    for name in ['train.log', 'training.log']:
-        log_path = os.path.join(log_dir, name)
-        if os.path.exists(log_path):
+    log_pattern = re.compile(r"train-\d+-[a-z0-9]{6}\.log")
+    for name in os.listdir(log_dir):
+        if log_pattern.match(name):
+            log_path = os.path.join(log_dir, name)
             log_data = parse_structured_log(log_path)
             break
 

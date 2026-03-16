@@ -147,13 +147,11 @@ export const oceanSrTrainStartTool = defineTool({
   params: {
     dataset_root: {
       type: 'string',
-      description: '预处理数据根目录（ocean-SR-data-preprocess 输出目录）',
-      required: false
+      description: '预处理数据根目录（ocean-SR-data-preprocess 输出目录）'
     },
     log_dir: {
       type: 'string',
-      description: '训练日志输出目录',
-      required: false
+      description: '训练日志输出目录'
     },
     model_name: {
       type: 'string',
@@ -353,7 +351,7 @@ export const oceanSrTrainStartTool = defineTool({
     if (!userSpecifiedUseAmp) {
       delete workflowArgs.use_amp
     }
-    const sessionParams = args.log_dir ? await loadSessionParams<SrTrainingWorkflowParams>(args.log_dir, SESSION_FILENAME, ctx) : null
+    const sessionParams = await loadSessionParams<SrTrainingWorkflowParams>(args.log_dir, SESSION_FILENAME, ctx)
     const mergedForWorkflow = mergeParams(workflowArgs, sessionParams ?? undefined)
     const stageResult = resolveStage(mergedForWorkflow)
 
@@ -365,10 +363,7 @@ export const oceanSrTrainStartTool = defineTool({
         modelList?: SrModelInfo[]
       } = {}
 
-      // 如果有 dataset_root，验证数据目录
-      if (args.dataset_root) {
-        context.datasetInfo = await validateDataset(args.dataset_root, pythonPath, trainingDir, ctx)
-      }
+      context.datasetInfo = await validateDataset(args.dataset_root, pythonPath, trainingDir, ctx)
 
       // 根据当前阶段收集额外上下文
       if (stageResult.status === 'awaiting_model_selection') {
@@ -454,10 +449,9 @@ export const oceanSrTrainStartTool = defineTool({
           oom_warning: oomWarning.details,
         }
       }
-      // AWAITING_EXECUTION 时持久化全量参数，供后续执行调用恢复可选参数（如 normalizer_type）
-      if (prompt.status === 'awaiting_execution' && args.log_dir) {
-        await saveSessionParams(args.log_dir, SESSION_FILENAME, mergedForWorkflow, ctx)
-      }
+
+      await saveSessionParams(args.log_dir, SESSION_FILENAME, mergedForWorkflow, ctx)
+
       // AWAITING_EXECUTION 时运行超参数推荐（实测显存 + 数据集分析）
       if (prompt.status === 'awaiting_execution') {
         const recResult = await runHyperparamRecommendation(args, pythonPath, trainingDir, ctx)
@@ -494,23 +488,8 @@ export const oceanSrTrainStartTool = defineTool({
       ckpt_path,
     } = args
 
-    if (!log_dir) {
-      return {
-        status: 'error',
-        error: '未指定训练日志输出目录 (log_dir)',
-        suggestion: '请在参数中提供 log_dir'
-      }
-    }
-
     // ===== predict 快速通道：跳过训练专属步骤（OOM/shape/FFT），直接准备 + 启动 =====
     if (mode === 'predict') {
-      if (!dataset_root) {
-        return { status: 'error', error: '需要 dataset_root', suggestion: '请提供预处理数据根目录' }
-      }
-      if (!model_name) {
-        return { status: 'error', error: '需要 model_name', suggestion: '请提供模型名称' }
-      }
-
       const normalizedDeviceIds = Array.isArray(device_ids) && device_ids.length > 0 ? device_ids : [0]
 
       // 准备工作空间
