@@ -4,9 +4,12 @@ Base trainer for ocean SR training (masked version).
 @author Leizheng
 @contributors kongzhiquan
 @date 2026-02-06
-@version 5.2.0
+@version 5.3.0
 
 @changelog
+  - 2026-03-17 kongzhiquan: v5.3.0 __event__ 事件同步写入 train.log
+    - _log_json_event 在 print 到 stdout 后，额外直接写 FileHandler.stream
+    - 不经过 StreamHandler，不走 stderr，不影响 TS 进程管理器解析
   - 2026-02-25 Leizheng: v5.2.0 修复 __event__ 双重输出 Bug
     - _log_json_event 恢复 print 到 stdout（tqdm 默认走 stderr，无冲突）
     - 移除 self.main_log(json_str)：经 StreamHandler 写 stderr，
@@ -426,6 +429,8 @@ class BaseTrainer:
         由 TypeScript 进程管理器解析。
         tqdm 默认渲染到 stderr，stdout 与其不冲突，无需重定向。
 
+        同时写入 train.log（直接操作 FileHandler.stream，不经过 StreamHandler，不走 stderr）。
+
         - training_error: 任何 rank 都输出（崩溃可能在非主进程）
         - 其他事件: 仅主进程输出（避免多卡重复）
         """
@@ -435,12 +440,16 @@ class BaseTrainer:
             **data
         }
         json_str = f"__event__{json.dumps(event, ensure_ascii=False)}__event__"
-        if event_type == "training_error":
-            # 错误事件：所有 rank 都输出（崩溃可能发生在任意 rank）
-            print(json_str, flush=True)
-        elif self.check_main_process():
-            # 普通事件：仅主进程输出
-            print(json_str, flush=True)
+
+        should_output = event_type == "training_error" or self.check_main_process()
+        if should_output:
+            print(json_str, flush=True)  # stdout → TS 进程管理器
+            # 写入 train.log，直接操作 FileHandler.stream，不经过 StreamHandler，不走 stderr
+            for handler in logging.getLogger().handlers:
+                if isinstance(handler, logging.FileHandler):
+                    handler.stream.write(json_str + "\n")
+                    handler.stream.flush()
+                    break
 
     def process(self, **kwargs):
         training_start_time = datetime.now()
@@ -485,7 +494,6 @@ class BaseTrainer:
             if dist.is_initialized():
                 dist.barrier()
 
-            # 外层 epoch 进度条（贯穿整个训练，leave=True 保留在终端）
             epoch_bar = tqdm(
                 total=self.epochs - self.start_epoch,
                 desc="Epochs",

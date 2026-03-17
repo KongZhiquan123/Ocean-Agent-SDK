@@ -391,7 +391,9 @@ export const oceanForecastPreprocessFullTool = defineTool({
         suspected_coordinates: stepAResult.suspected_coordinates
       }
       
-      await saveSessionParams(output_base, SESSION_FILENAME, effectiveArgs, ctx)
+      if (stageResult.status.startsWith('awaiting')) {
+        await saveSessionParams(output_base, SESSION_FILENAME, effectiveArgs, ctx)
+      }
 
       result.overall_status = stageResult.status
       result.message = stageResult.message

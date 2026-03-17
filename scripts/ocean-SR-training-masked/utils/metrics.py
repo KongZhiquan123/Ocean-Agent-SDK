@@ -2,10 +2,12 @@
 Evaluation metrics for ocean SR training (masked version).
 
 @author Leizheng
+@contributors kongzhiquan
 @date 2026-02-06
-@version 2.0.0
+@version 2.0.1
 
 @changelog
+  - 2026-03-17 kongzhiquan: v2.0.1 修复 masked_psnr 和 masked_ssim 在全陆地 patch 时空张量报错
   - 2026-02-06 Leizheng: v2.0.0 添加 masked 评估指标
     - 新增 masked_mse, masked_rmse, masked_psnr, masked_ssim
     - 新增 MaskedEvaluator，所有指标只在海洋格点上计算
@@ -141,7 +143,11 @@ def masked_psnr(pred, target, shape, mask=None, eps=1e-12, **kwargs):
         # 只在海洋格点上计算 data range
         mask_expanded = mask.expand_as(target)
         ocean_values = target[mask_expanded]
-        L = (ocean_values.max() - ocean_values.min()).clamp_min(eps)
+        if ocean_values.numel() == 0:
+            # 全陆地 patch，回退到完整 target 范围
+            L = (target.max() - target.min()).clamp_min(eps)
+        else:
+            L = (ocean_values.max() - ocean_values.min()).clamp_min(eps)
     else:
         L = (target.max() - target.min()).clamp_min(eps)
 
@@ -170,6 +176,12 @@ def masked_ssim(pred, target, shape, mask=None, K1=0.01, K2=0.03, eps=1e-12, **k
     # 只在海洋格点上计算 data range
     mask_expanded = mask.expand_as(target)
     ocean_values = target[mask_expanded]
+    
+     # 检查是否有有效的海洋像素
+    if ocean_values.numel() == 0:
+        # 没有有效海洋像素，返回默认 SSIM 值 0
+        return torch.tensor(0.0, device=pred.device, dtype=pred.dtype)
+    
     L = (ocean_values.max() - ocean_values.min()).clamp_min(eps)
 
     C1 = (K1 * L) ** 2

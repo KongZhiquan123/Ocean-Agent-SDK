@@ -196,7 +196,7 @@ pnpm-lock.yaml
 *.tar.xz
 *.rar
 *.7z
-
+/only-sr
 # Old build artifacts
 cli.mjs
 cli.mjs.map

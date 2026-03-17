@@ -283,8 +283,10 @@ export const oceanForecastTrainTool = defineTool({
       const prompt = Object.keys(context).length > 0
         ? resolveStage(mergedForWorkflow, context) ?? stageResult
         : stageResult
-
-      await saveSessionParams(args.log_dir, SESSION_FILENAME, mergedForWorkflow, ctx)
+        
+      if (prompt.status.startsWith('awaiting')) {
+        await saveSessionParams(args.log_dir, SESSION_FILENAME, mergedForWorkflow, ctx)
+      }
 
       // AWAITING_EXECUTION 时运行超参数推荐（实测显存 + 数据集分析）
       if (prompt.status === 'awaiting_execution') {
