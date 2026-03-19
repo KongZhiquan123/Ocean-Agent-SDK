@@ -172,6 +172,7 @@ export const oceanSrTrainStartTool = defineTool({
     mode: {
       type: 'string',
       description: '运行模式: "train", "test" 或 "predict"（predict 跳过训练工作流，直接推理）',
+      enum: ['train', 'test', 'predict'],
       required: false,
       default: 'train'
     },
@@ -214,6 +215,7 @@ export const oceanSrTrainStartTool = defineTool({
     distribute_mode: {
       type: 'string',
       description: '多卡模式: "DP" 或 "DDP"',
+      enum: ['DP', 'DDP'],
       required: false,
       default: 'DDP'
     },
@@ -243,12 +245,14 @@ export const oceanSrTrainStartTool = defineTool({
     normalizer_type: {
       type: 'string',
       description: '归一化类型: "PGN" 或 "GN"',
+      enum: ['PGN', 'GN'],
       required: false,
       default: 'PGN'
     },
     optimizer: {
       type: 'string',
       description: '优化器: "AdamW", "Adam", "SGD"',
+      enum: ['AdamW', 'Adam', 'SGD'],
       required: false,
       default: 'AdamW'
     },
@@ -261,6 +265,7 @@ export const oceanSrTrainStartTool = defineTool({
     scheduler: {
       type: 'string',
       description: '学习率调度器: "StepLR", "MultiStepLR", "OneCycleLR"',
+      enum: ['StepLR', 'MultiStepLR', 'OneCycleLR'],
       required: false,
       default: 'StepLR'
     },

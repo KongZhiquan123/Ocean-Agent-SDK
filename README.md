@@ -10,8 +10,7 @@ Ocean-Agent-SDK/
 ├── docs/                  # 多语言文档
 ├── scripts/               # 数据预处理、校验与训练脚本
 ├── work_ocean/            # 示例数据、坏例与规则
-├── test-client.ts         # 客户端 SSE 调用示例
-├── test-ocean-badcases.ts # 海洋预处理坏例测试用例
+├── tests/                 # 测试脚本
 ├── package.json           # 项目依赖与脚本
 ├── tsconfig.json          # TypeScript 编译配置
 ├── README.md              # 项目说明
@@ -25,6 +24,7 @@ Ocean-Agent-SDK/
 
 ```bash
 npm install
+pip install torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cu124
 pip install -r requirements.txt
 ```
 
@@ -74,7 +74,11 @@ GET /health
   "status": "ok",
   "service": "kode-agent-service",
   "sdk": "kode-sdk",
-  "timestamp": 1706889600000
+  "timestamp": 1706889600000,
+  "conversations": {
+    "total": 2,
+    "active": 1
+  }
 }
 ```
 
@@ -131,6 +135,7 @@ data: {"type":"text","content":"文件已创建成功！","timestamp":1706889600
 
 data: {"type":"done","metadata":{"agentId":"agt-abc123","timestamp":1706889600000}}
 ```
+详细的事件类型说明见文档[事件类型说明](docs/backend/sse-events.md)
 
 **事件类型：**
 - `start`：开始处理，返回 `agentId`
@@ -185,6 +190,14 @@ data: {"type":"done","metadata":{"agentId":"agt-abc123","timestamp":170688960000
    - `ocean_forecast_preprocess_report`: 报告生成
    - `ocean_forecast_preprocess_stats`: 统计分析
 
+5. **海洋时序预测训练 (Ocean Forecast Training)**
+   - `ocean_forecast_check_gpu`: GPU 检查
+   - `ocean_forecast_list_models`: 模型列表
+   - `ocean_forecast_train`: 模型训练
+   - `ocean_forecast_train_status`: 训练状态查询
+   - `ocean_forecast_report`: 训练报告生成
+   - `ocean_forecast_visualize`: 训练可视化
+
 ### Ask 模式（问答助手）
 
 - 只能读取文件
@@ -195,7 +208,6 @@ data: {"type":"done","metadata":{"agentId":"agt-abc123","timestamp":170688960000
 **可用工具：**
 - `fs_read`
 - `fs_glob`, `fs_grep`
-- `bash_run`（只读命令）
 - `ocean_inspect_data`（只读数据检查）
 
 ## 客户端示例
