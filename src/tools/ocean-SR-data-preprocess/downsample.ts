@@ -4,10 +4,13 @@
  *
  * @author leizheng
  * @contributors kongzhiquan
- * @date 2026-02-03
- * @version 1.2.0
+ * @date 2026-03-21
+ * @version 1.4.0
  *
  * @changelog
+ *   - 2026-03-21 kongzhiquan: v1.4.0 截断大型列表防止 prompt_too_long 错误
+ *     - splits 中每个 split 的文件列表超过 5 条时只保留前 5 条
+ *     - static_variables 超过 5 条时只保留前 5 条
  *   - 2026-02-25 kongzhiquan: v1.3.0 tempDir 改为基于 dataset_root 的 .ocean_preprocess_temp
  *   - 2026-02-05 kongzhiquan: v1.2.0 合并重构与默认值修复
  *     - 移除 try-catch，统一由上层处理错误
@@ -22,6 +25,7 @@
 
 import { defineTool } from '@shareai-lab/kode-sdk'
 import { findFirstPythonPath } from '@/utils/python-manager'
+import { truncateArray } from '@/utils/truncate'
 import path from 'node:path'
 import { shellEscapeDouble } from '@/utils/shell'
 
@@ -136,16 +140,26 @@ export const oceanSrPreprocessDownsampleTool = defineTool({
     if (downsampleResult.status === 'error') {
       throw new Error(`下采样失败: ${downsampleResult.errors?.join('; ') || '未知错误'}`)
     }
-    // 统计处理的文件数
+
+    // 统计处理的文件数（使用原始数据统计，截断前）
     let totalFiles = 0
     for (const splitResult of Object.values(downsampleResult.splits || {})) {
       totalFiles += (splitResult as any[]).length
     }
     totalFiles += (downsampleResult.static_variables || []).length
 
+    // 截断大型列表，避免工具结果过长触发 prompt_too_long 错误
+    const MAX_FILE_SAMPLE = 5 as const
+
+    const truncatedSplits: Record<string, any[]> = {}
+    for (const [splitName, files] of Object.entries(downsampleResult.splits || {})) {
+      truncatedSplits[splitName] = truncateArray(files, MAX_FILE_SAMPLE, `... (共 ${files.length} 个文件，此处仅展示前 ${MAX_FILE_SAMPLE} 个)`)
+    }
+
     return {
       status: 'success',
       ...downsampleResult,
+      splits: truncatedSplits,
       message: `下采样完成，共处理 ${totalFiles} 个文件`
     }
   }

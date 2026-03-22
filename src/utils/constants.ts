@@ -25,3 +25,5 @@ export const SIMPLE_TOOL_LABELS: Record<string, string> = {
 }
 
 export const REQUEST_TIMEOUT_MS = 7200000 as const // 2 小时 
+export const MAX_TOKENS = 8192 as const
+export const THINKING_BUDGET_TOKENS = 4096 as const

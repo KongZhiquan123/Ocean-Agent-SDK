@@ -10,7 +10,7 @@
  *
  * @changelog
  *   - 2026-03-02 kongzhiquan: v2.7.1 截断大型列表防止 prompt_too_long 错误
- *     - file_list / dynamic_files / suspected_static_files 超过 20 条时只保留前 20 条
+ *     - file_list / dynamic_files / suspected_static_files 超过 5 条时只保留前 5 条
  *     - file_analysis 条目过多时置为摘要对象，完整数据保留在 inspect_result.json
  *   - 2026-02-25 kongzhiquan: v2.7.0 tempDir 改为基于 output_base 的 .ocean_preprocess_temp
  *     - 新增 output_base 参数，用于指定临时目录的基础路径
@@ -34,7 +34,7 @@
  */
 
 import { defineTool } from '@shareai-lab/kode-sdk'
-import { truncateDict } from '@/utils/truncate'
+import { truncateDict, truncateArray } from '@/utils/truncate'
 import { findFirstPythonPath } from '@/utils/python-manager'
 import path from 'node:path'
 import { shellEscapeDouble } from '@/utils/shell'
@@ -274,36 +274,18 @@ ${allVarNames.slice(0, 10).join(', ')}${allVarNames.length > 10 ? '...' : ''}
 
     // 8. 截断大型列表，避免工具结果过长触发 prompt_too_long 错误
     const MAX_FILE_SAMPLE = 5 as const
-    const totalFiles = inspectResult.file_list?.length ?? 0
-    const totalDynamic = inspectResult.dynamic_files?.length ?? 0
-    const totalStatic = inspectResult.suspected_static_files?.length ?? 0
+    const fileList    = inspectResult.file_list              || []
+    const dynFiles    = inspectResult.dynamic_files          || []
+    const staticFiles = inspectResult.suspected_static_files || []
 
     const truncated: InspectResult = {
       ...inspectResult,
-      file_list:
-        totalFiles > MAX_FILE_SAMPLE
-          ? [
-              ...inspectResult.file_list.slice(0, MAX_FILE_SAMPLE),
-              `... (共 ${totalFiles} 个文件，此处仅展示前 ${MAX_FILE_SAMPLE} 个)`
-            ]
-          : inspectResult.file_list,
-      dynamic_files:
-        totalDynamic > MAX_FILE_SAMPLE
-          ? [
-              ...inspectResult.dynamic_files.slice(0, MAX_FILE_SAMPLE),
-              `... (共 ${totalDynamic} 个动态文件，此处仅展示前 ${MAX_FILE_SAMPLE} 个)`
-            ]
-          : inspectResult.dynamic_files,
-      suspected_static_files:
-        totalStatic > MAX_FILE_SAMPLE
-          ? [
-              ...inspectResult.suspected_static_files.slice(0, MAX_FILE_SAMPLE),
-              `... (共 ${totalStatic} 个疑似静态文件，此处仅展示前 ${MAX_FILE_SAMPLE} 个)`
-            ]
-          : inspectResult.suspected_static_files,
+      file_list:              truncateArray(fileList,    MAX_FILE_SAMPLE, `... (共 ${fileList.length} 个文件，此处仅展示前 ${MAX_FILE_SAMPLE} 个)`),
+      dynamic_files:          truncateArray(dynFiles,    MAX_FILE_SAMPLE, `... (共 ${dynFiles.length} 个动态文件，此处仅展示前 ${MAX_FILE_SAMPLE} 个)`),
+      suspected_static_files: truncateArray(staticFiles, MAX_FILE_SAMPLE, `... (共 ${staticFiles.length} 个疑似静态文件，此处仅展示前 ${MAX_FILE_SAMPLE} 个)`),
       file_analysis: truncateDict(
-        inspectResult.file_analysis || {}, 
-        MAX_FILE_SAMPLE, 
+        inspectResult.file_analysis || {},
+        MAX_FILE_SAMPLE,
         '文件分析数据过多而被截断，完整数据见 inspect_result.json 中的 file_analysis 字段'
       )
     }

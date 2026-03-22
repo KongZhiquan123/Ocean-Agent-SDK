@@ -41,7 +41,7 @@ import {
   SAFE_WRITE_PATTERNS, 
   hasUnsafePath 
 } from './utils/shell'
-import { REQUEST_TIMEOUT_MS } from './utils/constants'
+import { MAX_TOKENS, REQUEST_TIMEOUT_MS } from './utils/constants'
 // ========================================
 // 类型定义
 // ========================================
@@ -99,6 +99,8 @@ export async function createAgent(config: AgentConfig): Promise<Agent> {
       templateId,
       sandbox: sandboxConfig,
       metadata: {
+        toolTimeoutMs: REQUEST_TIMEOUT_MS,
+        maxTokens: MAX_TOKENS,
         userId: config.userId || 'anonymous',
         mode: config.mode,
         files: config.files,

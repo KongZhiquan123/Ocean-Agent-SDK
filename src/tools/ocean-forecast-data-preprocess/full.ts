@@ -7,9 +7,10 @@
  * @author Leizheng
  * @contributors kongzhiquan
  * @date 2026-02-25
- * @version 1.7.1
+ * @version 1.7.2
  *
  * @changelog
+ *   - 2026-03-21 kongzhiquan: v1.7.2 对 step_d 结果添加截断，避免工具结果过长
  *   - 2026-03-13 kongzhiquan: v1.7.0 新增 Step B 张量验证
  *     - 复用 oceanValidateTensorTool，在数据转换前执行约定校验
  *     - 保持 step_b（数据转换）与 step_c（可视化）返回结构兼容
@@ -44,6 +45,7 @@ import { resolveStage, type ForecastPreprocessWorkflowParams } from './workflow'
 import { generateForecastPreprocessCells, saveOrAppendNotebook } from './notebook'
 import { shellEscapeDouble } from '@/utils/shell'
 import { loadSessionParams, saveSessionParams } from '@/utils/training-utils'
+import { truncateArray } from '@/utils/truncate'
 
 /**
  * 对 forecast_preprocess.py 返回的原始结果进行精简，
@@ -51,19 +53,12 @@ import { loadSessionParams, saveSessionParams } from '@/utils/training-utils'
  * 完整原始结果已由 Python 侧写入 preprocess_manifest.json，此处只保留摘要。
  */
 function summarizePreprocessResult(raw: any): any {
-  const MAX_WARNINGS = 5 as const
-  const MAX_ERRORS = 3 as const
+  const MAX_WARNINGS    = 5 as const
+  const MAX_ERRORS      = 3 as const
   const MAX_RULE_ERRORS = 3 as const
+
   const warnings: string[] = raw.warnings || []
   const errors: string[]   = raw.errors   || []
-
-  const slimWarnings = warnings.length > MAX_WARNINGS
-    ? [...warnings.slice(0, MAX_WARNINGS), `...（共 ${warnings.length} 条警告，详见 preprocess_manifest.json）`]
-    : warnings
-
-  const slimErrors = errors.length > MAX_ERRORS
-    ? [...errors.slice(0, MAX_ERRORS), `...（共 ${errors.length} 条错误）`]
-    : errors
 
   let slimValidation: any = raw.post_validation
   if (slimValidation && typeof slimValidation === 'object' && !slimValidation.skipped) {
@@ -72,12 +67,10 @@ function summarizePreprocessResult(raw: any): any {
       if (ruleResult && typeof ruleResult === 'object') {
         const ruleErrors: string[] = ruleResult.errors || []
         slimValidation[ruleName] = {
-          passed: ruleResult.passed,
+          passed:      ruleResult.passed,
           error_count: ruleErrors.length,
           ...(ruleErrors.length > 0 && {
-            errors_sample: ruleErrors.length > MAX_RULE_ERRORS
-              ? [...ruleErrors.slice(0, MAX_RULE_ERRORS), `...（共 ${ruleErrors.length} 条，详见 preprocess_manifest.json）`]
-              : ruleErrors
+            errors_sample: truncateArray(ruleErrors, MAX_RULE_ERRORS, `... (共 ${ruleErrors.length} 条，详见 preprocess_manifest.json)`)
           }),
           ...(ruleResult.skipped  !== undefined && { skipped:  ruleResult.skipped }),
           ...(ruleResult.warnings !== undefined && { warnings: ruleResult.warnings }),
@@ -89,15 +82,15 @@ function summarizePreprocessResult(raw: any): any {
   }
 
   return {
-    status:             raw.status,
-    message:            raw.message,
-    output_base:        raw.output_base,
-    splits:             raw.splits,
-    time_info:          raw.time_info,
-    static_vars_saved:  raw.static_vars_saved,
-    warnings:           slimWarnings,
-    errors:             slimErrors,
-    post_validation:    slimValidation,
+    status:          raw.status,
+    message:         raw.message,
+    output_base:     raw.output_base,
+    splits:          raw.splits,
+    time_info:       raw.time_info,
+    static_vars_saved: raw.static_vars_saved,
+    warnings:        truncateArray(warnings, MAX_WARNINGS,  `... (共 ${warnings.length} 条警告，详见 preprocess_manifest.json)`),
+    errors:          truncateArray(errors,   MAX_ERRORS,    `... (共 ${errors.length} 条错误，详见 preprocess_manifest.json)`),
+    post_validation: slimValidation,
   }
 }
 

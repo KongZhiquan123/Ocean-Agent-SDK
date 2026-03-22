@@ -40,7 +40,7 @@ import {
 } from '@shareai-lab/kode-sdk'
 
 import tools from './tools'
-
+import { THINKING_BUDGET_TOKENS } from './utils/constants'
 // ========================================
 // 环境变量配置
 // ========================================
@@ -244,7 +244,7 @@ function createModelFactory() {
       reasoningTransport: 'provider', 
       thinking: {
         enabled: true,
-        budgetTokens: 2048,  // 设置合理的 token 预算，避免过度 thinking
+        budgetTokens: THINKING_BUDGET_TOKENS,  // 设置合理的 token 预算，避免过度 thinking
       }
     },
   )

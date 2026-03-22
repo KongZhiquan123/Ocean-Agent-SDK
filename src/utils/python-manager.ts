@@ -79,8 +79,8 @@ export async function findPythonWithModule(moduleName: string): Promise<string |
 function collectFromEnv(): Array<string | undefined> {
   const isWin = process.platform === 'win32'
   return [
-    process.env.PYTHON,
     process.env.PYTHON3,
+    process.env.PYTHON,
     joinIf(process.env.PYTHON_HOME, isWin ? 'python.exe' : 'bin', isWin ? undefined : 'python3'),
     joinIf(process.env.VIRTUAL_ENV, isWin ? 'Scripts' : 'bin', isWin ? 'python.exe' : 'python'),
     joinIf(process.env.CONDA_PREFIX, isWin ? 'python.exe' : 'bin', isWin ? undefined : 'python'),

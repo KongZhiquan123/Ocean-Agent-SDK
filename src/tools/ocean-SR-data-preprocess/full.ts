@@ -271,6 +271,7 @@ export const oceanSrPreprocessFullTool = defineTool({
     downsample_method: {
       type: 'string',
       description: '【必须由用户指定】下采样插值方法：area（推荐）、cubic、nearest、linear、lanczos',
+      enum: ['area', 'cubic', 'nearest', 'linear', 'lanczos'],
       required: false
     },
     skip_downsample: {

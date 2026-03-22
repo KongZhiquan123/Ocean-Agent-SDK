@@ -4,9 +4,14 @@ This file provides guidance to Codex when working with code in this repository.
 
 ## Project Overview
 
-This is an AI Agent HTTP service built on top of the KODE SDK (@shareai-lab/kode-sdk). It provides a RESTful API with SSE (Server-Sent Events) streaming for AI-powered coding assistance and question answering. The service specializes in ocean data preprocessing for super-resolution scenarios, converting NC (NetCDF) format to NPY format.
+This is an AI Agent HTTP service built on top of the KODE SDK (@shareai-lab/kode-sdk). It provides a RESTful API with SSE (Server-Sent Events) streaming for AI-powered ocean data processing and model training workflows. The service covers two main scenarios:
 
-**Tech Stack**: Node.js (>=20.18.1), TypeScript, Express, KODE SDK v2.7.2
+- **Super-Resolution (SR)**: Data preprocessing (NC→NPY format conversion, downsampling, visualization) and model training
+- **Ocean Forecasting**: Time-series data preprocessing and model training (FNO2d, UNet2d, SwinTransformerV2, Transformer)
+
+The agent exposes **24 custom tools** across 4 functional modules (SR data preprocess, SR training, Forecast data preprocess, Forecast training), plus built-in file system, Bash, and task management tools.
+
+**Tech Stack**: Node.js (>=20.18.1), TypeScript, Express, KODE SDK ^2.7.2; Python ML stack: PyTorch 2.0+, NumPy, xarray, netCDF4, timm, wandb
 
 ## Development Commands
 
@@ -35,6 +40,8 @@ ANTHROPIC_MODEL_ID=claude-sonnet-4-5-20250929  # Required: Model ID
 KODE_API_SECRET=your-secret-key        # Required: API authentication
 KODE_API_PORT=8787                     # Optional: Server port (default: 8787)
 SKILLS_DIR=./.skills                   # Optional: Skills directory
+PYTHON3=python                         # Optional: Python executable path for tools, superior to PATH lookup
+NODE_ENV=development                   # Optional: Set to 'production' for production mode
 ```
 
 ## Architecture
