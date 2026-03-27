@@ -29,13 +29,20 @@ npm run test:client
 Required environment variables in `.env`:
 
 ```env
-ANTHROPIC_API_KEY=sk-ant-...           # Required: Anthropic API key
-ANTHROPIC_BASE_URL=https://yunwu.ai    # Required: API endpoint
-ANTHROPIC_MODEL_ID=claude-sonnet-4-5-20250929  # Required: Model ID
+KODE_MODEL_PROVIDER=openai             # Required: anthropic | openai | gemini
+OPENAI_API_KEY=sk-...                  # Required when provider=openai
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_MODEL_ID=gpt-5.4
+OPENAI_API_MODE=chat                   # Recommended for OpenAI-compatible gateways
 KODE_API_SECRET=your-secret-key        # Required: API authentication
 KODE_API_PORT=8787                     # Optional: Server port (default: 8787)
 SKILLS_DIR=./.skills                   # Optional: Skills directory
 ```
+
+Notes:
+- `provider=openai` supports OpenAI-compatible services such as DeepSeek, GLM, Qwen, Minimax, OpenRouter, and compatible gateways.
+- `provider=anthropic` uses `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` / `ANTHROPIC_MODEL_ID`.
+- `provider=gemini` uses `GOOGLE_API_KEY` / `GEMINI_MODEL_ID`.
 
 ## Architecture
 
@@ -59,7 +66,7 @@ SKILLS_DIR=./.skills                   # Optional: Skills directory
 
 - **Skills YAML**: SKILL.md files must use LF line endings (not CRLF) to avoid YAML parser errors
 - **Sandbox Usage**: Always use `ctx.sandbox` in custom tools for file/command operations
-- **Session Management**: Agent instances are automatically cleaned up after 30 min of inactivity
+- **Session Management**: Conversation sessions are resumed from `./.kode/` on demand; this repo no longer uses the old in-memory 30-minute expiry/LRU pool design
 - **Data Storage**: KODE SDK stores agent state in `./.kode/` directory (configured via `KODE_STORE_PATH`)
 
 ## Interaction Rules (MUST follow)

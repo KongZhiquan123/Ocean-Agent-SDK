@@ -30,6 +30,7 @@ import {
 } from './agent-manager'
 import { conversationManager } from './conversation-manager'
 import { trainingProcessManager } from './utils/training-process-manager'
+import { hudManager, type HudRequestMeta } from './utils/hud-manager'
 import { mkdir } from 'fs/promises'
 import path from 'path'
 import { REQUEST_TIMEOUT_MS } from './utils/constants'
@@ -41,6 +42,7 @@ validateConfig()
 
 const app = express()
 app.use(express.json({ limit: '2mb' }))
+app.use('/hud', express.static(path.resolve(process.cwd(), 'KODE-HUD/app'), { index: 'index.html' }))
 
 console.log(
   `[server] 启动中，端口=${config.port}, NODE_ENV=${process.env.NODE_ENV}`,
@@ -164,6 +166,51 @@ app.get('/health', async (req: Request, res: Response) => {
 })
 
 // ========================================
+// 路由：HUD 状态快照
+// ========================================
+
+app.get('/api/hud/state', requireAuth, (req: Request, res: Response) => {
+  res.json(hudManager.getSnapshot())
+})
+
+// ========================================
+// 路由：HUD 实时事件流
+// ========================================
+
+app.get('/api/hud/events', requireAuth, (req: Request, res: Response) => {
+  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8')
+  res.setHeader('Cache-Control', 'no-cache, no-transform')
+  res.setHeader('Connection', 'keep-alive')
+  res.flushHeaders()
+
+  sendSSE(res, {
+    type: 'hud_connected',
+    timestamp: Date.now(),
+  })
+
+  const unsubscribe = hudManager.subscribe((payload) => {
+    sendSSE(res, payload)
+  })
+
+  const heartbeatTimer = setInterval(() => {
+    sendSSE(res, {
+      type: 'hud_heartbeat',
+      timestamp: Date.now(),
+    })
+  }, 10000)
+
+  const cleanup = () => {
+    clearInterval(heartbeatTimer)
+    unsubscribe()
+  }
+
+  req.on('aborted', cleanup)
+  req.on('error', cleanup)
+  res.on('close', cleanup)
+  res.on('finish', cleanup)
+})
+
+// ========================================
 // 路由：对话接口（SSE 流式）
 // @modified 2026-02-03 kongzhiquan: 持久化读取
 // @modified 2026-02-02 leizheng: 使用 agentId 复用会话
@@ -252,6 +299,19 @@ app.post('/api/chat/stream', rateLimitMiddleware, requireAuth, async (req: Reque
     return
   }
 
+  const hudMeta: HudRequestMeta = {
+    reqId,
+    agentId: agent.agentId,
+    userId,
+    mode,
+    isNewSession,
+    message,
+    workingDir,
+    outputsPath,
+    notebookPath,
+  }
+  hudManager.registerRequest(hudMeta)
+
   // 心跳定时器
   let heartbeatCount = 0
   let clientDisconnected = false
@@ -313,26 +373,31 @@ app.post('/api/chat/stream', rateLimitMiddleware, requireAuth, async (req: Reque
 
       // 在 start 事件中标记是否新会话
       if (event.type === 'start') {
-        sendSSE(res, {
+        const startEvent = {
           ...event,
           isNewSession,
-        })
+        }
+        sendSSE(res, startEvent)
+        hudManager.recordSseEvent(hudMeta, startEvent)
       } else {
         sendSSE(res, event)
+        hudManager.recordSseEvent(hudMeta, event)
       }
     }
   } catch (err: any) {
     console.error(`[server] [req ${reqId}] 处理消息失败:`, err)
 
     if (!res.writableEnded && !clientDisconnected) {
-      sendSSE(res, {
+      const fatalEvent = {
         type: 'error',
         error: 'INTERNAL_ERROR',
         message: process.env.NODE_ENV === 'development'
           ? String(err?.message ?? err)
           : 'Internal server error',
         timestamp: Date.now(),
-      })
+      }
+      sendSSE(res, fatalEvent)
+      hudManager.recordSseEvent(hudMeta, fatalEvent)
     }
   } finally {
     cleanup()

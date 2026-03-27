@@ -29,4 +29,4 @@ X-API-Key: your-secret-key
 
 ## Multi-turn Conversations
 
-To continue a conversation, include the `agentId` from the previous response's `start` event. The conversation manager will reuse the Agent instance if it hasn't expired (30 min timeout).
+To continue a conversation, include the `agentId` from the previous response's `start` event. The conversation manager will resume the Agent from `./.kode/` if the session metadata still exists on disk.

@@ -33,6 +33,8 @@ import {
   ToolRegistry,
   SandboxFactory,
   AnthropicProvider,
+  OpenAIProvider,
+  GeminiProvider,
   builtin,
   SkillsManager,
   createSkillsTool,
@@ -41,20 +43,68 @@ import {
 
 import tools from './tools'
 
+type ProviderName = 'anthropic' | 'openai' | 'gemini'
+
+function resolveProviderName(): ProviderName {
+  const raw = (process.env.KODE_MODEL_PROVIDER ?? process.env.MODEL_PROVIDER ?? '')
+    .trim()
+    .toLowerCase()
+
+  if (raw === 'anthropic' || raw === 'openai' || raw === 'gemini') {
+    return raw
+  }
+
+  if (raw) {
+    throw new Error(`不支持的 KODE_MODEL_PROVIDER: ${raw}`)
+  }
+
+  if (process.env.OPENAI_API_KEY) return 'openai'
+  if (process.env.ANTHROPIC_API_KEY) return 'anthropic'
+  if (process.env.GOOGLE_API_KEY) return 'gemini'
+
+  return 'anthropic'
+}
+
+const providerName = resolveProviderName()
+
 // ========================================
 // 环境变量配置
 // ========================================
 
 export const config = {
+  provider: providerName,
   port: Number(process.env.KODE_API_PORT ?? '8787'),
   apiSecret: process.env.KODE_API_SECRET,
   anthropicApiKey: process.env.ANTHROPIC_API_KEY,
   anthropicModelId: process.env.ANTHROPIC_MODEL_ID ?? 'claude-sonnet-4-5-20250929',
   anthropicBaseUrl: process.env.ANTHROPIC_BASE_URL ?? 'https://yunwu.ai',
+  openaiApiKey: process.env.OPENAI_API_KEY,
+  openaiModelId: process.env.OPENAI_MODEL_ID ?? 'gpt-4o',
+  openaiBaseUrl: process.env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1',
+  openaiApiMode: process.env.OPENAI_API_MODE ?? 'chat',
+  openaiReasoningEffort: process.env.OPENAI_REASONING_EFFORT,
+  openaiReasoningTransport: process.env.OPENAI_REASONING_TRANSPORT ?? 'text',
+  googleApiKey: process.env.GOOGLE_API_KEY,
+  geminiModelId: process.env.GEMINI_MODEL_ID ?? 'gemini-3-flash',
+  geminiBaseUrl: process.env.GEMINI_BASE_URL,
+  proxyUrl: process.env.HTTPS_PROXY ?? process.env.HTTP_PROXY,
   kodeStorePath: process.env.KODE_STORE_PATH ?? './.kode',
   skillsDir: process.env.SKILLS_DIR ?? './.skills',
 } as const
-console.log('[config] 最终使用模型:', config.anthropicModelId)
+
+function getSelectedModelId(): string {
+  switch (config.provider) {
+    case 'openai':
+      return config.openaiModelId
+    case 'gemini':
+      return config.geminiModelId
+    case 'anthropic':
+    default:
+      return config.anthropicModelId
+  }
+}
+
+console.log('[config] 最终使用 provider/model:', config.provider, getSelectedModelId())
 
 
 function loadSkillsWhitelist(skillsDir: string, defaults: string[]): string[] {
@@ -88,17 +138,43 @@ export function validateConfig(): void {
   const errors: string[] = []
   const warnings: string[] = []
 
-  // 必需配置
-  if (!config.anthropicApiKey) {
-    errors.push('未设置 ANTHROPIC_API_KEY 环境变量')
-  }
+  // 必需配置（按 provider 分支校验）
+  switch (config.provider) {
+    case 'anthropic':
+      if (!config.anthropicApiKey) {
+        errors.push('当前 provider=anthropic，但未设置 ANTHROPIC_API_KEY 环境变量')
+      }
+      if (!config.anthropicModelId) {
+        errors.push('当前 provider=anthropic，但未设置 ANTHROPIC_MODEL_ID 环境变量')
+      }
+      if (!config.anthropicBaseUrl) {
+        errors.push('当前 provider=anthropic，但未设置 ANTHROPIC_BASE_URL 环境变量')
+      }
+      break
 
-  if (!config.anthropicModelId) {
-    errors.push('未设置 ANTHROPIC_MODEL_ID 环境变量')
-  }
+    case 'openai':
+      if (!config.openaiApiKey) {
+        errors.push('当前 provider=openai，但未设置 OPENAI_API_KEY 环境变量')
+      }
+      if (!config.openaiModelId) {
+        errors.push('当前 provider=openai，但未设置 OPENAI_MODEL_ID 环境变量')
+      }
+      if (!config.openaiBaseUrl) {
+        errors.push('当前 provider=openai，但未设置 OPENAI_BASE_URL 环境变量')
+      }
+      if (config.openaiApiMode !== 'chat' && config.openaiApiMode !== 'responses') {
+        errors.push('OPENAI_API_MODE 仅支持 "chat" 或 "responses"')
+      }
+      break
 
-  if (!config.anthropicBaseUrl) {
-    errors.push('未设置 ANTHROPIC_BASE_URL 环境变量')
+    case 'gemini':
+      if (!config.googleApiKey) {
+        errors.push('当前 provider=gemini，但未设置 GOOGLE_API_KEY 环境变量')
+      }
+      if (!config.geminiModelId) {
+        errors.push('当前 provider=gemini，但未设置 GEMINI_MODEL_ID 环境变量')
+      }
+      break
   }
 
   // 警告配置
@@ -235,19 +311,59 @@ function createSandboxFactory() {
 }
 
 function createModelFactory() {
-  return () => new AnthropicProvider(
-    config.anthropicApiKey,
-    config.anthropicModelId,
-    config.anthropicBaseUrl,
-    undefined,  // 直接连接baseURL，不使用代理
-    { 
-      reasoningTransport: 'provider', 
-      thinking: {
-        enabled: true,
-        budgetTokens: 2048,  // 设置合理的 token 预算，避免过度 thinking
+  return () => {
+    switch (config.provider) {
+      case 'openai': {
+        const options: Record<string, unknown> = {
+          reasoningTransport: config.openaiReasoningTransport,
+        }
+
+        // chat completions 兼容性最好；responses 适合 OpenAI/部分兼容平台的 reasoning 模型。
+        if (config.openaiApiMode === 'responses') {
+          options.api = 'responses'
+          if (config.openaiReasoningEffort) {
+            options.responses = {
+              reasoning: {
+                effort: config.openaiReasoningEffort,
+              },
+            }
+          }
+        }
+
+        return new OpenAIProvider(
+          config.openaiApiKey!,
+          config.openaiModelId,
+          config.openaiBaseUrl,
+          config.proxyUrl,
+          options,
+        )
       }
-    },
-  )
+
+      case 'gemini':
+        return new GeminiProvider(
+          config.googleApiKey!,
+          config.geminiModelId,
+          config.geminiBaseUrl,
+          config.proxyUrl,
+        )
+
+      case 'anthropic':
+      default:
+        return new AnthropicProvider(
+          config.anthropicApiKey!,
+          config.anthropicModelId,
+          config.anthropicBaseUrl,
+          config.proxyUrl,
+          {
+            reasoningTransport: 'provider',
+            thinking: {
+              enabled: true,
+              budgetTokens: 2048,  // 设置合理的 token 预算，避免过度 thinking
+            },
+          },
+        )
+    }
+  }
 }
 
 // ========================================

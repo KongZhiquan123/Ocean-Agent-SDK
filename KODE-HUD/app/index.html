@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>KODE-HUD</title>
+    <link rel="stylesheet" href="./app.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-kicker">Ocean-Agent-SDK</div>
+          <h1>KODE-HUD</h1>
+          <p>实时观察 Agent 在做什么、碰什么文件、跑什么命令、产出什么结果。</p>
+        </div>
+
+        <div class="topbar-panel">
+          <div class="connection-bar">
+            <label>
+              <span>API Key</span>
+              <input id="apiKeyInput" type="password" placeholder="输入 X-API-Key" />
+            </label>
+            <button id="connectButton" class="primary">连接 HUD</button>
+            <button id="disconnectButton" class="ghost">断开</button>
+          </div>
+
+          <div class="status-strip">
+            <div class="status-tile">
+              <span>连接状态</span>
+              <strong id="connectionState">未连接</strong>
+            </div>
+            <div class="status-tile">
+              <span>最近更新</span>
+              <strong id="lastUpdated">-</strong>
+            </div>
+            <div class="status-tile">
+              <span>观察者</span>
+              <strong id="watcherCount">0</strong>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <section class="left-rail">
+          <div class="panel">
+            <div class="panel-title-row">
+              <h2>Quick Launch</h2>
+              <span class="muted">直接从 HUD 发起一个任务</span>
+            </div>
+
+            <form id="launchForm" class="stack">
+              <label>
+                <span>消息</span>
+                <textarea id="messageInput" rows="6" placeholder="例如：请分析 src/server.ts 的 SSE 结构，并给出 HUD 事件模型建议。"></textarea>
+              </label>
+
+              <label>
+                <span>模式</span>
+                <select id="modeInput">
+                  <option value="edit">edit</option>
+                  <option value="ask">ask</option>
+                </select>
+              </label>
+
+              <label>
+                <span>userId</span>
+                <input id="userIdInput" type="text" value="hud-user" />
+              </label>
+
+              <label>
+                <span>workingDir</span>
+                <input id="workingDirInput" type="text" value="/home/lz/Ocean-Agent-SDK" />
+              </label>
+
+              <label>
+                <span>outputsPath</span>
+                <input id="outputsPathInput" type="text" value="/home/lz/Ocean-Agent-SDK/test_outputs/hud" />
+              </label>
+
+              <label>
+                <span>notebookPath</span>
+                <input id="notebookPathInput" type="text" value="/home/lz/Ocean-Agent-SDK/test_outputs/hud/hud.ipynb" />
+              </label>
+
+              <button id="launchButton" class="primary" type="submit">发起任务</button>
+            </form>
+
+            <div class="inline-log">
+              <div class="inline-log-title">Launch 状态</div>
+              <pre id="launchLog">等待任务发起。</pre>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-title-row">
+              <h2>全局摘要</h2>
+              <span class="muted">实时聚合</span>
+            </div>
+            <div class="stats-grid" id="globalStats"></div>
+          </div>
+        </section>
+
+        <section class="center-stage">
+          <div class="panel sticky-panel">
+            <div class="panel-title-row">
+              <h2>Agent Board</h2>
+              <div class="toolbar">
+                <input id="searchInput" type="search" placeholder="搜索 agentId / 文件 / 工具 / 文本" />
+                <select id="statusFilter">
+                  <option value="all">全部状态</option>
+                  <option value="idle">idle</option>
+                  <option value="thinking">thinking</option>
+                  <option value="running">running</option>
+                  <option value="calling_tool">calling_tool</option>
+                  <option value="reading_file">reading_file</option>
+                  <option value="writing_file">writing_file</option>
+                  <option value="running_command">running_command</option>
+                  <option value="waiting">waiting</option>
+                  <option value="done">done</option>
+                  <option value="failed">failed</option>
+                </select>
+              </div>
+            </div>
+
+            <div id="agentBoard" class="agent-board"></div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-title-row">
+              <h2>Live Timeline</h2>
+              <span class="muted">全局实时事件流</span>
+            </div>
+            <div id="timeline" class="timeline"></div>
+          </div>
+        </section>
+
+        <aside class="right-rail">
+          <div class="panel detail-panel">
+            <div class="panel-title-row">
+              <h2>Agent Detail</h2>
+              <span id="detailAgentMeta" class="muted">未选中 Agent</span>
+            </div>
+
+            <div id="detailSummary" class="detail-summary"></div>
+
+            <div class="detail-tabs">
+              <button class="detail-tab active" data-tab="live">Live</button>
+              <button class="detail-tab" data-tab="tools">Tools</button>
+              <button class="detail-tab" data-tab="files">Files</button>
+              <button class="detail-tab" data-tab="commands">Commands</button>
+              <button class="detail-tab" data-tab="artifacts">Artifacts</button>
+            </div>
+
+            <div id="detailContent" class="detail-content"></div>
+          </div>
+        </aside>
+      </main>
+    </div>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

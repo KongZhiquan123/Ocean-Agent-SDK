@@ -33,20 +33,49 @@ pip install -r requirements.txt
 创建 `.env` 并填写：
 
 ```bash
-echo "ANTHROPIC_API_KEY=sk-ant-..." > .env
+cp .env.multi-provider.example .env
 ```
 
-编辑 `.env` 文件：
+本项目现在支持按 `KODE_MODEL_PROVIDER` 动态选择模型 Provider。
+
+常用场景：
+- `openai`: OpenAI 及所有 OpenAI 兼容接口，如 DeepSeek、GLM、Qwen、Minimax、OpenRouter、自建兼容网关
+- `anthropic`: Claude 及 Anthropic 兼容接口
+- `gemini`: Google Gemini
+
+编辑 `.env` 文件，例如：
 
 ```env
-ANTHROPIC_API_KEY=sk-ant-...
-ANTHROPIC_BASE_URL=your-anthropic-endpoint
+KODE_MODEL_PROVIDER=openai
+OPENAI_API_KEY=sk-...
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_MODEL_ID=gpt-5.4
+# 兼容平台优先用 chat；只有上游明确支持 Responses API 时再改成 responses
+OPENAI_API_MODE=chat
+
 KODE_API_SECRET=your-secret-key
-ANTHROPIC_MODEL_ID=your-model-id
 KODE_API_PORT=8787
 SKILLS_DIR=your-skills-directory
 PYTHON3=your-python3-path
 ```
+
+如果你使用 Claude 兼容接口：
+
+```env
+KODE_MODEL_PROVIDER=anthropic
+ANTHROPIC_API_KEY=sk-ant-...
+ANTHROPIC_BASE_URL=https://api.anthropic.com
+ANTHROPIC_MODEL_ID=claude-sonnet-4-5-20250929
+```
+
+如果你使用 Gemini：
+
+```env
+KODE_MODEL_PROVIDER=gemini
+GOOGLE_API_KEY=your-google-key
+GEMINI_MODEL_ID=gemini-3-flash
+```
+
 `.env` 文件中的变量会被自动加载到 `process.env`。
 ### 3. 启动服务
 
@@ -188,14 +217,12 @@ data: {"type":"done","metadata":{"agentId":"agt-abc123","timestamp":170688960000
 ### Ask 模式（问答助手）
 
 - 只能读取文件
-- 只能执行只读命令
 - 不能修改任何内容
 - 适合代码解释、问题回答等任务
 
 **可用工具：**
 - `fs_read`
 - `fs_glob`, `fs_grep`
-- `bash_run`（只读命令）
 - `ocean_inspect_data`（只读数据检查）
 
 ## 客户端示例
@@ -329,7 +356,7 @@ while (true) {
 
 5. **ModelFactory**
    - 创建 LLM Provider
-   - 当前使用 AnthropicProvider
+   - 根据 `KODE_MODEL_PROVIDER` 动态选择 `OpenAIProvider` / `AnthropicProvider` / `GeminiProvider`
 
 ### 事件系统
 
@@ -430,7 +457,8 @@ skills/
 **检查清单：**
 - ✅ 是否安装了依赖？运行 `npm install`
 - ✅ 是否配置了 `.env` 文件？
-- ✅ `ANTHROPIC_API_KEY` 是否有效？
+- ✅ 当前 `KODE_MODEL_PROVIDER` 对应的 API Key 是否有效？
+- ✅ `OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL` / `GEMINI_BASE_URL` 是否正确？
 - ✅ 端口 8787 是否被占用？
 
 ### Q2: API 请求返回 401
@@ -449,5 +477,5 @@ skills/
 - ✅ 查看服务器日志，确认工具是否执行成功
 
 ### Q4: CLAUDE.md文件会被kode-sdk传给Anthropic Claude模型吗？
-- 不会，`CLAUDE.md`文件仅作为本项目的使用说明文档，不会被传递给Anthropic Claude模型。
+- 不会，`CLAUDE.md`文件仅作为本项目的使用说明文档，不会被传递给上游模型 Provider。
 - `CLAUDE.md`文件仅仅用于本地使用Claude Code进行开发时参考使用。

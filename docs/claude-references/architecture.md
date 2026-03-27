@@ -23,14 +23,13 @@ The codebase follows a modular architecture with clear separation of concerns:
 - Main endpoint: `POST /api/chat/stream` (requires X-API-Key header)
 - Health check: `GET /health`
 - Implements request logging, authentication middleware, and error handling
-- Manages SSE connections with heartbeat (2s interval) and timeout (10 min)
+- Manages SSE connections with heartbeat (2s interval) and timeout (2 hours)
 - Integrates with conversation manager for multi-turn sessions
 
 **4. `src/conversation-manager.ts` - Multi-turn Conversation Support**
-- Maintains Agent instance pool using agentId as key
-- Automatic session expiration (30 min timeout) and cleanup (5 min interval)
-- LRU eviction when max sessions (100) reached
-- Enables conversation continuity by reusing Agent instances
+- Restores Agent sessions from `./.kode/` using `agentId`
+- Validates `agentId` format to prevent path traversal
+- Enables conversation continuity across requests and process restarts
 
 **5. `src/tools/ocean-preprocess/` - Custom Ocean Data Tools**
 - Four specialized tools for NC→NPY conversion pipeline
@@ -49,7 +48,7 @@ The service uses KODE SDK's three-channel event system:
 - `ToolRegistry`: Manages available tools per agent template
 - `AgentTemplateRegistry`: Defines system prompts and tool sets for "coding-assistant" and "qa-assistant"
 - `SandboxFactory`: Creates isolated environments for file operations and command execution
-- `AnthropicProvider`: LLM provider for Claude models
+- `OpenAIProvider` / `AnthropicProvider` / `GeminiProvider`: LLM provider adapters selected dynamically by `KODE_MODEL_PROVIDER`
 
 ## Skills System
 

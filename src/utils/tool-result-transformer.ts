@@ -26,6 +26,7 @@ import type { ToolCallSnapshot } from "@shareai-lab/kode-sdk"
 import { SIMPLE_TOOL_LABELS } from "./constants"
 
 const TOOL_MESSAGE_MAX_LENGTH = 200 as const
+const TOOL_FIELD_MAX_LENGTH = 1200 as const
 
 const SR_PREPROCESS_FULL_STEP_LABELS: Record<string, string> = {
   step_a: '数据检查',
@@ -116,11 +117,71 @@ function truncateResultMessage<T extends { message?: unknown }>(result: T): T {
   }
 }
 
-function transformBashResult(result: any): { status: 'success' | 'failed'; message: string } {
+function truncateField(value: unknown, max = TOOL_FIELD_MAX_LENGTH): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const normalized = value.trim()
+  if (!normalized) return undefined
+  if (normalized.length <= max) return normalized
+  return `${normalized.slice(0, max)}（内容已截断）`
+}
+
+function collectResultPaths(result: any): string[] {
+  const values = [
+    result?.path,
+    result?.output_path,
+    result?.outputPath,
+    result?.log_path,
+    result?.logPath,
+    result?.logs_path,
+    result?.logsPath,
+  ]
+
+  if (Array.isArray(result?.paths)) {
+    values.push(...result.paths)
+  }
+
+  return Array.from(
+    new Set(
+      values.filter((value): value is string => typeof value === 'string' && value.trim().length > 0),
+    ),
+  )
+}
+
+function transformBashResult(result: any): {
+  status: 'success' | 'failed'
+  message: string
+  exitCode?: number
+  outputSnippet?: string
+  stdoutSnippet?: string
+  stderrSnippet?: string
+  paths: string[]
+} {
   if (!result) return { status: 'failed', message: 'Bash 执行失败，未返回结果' }
-  const ok = Boolean(result.code === 0)
-  const message = `Bash 执行结果: ${result.output}`
-  return { status: ok ? 'success' : 'failed', message }
+  const exitCode = typeof result.code === 'number'
+    ? result.code
+    : (typeof result.exitCode === 'number' ? result.exitCode : undefined)
+  const outputSnippet = truncateField(result.output)
+  const stdoutSnippet = truncateField(result.stdout)
+  const stderrSnippet = truncateField(result.stderr)
+  const paths = collectResultPaths(result)
+  const ok = exitCode != null ? exitCode === 0 : !result.error
+  const primaryDetail =
+    outputSnippet ||
+    stdoutSnippet ||
+    stderrSnippet ||
+    truncateField(result.message) ||
+    (ok ? '命令执行成功' : '命令执行失败')
+  const message = `Bash 执行结果: ${primaryDetail}`
+
+  return {
+    status: ok ? 'success' : 'failed',
+    message,
+    exitCode,
+    outputSnippet,
+    stdoutSnippet,
+    stderrSnippet,
+    paths,
+  }
 }
 
 function transformSkillResult(result: any): { status: 'success' | 'failed'; message: string } {
@@ -247,6 +308,7 @@ function transformFileOperationResult(toolCall: ToolCallSnapshot): {
   modified: boolean
   message: string
   paths: string[]
+  path?: string
 } {
   if (!toolCall.result) {
     return {
@@ -277,7 +339,8 @@ function transformFileOperationResult(toolCall: ToolCallSnapshot): {
         status: 'success',
         modified: false,
         message: `读取文件${path ? ` ${path}` : ''}成功${truncated}`,
-        paths: [],
+        path,
+        paths: path ? toList([path]) : [],
       }
     }
 
@@ -291,7 +354,7 @@ function transformFileOperationResult(toolCall: ToolCallSnapshot): {
         message: ok
           ? `匹配到 ${matches.length} 个文件${truncated}`
           : '文件匹配失败',
-        paths: [],
+        paths: ok ? toList(matches.slice(0, 20)) : [],
       }
     }
 
@@ -299,11 +362,17 @@ function transformFileOperationResult(toolCall: ToolCallSnapshot): {
       const ok = Boolean(result.ok)
       const matchCount = Array.isArray(result.matches) ? result.matches.length : 0
       const target = result.path || inputPreview?.path || '目标文件'
+      const matchPaths = Array.isArray(result.matches)
+        ? result.matches
+          .map((match: any) => match?.path)
+          .filter((item: any): item is string => typeof item === 'string' && item.length > 0)
+        : []
       return {
         status: ok ? 'success' : 'failed',
         modified: false,
         message: ok ? `在 ${target} 中找到 ${matchCount} 处匹配` : '文件搜索失败',
-        paths: [],
+        path: typeof target === 'string' ? target : undefined,
+        paths: ok ? toList(matchPaths.length > 0 ? matchPaths : [typeof target === 'string' ? target : undefined]) : [],
       }
     }
 
@@ -317,6 +386,7 @@ function transformFileOperationResult(toolCall: ToolCallSnapshot): {
         message: ok
           ? `写入文件成功${path ? `: ${path}` : ''}${bytes != null ? `，写入 ${bytes} 字节` : ''}`
           : `写入文件失败${path ? `: ${path}` : ''}`,
+        path,
         paths: ok ? toList([path]) : [],
       }
     }
@@ -332,7 +402,8 @@ function transformFileOperationResult(toolCall: ToolCallSnapshot): {
         message: ok
           ? `编辑文件${path ? ` ${path}` : ''}${replacements > 0 ? `，替换 ${replacements} 处` : '，未发生替换'}`
           : `编辑文件失败${path ? `: ${path}` : ''}`,
-        paths: modified ? toList([path]) : [],
+        path,
+        paths: path ? toList([path]) : [],
       }
     }
 
@@ -358,11 +429,13 @@ function transformFileOperationResult(toolCall: ToolCallSnapshot): {
     default: {
       const action = toolName.split('_')[1] || '未知操作'
       const ok = Boolean(result.ok)
+      const path = result.path || inputPreview?.path
       return {
         status: ok ? 'success' : 'failed',
         modified: false,
         message: `文件操作(${action})已完成`,
-        paths: [],
+        path,
+        paths: path ? toList([path]) : [],
       }
     }
   }

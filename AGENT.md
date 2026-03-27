@@ -29,13 +29,20 @@ npm run test:client
 Required environment variables in `.env`:
 
 ```env
-ANTHROPIC_API_KEY=sk-ant-...           # Required: Anthropic API key
-ANTHROPIC_BASE_URL=https://yunwu.ai    # Required: API endpoint
-ANTHROPIC_MODEL_ID=claude-sonnet-4-5-20250929  # Required: Model ID
+KODE_MODEL_PROVIDER=openai             # Required: anthropic | openai | gemini
+OPENAI_API_KEY=sk-...                  # Required when provider=openai
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_MODEL_ID=gpt-5.4
+OPENAI_API_MODE=chat                   # Recommended for OpenAI-compatible gateways
 KODE_API_SECRET=your-secret-key        # Required: API authentication
 KODE_API_PORT=8787                     # Optional: Server port (default: 8787)
 SKILLS_DIR=./.skills                   # Optional: Skills directory
 ```
+
+Notes:
+- `provider=openai` supports OpenAI-compatible services such as DeepSeek, GLM, Qwen, Minimax, OpenRouter, and compatible gateways.
+- `provider=anthropic` uses `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` / `ANTHROPIC_MODEL_ID`.
+- `provider=gemini` uses `GOOGLE_API_KEY` / `GEMINI_MODEL_ID`.
 
 ## Architecture
 
@@ -62,14 +69,13 @@ The codebase follows a modular architecture with clear separation of concerns:
 - Main endpoint: `POST /api/chat/stream` (requires X-API-Key header)
 - Health check: `GET /health`
 - Implements request logging, authentication middleware, and error handling
-- Manages SSE connections with heartbeat (2s interval) and timeout (10 min)
+- Manages SSE connections with heartbeat (2s interval) and timeout (2 hours)
 - Integrates with conversation manager for multi-turn sessions
 
 **4. `src/conversation-manager.ts` - Multi-turn Conversation Support**
-- Maintains Agent instance pool using agentId as key
-- Automatic session expiration (30 min timeout) and cleanup (5 min interval)
-- LRU eviction when max sessions (100) reached
-- Enables conversation continuity by reusing Agent instances
+- Restores Agent sessions from `./.kode/` using `agentId`
+- Validates `agentId` format to prevent path traversal
+- Supports conversation continuity across requests and process restarts
 
 **5. `src/tools/ocean-preprocess/` - Custom Ocean Data Tools**
 - Four specialized tools for NC→NPY conversion pipeline
@@ -88,7 +94,7 @@ The service uses KODE SDK's three-channel event system:
 - `ToolRegistry`: Manages available tools per agent template
 - `AgentTemplateRegistry`: Defines system prompts and tool sets for "coding-assistant" and "qa-assistant"
 - `SandboxFactory`: Creates isolated environments for file operations and command execution
-- `AnthropicProvider`: LLM provider for Claude models
+- `OpenAIProvider` / `AnthropicProvider` / `GeminiProvider`: LLM provider adapters selected dynamically by `KODE_MODEL_PROVIDER`
 
 ### Agent Modes
 
@@ -147,7 +153,7 @@ X-API-Key: your-secret-key
 
 ### Multi-turn Conversations
 
-To continue a conversation, include the `agentId` from the previous response's `start` event. The conversation manager will reuse the Agent instance if it hasn't expired (30 min timeout).
+To continue a conversation, include the `agentId` from the previous response's `start` event. The conversation manager will resume the Agent from `./.kode/` if the session metadata still exists on disk.
 
 ## Adding Custom Tools
 
@@ -199,7 +205,7 @@ To customize, modify the `DANGEROUS_PATTERNS` array or add custom logic in `setu
 
 - **Skills YAML**: SKILL.md files must use LF line endings (not CRLF) to avoid YAML parser errors
 - **Sandbox Usage**: Always use `ctx.sandbox` in custom tools for file/command operations
-- **Session Management**: Agent instances are automatically cleaned up after 30 min of inactivity
+- **Session Management**: Sessions are resumed from `./.kode/` on demand; the old 30-minute in-memory cleanup design no longer reflects the current implementation
 - **Python Detection**: The `python-manager.ts` utility scans common Python installation paths (pyenv, conda, system) for ocean preprocessing tools
 - **Data Storage**: KODE SDK stores agent state in `./.kode/` directory (configured via `KODE_STORE_PATH`)
 
