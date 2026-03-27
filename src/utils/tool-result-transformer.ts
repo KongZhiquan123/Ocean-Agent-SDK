@@ -156,7 +156,7 @@ function transformBashResult(result: any): {
   stderrSnippet?: string
   paths: string[]
 } {
-  if (!result) return { status: 'failed', message: 'Bash 执行失败，未返回结果' }
+  if (!result) return { status: 'failed', message: 'Bash 执行失败，未返回结果', paths: [] }
   const exitCode = typeof result.code === 'number'
     ? result.code
     : (typeof result.exitCode === 'number' ? result.exitCode : undefined)
@@ -319,6 +319,7 @@ function transformFileOperationResult(toolCall: ToolCallSnapshot): {
     }
   }
   const { name: toolName, result, inputPreview } = toolCall
+  const toolState = (toolCall as any).state
 
   const base = {
     status: 'failed' as const,
@@ -330,6 +331,19 @@ function transformFileOperationResult(toolCall: ToolCallSnapshot): {
   if (!result) return base
 
   const toList = (paths: Array<string | undefined>) => paths.filter((p): p is string => Boolean(p))
+  const inputPath = inputPreview?.path
+  const resultPath = result.path
+  const fallbackPath = resultPath || inputPath
+
+  if (toolState === 'FAILED' || result.error || result.ok === false) {
+    return {
+      status: 'failed',
+      modified: false,
+      message: `${toolName === 'fs_read' ? '读取文件失败' : '文件操作失败'}${fallbackPath ? `: ${fallbackPath}` : ''}`,
+      path: fallbackPath,
+      paths: fallbackPath ? toList([fallbackPath]) : [],
+    }
+  }
 
   switch (toolName) {
     case 'fs_read': {

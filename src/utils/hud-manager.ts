@@ -51,9 +51,11 @@ export interface HudArtifact {
 export interface HudToolCall {
   id: string
   tool: string
-  status: 'running' | 'success' | 'failed'
+  status: 'running' | 'success' | 'failed' | 'waiting'
   inputPreview?: string
   resultPreview?: string
+  target?: string | null
+  command?: string | null
   startedAt: number
   endedAt?: number
 }
@@ -193,6 +195,13 @@ function guessArtifactKind(pathValue: string): string {
   return 'file'
 }
 
+function isPathLikeKey(key: string): boolean {
+  return (
+    /(^|_)(path|paths|file|files|dir|directory|root)$/i.test(key) ||
+    /^(outputPath|output_path|workingDir|notebookPath|logPath|log_path|logsPath|logs_path|dataset_root)$/i.test(key)
+  )
+}
+
 function collectPathLikeValues(value: unknown, depth = 0, found = new Set<string>()): Set<string> {
   if (depth > 3 || value === null || value === undefined) return found
 
@@ -201,6 +210,7 @@ function collectPathLikeValues(value: unknown, depth = 0, found = new Set<string
     if (
       trimmed &&
       trimmed.length < 512 &&
+      !/[\r\n]/.test(trimmed) &&
       (trimmed.startsWith('/') ||
         trimmed.startsWith('./') ||
         trimmed.startsWith('../') ||
@@ -218,7 +228,7 @@ function collectPathLikeValues(value: unknown, depth = 0, found = new Set<string
 
   if (typeof value === 'object') {
     for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
-      if (/(path|paths|file|files|dir|output)/i.test(key)) {
+      if (isPathLikeKey(key)) {
         collectPathLikeValues(nested, depth + 1, found)
       }
     }
@@ -239,6 +249,7 @@ function extractGenericTarget(input: Record<string, unknown> | undefined): strin
     input.workingDir,
     input.notebookPath,
     input.command,
+    input.cmd,
     input.pattern,
   ]
   for (const candidate of candidates) {
@@ -249,6 +260,192 @@ function extractGenericTarget(input: Record<string, unknown> | undefined): strin
   return null
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function normalizeRecordLike(value: unknown): Record<string, unknown> | undefined {
+  if (isRecord(value)) return value
+
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value)
+      return isRecord(parsed) ? parsed : undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  return undefined
+}
+
+function uniquePaths(paths: Array<string | null | undefined>, max = 8): string[] {
+  const found = new Set<string>()
+
+  for (const value of paths) {
+    if (typeof value !== 'string') continue
+    const trimmed = value.trim()
+    if (!trimmed) continue
+    found.add(trimmed)
+    if (found.size >= max) break
+  }
+
+  return Array.from(found)
+}
+
+function extractResultPaths(result: unknown, max = 8): string[] {
+  if (!isRecord(result)) {
+    return Array.from(collectPathLikeValues(result)).slice(0, max)
+  }
+
+  const explicitPaths = Array.isArray(result.paths)
+    ? result.paths.filter((item): item is string => typeof item === 'string')
+    : []
+
+  const collected = Array.from(collectPathLikeValues(result))
+
+  return uniquePaths([
+    typeof result.path === 'string' ? result.path : undefined,
+    typeof result.output_path === 'string' ? result.output_path : undefined,
+    typeof result.outputPath === 'string' ? result.outputPath : undefined,
+    typeof result.log_path === 'string' ? result.log_path : undefined,
+    typeof result.logPath === 'string' ? result.logPath : undefined,
+    typeof result.logs_path === 'string' ? result.logs_path : undefined,
+    typeof result.logsPath === 'string' ? result.logsPath : undefined,
+    ...explicitPaths,
+    ...collected,
+  ], max)
+}
+
+function getResultStatus(result: unknown, isError: boolean): 'success' | 'failed' | 'waiting' {
+  if (isError) return 'failed'
+  if (!isRecord(result)) return 'success'
+  if (result.status === 'awaiting_confirmation') return 'waiting'
+  if (result.status === 'failed') return 'failed'
+  return 'success'
+}
+
+function getResultMessage(result: unknown): string | null {
+  if (!isRecord(result) || typeof result.message !== 'string' || !result.message.trim()) {
+    return null
+  }
+  return truncateText(result.message, 180)
+}
+
+function getNumberField(result: unknown, key: string): number | undefined {
+  if (!isRecord(result)) return undefined
+  const value = result[key]
+  return typeof value === 'number' ? value : undefined
+}
+
+function getStringField(result: unknown, key: string, max = 220): string | undefined {
+  if (!isRecord(result)) return undefined
+  const value = result[key]
+  if (typeof value !== 'string' || !value.trim()) return undefined
+  return truncateText(value, max)
+}
+
+function pushFileActivity(
+  agent: HudAgentState,
+  timestamp: number,
+  action: HudFileActivity['action'],
+  path: string,
+  source: string,
+): void {
+  const last = agent.files[agent.files.length - 1]
+  if (last && last.action === action && last.path === path && last.source === source) {
+    return
+  }
+
+  limitPush(agent.files, {
+    id: uniqueId('file'),
+    timestamp,
+    action,
+    path,
+    source,
+  }, MAX_FILE_HISTORY)
+}
+
+function pushArtifact(agent: HudAgentState, timestamp: number, path: string, source: string): void {
+  const last = agent.artifacts[agent.artifacts.length - 1]
+  if (last && last.path === path && last.source === source) {
+    return
+  }
+
+  limitPush(agent.artifacts, {
+    id: uniqueId('artifact'),
+    timestamp,
+    path,
+    kind: guessArtifactKind(path),
+    source,
+  }, MAX_ARTIFACTS)
+}
+
+function pushCommandActivity(
+  agent: HudAgentState,
+  timestamp: number,
+  phase: HudCommandActivity['phase'],
+  command: string,
+  snippet?: string,
+  exitCode?: number,
+): void {
+  const last = agent.commands[agent.commands.length - 1]
+  if (
+    last &&
+    last.phase === phase &&
+    last.command === command &&
+    last.snippet === snippet &&
+    last.exitCode === exitCode
+  ) {
+    return
+  }
+
+  limitPush(agent.commands, {
+    id: uniqueId('cmd'),
+    timestamp,
+    phase,
+    command,
+    snippet,
+    exitCode,
+  }, MAX_COMMAND_HISTORY)
+}
+
+function summarizeToolResult(
+  tool: string | null | undefined,
+  command: string | null | undefined,
+  target: string | null | undefined,
+  outcome: 'success' | 'failed' | 'waiting',
+  message: string | null,
+): string {
+  if (outcome === 'waiting') {
+    return `等待确认：${message ?? tool ?? '工具需要确认'}`
+  }
+
+  if (tool === 'bash_run') {
+    return `${outcome === 'failed' ? '命令失败' : '命令完成'}：${truncateText(command ?? target ?? 'unknown command', 120)}`
+  }
+
+  if (tool === 'bash_logs') {
+    return `${outcome === 'failed' ? '日志读取失败' : '日志已更新'}：${truncateText(target ?? '命令日志', 120)}`
+  }
+
+  if (tool === 'fs_read' || tool === 'fs_glob' || tool === 'fs_grep') {
+    return `${outcome === 'failed' ? '文件读取失败' : '文件读取完成'}：${truncateText(target ?? '文件', 120)}`
+  }
+
+  if (tool === 'fs_write') {
+    return `${outcome === 'failed' ? '文件写入失败' : '文件写入完成'}：${truncateText(target ?? '文件', 120)}`
+  }
+
+  if (tool === 'fs_edit' || tool === 'fs_multi_edit') {
+    return `${outcome === 'failed' ? '文件修改失败' : '文件修改完成'}：${truncateText(target ?? '文件', 120)}`
+  }
+
+  return outcome === 'failed'
+    ? `工具失败：${tool ?? 'unknown_tool'}`
+    : `工具完成：${tool ?? 'unknown_tool'}`
+}
+
 function deriveToolState(tool: string, input?: Record<string, unknown>): {
   status: HudStatus
   action: string
@@ -257,7 +454,9 @@ function deriveToolState(tool: string, input?: Record<string, unknown>): {
   fileAction?: HudFileActivity['action']
 } {
   if (tool === 'bash_run') {
-    const command = typeof input?.command === 'string' ? input.command : ''
+    const command = typeof input?.command === 'string'
+      ? input.command
+      : (typeof input?.cmd === 'string' ? input.cmd : '')
     return {
       status: 'running_command',
       action: '正在运行命令',
@@ -457,7 +656,7 @@ class HudManager {
 
       case 'tool_use': {
         const tool = typeof event.tool === 'string' ? event.tool : 'unknown_tool'
-        const input = (event.input && typeof event.input === 'object') ? event.input as Record<string, unknown> : undefined
+        const input = normalizeRecordLike(event.input)
         const toolState = deriveToolState(tool, input)
 
         agent.status = toolState.status
@@ -472,26 +671,17 @@ class HudManager {
           tool,
           status: 'running',
           inputPreview: previewValue(input),
+          target: toolState.target,
+          command: toolState.command,
           startedAt: now,
         }, MAX_TOOL_HISTORY)
 
         if (toolState.fileAction && toolState.target) {
-          limitPush(agent.files, {
-            id: uniqueId('file'),
-            timestamp: now,
-            action: toolState.fileAction,
-            path: toolState.target,
-            source: tool,
-          }, MAX_FILE_HISTORY)
+          pushFileActivity(agent, now, toolState.fileAction, toolState.target, tool)
         }
 
         if (toolState.command) {
-          limitPush(agent.commands, {
-            id: uniqueId('cmd'),
-            timestamp: now,
-            phase: 'start',
-            command: toolState.command,
-          }, MAX_COMMAND_HISTORY)
+          pushCommandActivity(agent, now, 'start', toolState.command)
         }
 
         timelineEvent = {
@@ -515,32 +705,113 @@ class HudManager {
         const toolCallId = typeof event.tool_use_id === 'string' ? event.tool_use_id : ''
         const toolEntry = [...agent.toolHistory].reverse().find(item => item.id === toolCallId)
         const resultPreview = previewValue(event.result)
-        const failed = Boolean(event.is_error)
+        const outcome = getResultStatus(event.result, Boolean(event.is_error))
+        const failed = outcome === 'failed'
+        const waiting = outcome === 'waiting'
+        const tool = toolEntry?.tool ?? agent.currentTool ?? null
+        const resultMessage = getResultMessage(event.result)
+        const command = toolEntry?.command ?? agent.currentCommand
+        const target = toolEntry?.target ?? agent.currentTarget
+        const pathValues = extractResultPaths(event.result)
 
         if (toolEntry) {
-          toolEntry.status = failed ? 'failed' : 'success'
+          toolEntry.status = waiting ? 'waiting' : (failed ? 'failed' : 'success')
           toolEntry.resultPreview = resultPreview
           toolEntry.endedAt = now
         }
 
-        agent.status = failed ? 'failed' : 'running'
-        agent.currentAction = failed ? '工具执行失败' : '工具执行完成'
-        agent.currentTarget = toolEntry?.tool ?? agent.currentTarget
+        agent.status = waiting ? 'waiting' : (failed ? 'failed' : 'running')
+        agent.currentAction = waiting
+          ? (resultMessage ?? '等待用户确认')
+          : (failed ? '工具执行失败' : '工具执行完成')
+        agent.currentTarget = target ?? pathValues[0] ?? tool
+        agent.currentTool = waiting ? tool : null
+        agent.currentCommand = waiting ? command : null
         agent.lastOutput = resultPreview || agent.lastOutput
         agent.updatedAt = now
         if (failed) {
           agent.error = { message: resultPreview || '工具失败' }
+        } else {
+          agent.error = null
         }
 
-        const pathValues = Array.from(collectPathLikeValues(event.result))
-        for (const pathValue of pathValues.slice(0, 6)) {
-          limitPush(agent.artifacts, {
-            id: uniqueId('artifact'),
-            timestamp: now,
-            path: pathValue,
-            kind: guessArtifactKind(pathValue),
-            source: toolEntry?.tool ?? 'tool_result',
-          }, MAX_ARTIFACTS)
+        if (tool === 'bash_run' && command) {
+          const stdoutSnippet = getStringField(event.result, 'stdoutSnippet')
+          const stderrSnippet = getStringField(event.result, 'stderrSnippet')
+          const outputSnippet = getStringField(event.result, 'outputSnippet')
+          const exitCode = getNumberField(event.result, 'exitCode')
+
+          if (stdoutSnippet) {
+            pushCommandActivity(agent, now, 'stdout', command, stdoutSnippet)
+          }
+
+          if (stderrSnippet) {
+            pushCommandActivity(agent, now, 'stderr', command, stderrSnippet)
+          }
+
+          if (!stdoutSnippet && !stderrSnippet && outputSnippet) {
+            pushCommandActivity(agent, now, failed ? 'stderr' : 'stdout', command, outputSnippet)
+          }
+
+          pushCommandActivity(
+            agent,
+            now,
+            'end',
+            command,
+            resultMessage ?? outputSnippet,
+            exitCode,
+          )
+        }
+
+        if (tool === 'bash_logs') {
+          const logSnippet =
+            getStringField(event.result, 'stdoutSnippet') ||
+            getStringField(event.result, 'stderrSnippet') ||
+            getStringField(event.result, 'outputSnippet') ||
+            resultMessage
+
+          if (logSnippet) {
+            pushCommandActivity(
+              agent,
+              now,
+              failed ? 'stderr' : 'stdout',
+              target ?? 'bash_logs',
+              logSnippet,
+            )
+          }
+        }
+
+        if (tool === 'fs_read' || tool === 'fs_glob' || tool === 'fs_grep') {
+          for (const pathValue of pathValues.slice(0, 6)) {
+            pushFileActivity(agent, now, 'read', pathValue, tool)
+          }
+        }
+
+        if (tool === 'fs_write') {
+          for (const pathValue of pathValues.slice(0, 6)) {
+            pushFileActivity(agent, now, 'write', pathValue, tool)
+            pushArtifact(agent, now, pathValue, tool)
+          }
+        }
+
+        if (tool === 'fs_edit' || tool === 'fs_multi_edit') {
+          for (const pathValue of pathValues.slice(0, 6)) {
+            pushFileActivity(agent, now, 'edit', pathValue, tool)
+            pushArtifact(agent, now, pathValue, tool)
+          }
+        }
+
+        if (tool === 'bash_run') {
+          for (const pathValue of pathValues.slice(0, 6)) {
+            pushFileActivity(agent, now, 'other', pathValue, tool)
+            pushArtifact(agent, now, pathValue, tool)
+          }
+        }
+
+        if (tool && (tool.startsWith('ocean_sr_') || tool.startsWith('ocean_forecast_'))) {
+          for (const pathValue of pathValues.slice(0, 6)) {
+            pushArtifact(agent, now, pathValue, tool)
+          }
         }
 
         timelineEvent = {
@@ -550,12 +821,12 @@ class HudManager {
           reqId: meta.reqId,
           role: agent.role,
           type: 'tool_result',
-          summary: failed
-            ? `工具失败：${toolEntry?.tool ?? toolCallId}`
-            : `工具完成：${toolEntry?.tool ?? toolCallId}`,
+          summary: summarizeToolResult(tool, command, target, outcome, resultMessage),
           status: agent.status,
           target: pathValues[0] ?? agent.currentTarget,
-          tool: toolEntry?.tool ?? null,
+          tool,
+          command,
+          path: pathValues[0] ?? null,
           isError: failed,
         }
         break
